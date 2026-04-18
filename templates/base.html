@@ -2,23 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#16331f">
   <title>{% block title %}Stash{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   {% block head_extra %}{% endblock %}
 </head>
 <body>
   <header>
-    <h1><a href="/" style="color:inherit;text-decoration:none;">📦 Stash</a></h1>
-    <a href="/ingest">Ingest</a>
-    <a href="/queue">Queue</a>
-    <a href="/labels">Labels</a>
-    <a href="/search">Search</a>
-    <a href="/tags">Tags</a>
-    {% block nav %}{% endblock %}
+    {% block header_left %}
+    <h1><a href="/">📦 Stash</a></h1>
+    {% endblock %}
+    <nav class="header-nav">
+      <a href="/">Boxes</a>
+      <a href="/ingest">Ingest</a>
+      <a href="/queue">Sort</a>
+      <a href="/search">Search</a>
+      <a href="/labels">Labels</a>
+      <a href="/tags">Tags</a>
+    </nav>
+    {% block header_actions %}{% endblock %}
   </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+
+  <main>{% block content %}{% endblock %}</main>
+
+  <nav class="tab-bar">
+    <a href="/"><span class="tab-icon">📦</span>Boxes</a>
+    <a href="/ingest"><span class="tab-icon">📷</span>Ingest</a>
+    <a href="/queue"><span class="tab-icon">📋</span>Sort</a>
+    <a href="/search"><span class="tab-icon">🔍</span>Search</a>
+    <a href="/labels"><span class="tab-icon">🏷️</span>Labels</a>
+  </nav>
 </body>
 </html>

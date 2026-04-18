@@ -1,55 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Labels · Stash{% endblock %}
 {% block content %}
+
 <div class="card">
-  <h2>Print labels</h2>
-  <p style="color:var(--muted);margin-top:0;">
-    Pick boxes to include on a label sheet (Avery 5163, 2×5 grid, letter-size).
-    Each label has the box name, location, and a QR code you can scan with your phone.
-    Downloads as SVG — open in your browser or Cricut Design Space.
+  <div class="card-title" style="margin-bottom:0.25rem;">Print labels</div>
+  <p class="text-sm text-muted">
+    Each label has the box name, location, and a QR code. Downloads as SVG for printing or Cricut.
   </p>
 </div>
 
+{% if boxes %}
 <form action="/labels/sheet.svg" method="get" class="card">
-  <h2>Select boxes</h2>
-  {% if boxes %}
-  <ul class="items" style="margin-bottom:0.75rem;">
-    {% for b in boxes %}
-    <li class="item" style="padding:0.5rem;">
-      <label style="display:flex;gap:0.75rem;align-items:center;cursor:pointer;flex:1;">
-        <input type="checkbox" name="box_ids" value="{{ b.id }}" checked style="width:auto;">
-        <div style="flex:1;">
-          <div class="item-name">{{ b.name }}</div>
-          {% if b.location %}<div class="item-notes">{{ b.location }}</div>{% endif %}
-        </div>
-        <a href="/boxes/{{ b.id }}/label.svg" style="color:var(--accent);font-size:0.85rem;"
-           title="Download individual label">↓ SVG</a>
-      </label>
-    </li>
-    {% endfor %}
-  </ul>
-  <div class="row" style="gap:0.5rem;">
-    <button type="submit">Download sheet SVG</button>
-    <button type="button" onclick="
-      document.querySelectorAll('input[name=box_ids]').forEach(c=>c.checked=!c.checked)"
-      style="background:transparent;color:var(--muted);border:1px solid var(--border);">
+  <div class="card-title" style="margin-bottom:0.5rem;">Select boxes</div>
+  {% for b in boxes %}
+  <label class="label-item" for="lb-{{ b.id }}">
+    <input type="checkbox" id="lb-{{ b.id }}" name="box_ids" value="{{ b.id }}" checked>
+    <div style="flex:1;">
+      <div class="item-name">{{ b.name }}</div>
+      {% if b.location %}<div class="text-sm text-muted">{{ b.location }}</div>{% endif %}
+    </div>
+    <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm"
+       onclick="event.stopPropagation();" title="Download single label">↓</a>
+  </label>
+  {% endfor %}
+  <div class="btn-row mt-1">
+    <button type="submit" class="btn btn-primary">Download sheet</button>
+    <button type="button" class="btn btn-secondary"
+      onclick="document.querySelectorAll('input[name=box_ids]').forEach(c=>c.checked=!c.checked)">
       Toggle all
     </button>
   </div>
-  {% else %}
-  <div class="empty">No boxes to label yet.</div>
-  {% endif %}
 </form>
 
-{% if boxes %}
 <div class="card">
-  <h2>Preview</h2>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0.75rem;">
+  <div class="card-title" style="margin-bottom:0.5rem;">Preview</div>
+  <div class="label-preview">
     {% for b in boxes %}
-    <img src="/boxes/{{ b.id }}/label.svg" alt="{{ b.name }} label"
-         style="width:100%;border:1px solid var(--border);border-radius:4px;background:white;">
+    <img src="/boxes/{{ b.id }}/label.svg" alt="{{ b.name }}">
     {% endfor %}
   </div>
 </div>
+{% else %}
+<div class="card empty">No boxes to label.</div>
 {% endif %}
+
 {% endblock %}

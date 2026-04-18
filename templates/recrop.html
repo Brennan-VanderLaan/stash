@@ -4,116 +4,80 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
 {% endblock %}
-{% block nav %}<a href="/boxes/{{ item.box_id }}">← Back to box</a>{% endblock %}
+{% block header_left %}
+<a href="/boxes/{{ item.box_id }}" class="header-back">← Back</a>
+<h1><a href="/">📦 Stash</a></h1>
+{% endblock %}
 {% block content %}
-<form method="post" action="/items/{{ item.id }}/recrop" class="card" id="recrop-form">
-  <h2>Re-crop: {{ item.name }}</h2>
 
-  {% set src = item.source_photo or item.photo %}
+{% set src = item.source_photo or item.photo %}
+<form method="post" action="/items/{{ item.id }}/recrop" class="card" id="recrop-form"
+      style="padding:0;overflow:hidden;">
+
   {% if src %}
-  <div class="recrop-photos">
-    <div class="recrop-source">
-      <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.4rem;">
-        Source image — drag to crop
-      </div>
-      <div class="crop-container" style="max-height:400px;">
-        <img src="/uploads/{{ src }}" alt="" class="crop-img" id="recrop-img">
-      </div>
-    </div>
-    {% if item.photo != src %}
-    <div class="recrop-current">
-      <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.4rem;">
-        Current crop
-      </div>
-      <img src="/uploads/{{ item.photo }}" alt=""
-        style="max-width:100%;max-height:150px;border-radius:6px;border:1px solid var(--border);">
-    </div>
-    {% endif %}
+  <div class="recrop-source" id="crop-wrap">
+    <img src="/uploads/{{ src }}" alt="" id="recrop-img">
   </div>
-
-  <div class="crop-toolbar" style="margin-top:0.75rem;">
-    <button type="button" class="btn-crop" id="crop-toggle" onclick="toggleCrop()">
-      Adjust crop
-    </button>
-    <button type="button" class="btn-crop-secondary" id="crop-reset"
+  <div class="crop-toolbar">
+    <button type="button" class="btn btn-secondary btn-sm" id="crop-toggle"
+            onclick="toggleCrop()">Adjust crop</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="crop-reset"
             onclick="resetCrop()" style="display:none;">Reset</button>
   </div>
   {% endif %}
 
-  <input type="hidden" name="crop_y_min" id="cy0" value="">
-  <input type="hidden" name="crop_x_min" id="cx0" value="">
-  <input type="hidden" name="crop_y_max" id="cy1" value="">
-  <input type="hidden" name="crop_x_max" id="cx1" value="">
-  <input type="hidden" name="skip_crop" id="skip-crop" value="">
+  <div style="padding:0.75rem;display:flex;flex-direction:column;gap:0.6rem;">
+    <div class="item-name">{{ item.name }}</div>
 
-  <div class="sort-buttons" style="margin-top:1rem;">
-    <button type="submit" class="btn-accept" onclick="finalizeCrop()">Save new crop</button>
-    <button type="submit" class="btn-crop-secondary" onclick="undoCrop()">Use full image</button>
-    <a href="/boxes/{{ item.box_id }}" class="btn-crop-secondary"
-       style="text-decoration:none;text-align:center;">Cancel</a>
+    {% if item.photo != src %}
+    <div class="recrop-current">
+      <span class="text-sm text-muted">Current crop:</span>
+      <img src="/uploads/{{ item.photo }}" alt="">
+    </div>
+    {% endif %}
+
+    <input type="hidden" name="crop_y_min" id="cy0">
+    <input type="hidden" name="crop_x_min" id="cx0">
+    <input type="hidden" name="crop_y_max" id="cy1">
+    <input type="hidden" name="crop_x_max" id="cx1">
+    <input type="hidden" name="skip_crop" id="skip-crop">
+
+    <button type="submit" class="btn btn-primary btn-block" onclick="finalizeCrop()">Save crop</button>
+    {% if item.source_photo and item.source_photo != item.photo %}
+    <button type="submit" class="btn btn-secondary btn-block" onclick="undoCrop()">Revert to full image</button>
+    {% endif %}
+    <a href="/boxes/{{ item.box_id }}" class="btn btn-ghost btn-sm btn-block" style="text-align:center;">Cancel</a>
   </div>
 </form>
 
 <script>
 let cropper = null;
-
 function toggleCrop() {
-  const img = document.getElementById('recrop-img');
-  const btn = document.getElementById('crop-toggle');
-  const resetBtn = document.getElementById('crop-reset');
-
-  if (cropper) {
-    finalizeCrop();
-    return;
-  }
-
-  cropper = new Cropper(img, {
-    viewMode: 1,
-    dragMode: 'crop',
-    autoCropArea: 0.8,
-    responsive: true,
-    guides: true,
-    highlight: true,
-    cropBoxMovable: true,
-    cropBoxResizable: true,
+  if (cropper) { finalizeCrop(); return; }
+  cropper = new Cropper(document.getElementById('recrop-img'), {
+    viewMode:1, dragMode:'crop', autoCropArea:0.8,
+    responsive:true, guides:true, highlight:true,
+    cropBoxMovable:true, cropBoxResizable:true,
   });
-  btn.textContent = 'Done';
-  btn.classList.add('active');
-  resetBtn.style.display = '';
+  document.getElementById('crop-toggle').textContent = 'Done';
+  document.getElementById('crop-reset').style.display = '';
 }
-
 function finalizeCrop() {
   if (!cropper) return;
-  const data = cropper.getData(true);
-  const imgData = cropper.getImageData();
-  const nw = imgData.naturalWidth;
-  const nh = imgData.naturalHeight;
-
-  document.getElementById('cy0').value = Math.max(0, Math.round(data.y / nh * 1000));
-  document.getElementById('cx0').value = Math.max(0, Math.round(data.x / nw * 1000));
-  document.getElementById('cy1').value = Math.min(1000, Math.round((data.y + data.height) / nh * 1000));
-  document.getElementById('cx1').value = Math.min(1000, Math.round((data.x + data.width) / nw * 1000));
+  const d = cropper.getData(true), img = cropper.getImageData();
+  document.getElementById('cy0').value = Math.max(0,Math.round(d.y/img.naturalHeight*1000));
+  document.getElementById('cx0').value = Math.max(0,Math.round(d.x/img.naturalWidth*1000));
+  document.getElementById('cy1').value = Math.min(1000,Math.round((d.y+d.height)/img.naturalHeight*1000));
+  document.getElementById('cx1').value = Math.min(1000,Math.round((d.x+d.width)/img.naturalWidth*1000));
   document.getElementById('skip-crop').value = '';
-
-  cropper.destroy();
-  cropper = null;
-
-  const btn = document.getElementById('crop-toggle');
-  btn.textContent = 'Adjust crop';
-  btn.classList.remove('active');
+  cropper.destroy(); cropper = null;
+  document.getElementById('crop-toggle').textContent = 'Adjust crop';
   document.getElementById('crop-reset').style.display = 'none';
 }
-
-function resetCrop() {
-  if (cropper) cropper.reset();
-}
-
+function resetCrop() { if (cropper) cropper.reset(); }
 function undoCrop() {
   if (cropper) { cropper.destroy(); cropper = null; }
-  document.getElementById('cy0').value = '';
-  document.getElementById('cx0').value = '';
-  document.getElementById('cy1').value = '';
-  document.getElementById('cx1').value = '';
+  ['cy0','cx0','cy1','cx1'].forEach(k => document.getElementById(k).value = '');
   document.getElementById('skip-crop').value = '1';
 }
 </script>

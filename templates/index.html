@@ -1,31 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h2>New box</h2>
-  <form method="post" action="/boxes">
+<details class="card" {% if not boxes %}open{% endif %}>
+  <summary class="card-title" style="cursor:pointer;list-style:none;">+ New box</summary>
+  <form method="post" action="/boxes" style="margin-top:0.75rem;">
     <label>Name<input type="text" name="name" required placeholder="e.g. Kitchen #1"></label>
     <label>Location<input type="text" name="location" placeholder="e.g. Garage shelf B"></label>
-    <label>Notes<textarea name="notes"></textarea></label>
-    <button type="submit">Create box</button>
+    <label>Notes<textarea name="notes" rows="2"></textarea></label>
+    <button type="submit" class="btn btn-primary btn-block">Create box</button>
   </form>
-</div>
+</details>
 
-<div class="card">
-  <h2>Boxes</h2>
-  {% if boxes %}
-  <ul class="box-list">
-    {% for b in boxes %}
-    <li><a href="/boxes/{{ b.id }}">
-      <div class="box-name">{{ b.name }}</div>
-      <div class="box-meta">
-        {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
-        {% if b.location %} · {{ b.location }}{% endif %}
+{% if boxes %}
+<ul class="box-list">
+  {% for b in boxes %}
+  <li>
+    <a href="/boxes/{{ b.id }}" class="box-card">
+      <div>
+        <div class="box-name">{{ b.name }}</div>
+        <div class="box-meta">
+          {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
+          {% if b.location %} · {{ b.location }}{% endif %}
+        </div>
       </div>
-    </a></li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <div class="empty">No boxes yet. Create one above.</div>
-  {% endif %}
-</div>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty">No boxes yet. Create one above.</div>
+{% endif %}
 {% endblock %}

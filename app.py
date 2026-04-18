@@ -111,6 +111,10 @@ def migrate_db():
         _add_column_if_missing(conn, "pending_items", "bbox_x_max", "INTEGER")
         # Source photo preserved on items for crop undo / re-crop
         _add_column_if_missing(conn, "items", "source_photo", "TEXT")
+        # Backfill source_photo for items created before this column existed
+        conn.execute(
+            "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
+        )
         conn.commit()
 
 
@@ -178,12 +182,20 @@ def format_tag(name: str, value: str | None) -> str:
     return f"{name}:{value}" if value else name
 
 
+def _open_image_oriented(path: Path):
+    """Open an image and apply EXIF orientation so pixels match what the user sees.
+    Cropper.js auto-rotates per EXIF, so we must do the same before cropping."""
+    from PIL import Image, ImageOps
+    img = Image.open(path)
+    img = ImageOps.exif_transpose(img)
+    return img
+
+
 def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     """Crop a photo using bbox (y_min, x_min, y_max, x_max in 0-1000 coords).
     Returns the filename of the cropped image saved to UPLOAD_DIR."""
-    from PIL import Image
     src = UPLOAD_DIR / photo_name
-    img = Image.open(src)
+    img = _open_image_oriented(src)
     w, h = img.size
     y_min, x_min, y_max, x_max = bbox
     # Convert 0-1000 normalized coords to pixels
@@ -474,6 +486,25 @@ def apply_recrop(
         )
         conn.commit()
     return RedirectResponse(f"/boxes/{item['box_id']}", status_code=303)
+
+
+@app.post("/items/{item_id}/replace-photo")
+async def replace_item_photo(item_id: int, photo: UploadFile = File(...)):
+    if not photo or not photo.filename:
+        raise HTTPException(400, "Photo required")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT box_id FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404)
+        new_photo = save_photo(photo)
+        conn.execute(
+            "UPDATE items SET photo = ?, source_photo = ? WHERE id = ?",
+            (new_photo, new_photo, item_id),
+        )
+        conn.commit()
+    return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
 
 
 @app.post("/items/{item_id}/delete")

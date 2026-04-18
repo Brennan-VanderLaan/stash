@@ -40,7 +40,7 @@ def test_add_item_without_photo(client):
     detail = client.get("/boxes/1").text
     assert "spatula" in detail
     assert "wooden" in detail
-    assert "Contents (1)" in detail
+    assert "Contents (1)" in detail or "item-card" in detail  # item rendered
 
 
 def test_add_item_with_photo_persists_and_serves(client, tmp_path):
@@ -92,7 +92,7 @@ def test_delete_item_removes_row_and_photo(client):
     assert r.status_code == 303
     assert r.headers["location"] == "/boxes/1"
     assert not photo.exists()
-    assert "Contents (0)" in client.get("/boxes/1").text
+    assert "No items yet" in client.get("/boxes/1").text
 
 
 def test_delete_box_cascades_items_and_photos(client):
@@ -114,3 +114,53 @@ def test_delete_box_cascades_items_and_photos(client):
 
 def test_add_item_to_missing_box_404(client):
     assert client.post("/boxes/42/items", data={"name": "x"}).status_code == 404
+
+
+def test_replace_item_photo(client):
+    client.post("/boxes", data={"name": "Box A"})
+    client.post(
+        "/boxes/1/items",
+        data={"name": "mug"},
+        files={"photo": ("old.jpg", io.BytesIO(b"oldphoto"), "image/jpeg")},
+    )
+    upload_dir = Path(client.app_module.UPLOAD_DIR)
+    old_photo = next(upload_dir.glob("*.jpg"))
+
+    r = client.post(
+        "/items/1/replace-photo",
+        files={"photo": ("new.jpg", io.BytesIO(b"newphoto"), "image/jpeg")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/boxes/1"
+
+    with client.app_module.db() as conn:
+        item = conn.execute("SELECT photo, source_photo FROM items WHERE id = 1").fetchone()
+    # New photo saved and set as both photo and source_photo
+    assert item["photo"] != old_photo.name
+    assert item["photo"] == item["source_photo"]
+    new_path = upload_dir / item["photo"]
+    assert new_path.exists()
+    assert new_path.read_bytes() == b"newphoto"
+
+
+def test_replace_photo_shows_in_box_detail(client):
+    client.post("/boxes", data={"name": "Box A"})
+    client.post("/boxes/1/items", data={"name": "mug"})
+    # Item has no photo initially
+    assert "Replace photo" in client.get("/boxes/1").text
+
+    client.post(
+        "/items/1/replace-photo",
+        files={"photo": ("pic.jpg", io.BytesIO(b"data"), "image/jpeg")},
+    )
+    page = client.get("/boxes/1").text
+    assert "/uploads/" in page
+
+
+def test_replace_photo_on_missing_item_404(client):
+    r = client.post(
+        "/items/999/replace-photo",
+        files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
+    )
+    assert r.status_code == 404

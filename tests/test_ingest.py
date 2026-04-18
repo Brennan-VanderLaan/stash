@@ -23,7 +23,7 @@ def test_ingest_uploads_then_processes_in_background(client):
     queue = client.get("/queue").text
     assert "wooden spatula" in queue
     assert "ceramic mug" in queue
-    assert "Sorting queue (2)" in queue
+    assert "sort-card" in queue  # cards rendered for each item
 
 
 def test_ingest_failure_is_recorded_not_raised(client):
@@ -39,7 +39,7 @@ def test_ingest_failure_is_recorded_not_raised(client):
     assert "failed" in page
     assert "API exploded" in page
     # No items leaked into the sort queue
-    assert "Sorting queue (0)" in client.get("/queue").text
+    assert "Queue is empty" in client.get("/queue").text
 
 
 def test_ingest_done_jobs_disappear_from_ingest_view(client):
@@ -49,8 +49,9 @@ def test_ingest_done_jobs_disappear_from_ingest_view(client):
         client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     page = client.get("/ingest").text
-    # Done jobs are hidden from the ingest queue (work moved to sort queue)
-    assert "Ingest queue (0)" in page
+    # Done jobs are hidden from the ingest page (only pending/processing/failed shown)
+    assert "badge-done" not in page
+    assert "Processing" not in page  # no active jobs section
 
 
 def test_ingest_dismiss_failed_job(client):
@@ -59,7 +60,7 @@ def test_ingest_dismiss_failed_job(client):
 
     r = client.post("/ingest/1/dismiss", follow_redirects=False)
     assert r.status_code == 303
-    assert "Ingest queue (0)" in client.get("/ingest").text
+    assert "Processing" not in client.get("/ingest").text  # no active jobs visible
 
 
 def test_ingest_requires_photo(client):
@@ -121,7 +122,7 @@ def test_assign_to_existing_box(client):
     assert r.status_code == 303
 
     # Pending drained
-    assert "Sorting queue (0)" in client.get("/queue").text
+    assert "Queue is empty" in client.get("/queue").text
     # Item landed in box with the photo attached
     box = client.get("/boxes/1").text
     assert "spatula" in box
@@ -183,4 +184,4 @@ def test_drop_pending_item(client):
 
     r = client.post("/queue/1/delete", follow_redirects=False)
     assert r.status_code == 303
-    assert "Sorting queue (0)" in client.get("/queue").text
+    assert "Queue is empty" in client.get("/queue").text

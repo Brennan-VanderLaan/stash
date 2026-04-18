@@ -5,91 +5,86 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
 {% endblock %}
 {% block content %}
+
+{% if not pending %}
 <div class="card">
-  <h2>Sorting queue ({{ pending|length }})</h2>
-  {% if not pending %}
   <div class="empty">
-    Queue is empty. <a href="/ingest" style="color:var(--accent);">Ingest a photo</a>
-    to get started.
+    Queue is empty. <a href="/ingest">Ingest a photo</a> to get started.
   </div>
-  {% endif %}
-  {% if not boxes %}
-  <p style="color:var(--muted);">
-    No boxes yet — <a href="/" style="color:var(--accent);">create one</a> before sorting.
-  </p>
-  {% endif %}
 </div>
+{% endif %}
+
+{% if pending and not boxes %}
+<div class="card">
+  <p class="text-muted">No boxes yet — <a href="/" style="color:var(--accent);">create one</a> before sorting.</p>
+</div>
+{% endif %}
 
 {% for p in pending %}
-<form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card"
-      id="card-{{ p.id }}">
+<form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card" id="card-{{ p.id }}">
+
+  {# Photo + crop #}
   {% if p.photo %}
-  <div class="crop-container" id="crop-wrap-{{ p.id }}">
-    <img src="/uploads/{{ p.photo }}" alt="" class="crop-img" id="crop-img-{{ p.id }}">
+  <div class="sort-photo">
+    <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
   </div>
   <div class="crop-toolbar">
-    <button type="button" class="btn-crop" onclick="toggleCrop({{ p.id }})"
+    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
             id="crop-btn-{{ p.id }}">Adjust crop</button>
-    <button type="button" class="btn-crop-secondary" onclick="resetCrop({{ p.id }})"
+    <button type="button" class="btn btn-ghost btn-sm" onclick="resetCrop({{ p.id }})"
             id="reset-btn-{{ p.id }}" style="display:none;">Reset</button>
-    <button type="button" class="btn-crop-secondary" onclick="clearCrop({{ p.id }})"
+    <button type="button" class="btn btn-ghost btn-sm" onclick="clearCrop({{ p.id }})"
             id="clear-btn-{{ p.id }}" style="display:none;">No crop</button>
   </div>
   {% endif %}
 
-  {# Hidden fields for crop coords (0-1000 normalized) #}
-  <input type="hidden" name="crop_y_min" id="cy0-{{ p.id }}"
-    value="{{ p.bbox_y_min if p.bbox_y_min is not none else '' }}">
-  <input type="hidden" name="crop_x_min" id="cx0-{{ p.id }}"
-    value="{{ p.bbox_x_min if p.bbox_x_min is not none else '' }}">
-  <input type="hidden" name="crop_y_max" id="cy1-{{ p.id }}"
-    value="{{ p.bbox_y_max if p.bbox_y_max is not none else '' }}">
-  <input type="hidden" name="crop_x_max" id="cx1-{{ p.id }}"
-    value="{{ p.bbox_x_max if p.bbox_x_max is not none else '' }}">
+  {# Hidden crop fields #}
+  <input type="hidden" name="crop_y_min" id="cy0-{{ p.id }}" value="{{ p.bbox_y_min if p.bbox_y_min is not none else '' }}">
+  <input type="hidden" name="crop_x_min" id="cx0-{{ p.id }}" value="{{ p.bbox_x_min if p.bbox_x_min is not none else '' }}">
+  <input type="hidden" name="crop_y_max" id="cy1-{{ p.id }}" value="{{ p.bbox_y_max if p.bbox_y_max is not none else '' }}">
+  <input type="hidden" name="crop_x_max" id="cx1-{{ p.id }}" value="{{ p.bbox_x_max if p.bbox_x_max is not none else '' }}">
   <input type="hidden" name="skip_crop" id="skip-crop-{{ p.id }}" value="">
 
-  <div style="margin-top:0.75rem;">
-    <input type="text" name="name" value="{{ p.name }}" required
-           placeholder="Item name">
-    <textarea name="description" rows="2"
-      style="margin-top:0.4rem;" placeholder="Description">{{ p.description or '' }}</textarea>
+  {# Item details #}
+  <div class="sort-body">
+    <input type="text" name="name" value="{{ p.name }}" required placeholder="Item name">
+    <textarea name="description" rows="2" placeholder="Description">{{ p.description or '' }}</textarea>
+
     {% if p.previous_box_name %}
-    <div style="font-size:0.8rem;color:var(--muted);margin-top:0.4rem;">
-      was in <strong>{{ p.previous_box_name }}</strong>, missing on last audit
+    <div class="text-sm text-muted">
+      Was in <strong>{{ p.previous_box_name }}</strong> — missing on last audit
     </div>
     {% endif %}
-  </div>
 
-  {% if p.suggestion_reason %}
-    <div class="suggestion-banner">
+    {% if p.suggestion_reason %}
+    <div class="suggestion">
       {% if p.suggested_box_name %}
-        → <strong style="color:var(--accent);">{{ p.suggested_box_name }}</strong>
+        → <strong>{{ p.suggested_box_name }}</strong>
       {% elif p.suggested_new_box_name %}
-        → new box <strong style="color:var(--accent);">{{ p.suggested_new_box_name }}</strong>
-        <span style="font-size:0.8rem;color:var(--muted);">(create it first)</span>
+        → new box <strong>{{ p.suggested_new_box_name }}</strong>
+        <span class="text-sm text-muted">(create it first)</span>
       {% endif %}
-      <span style="color:var(--muted);font-style:italic;"> — {{ p.suggestion_reason }}</span>
+      <span class="text-sm text-muted"> — {{ p.suggestion_reason }}</span>
     </div>
-  {% endif %}
+    {% endif %}
 
-  <div class="sort-actions">
     <select name="box_id" required>
       <option value="">— pick a box —</option>
       {% for b in boxes %}
-      <option value="{{ b.id }}"
-        {% if p.suggested_box_id == b.id %}selected{% endif %}>
+      <option value="{{ b.id }}" {% if p.suggested_box_id == b.id %}selected{% endif %}>
         {{ b.name }}{% if b.location %} ({{ b.location }}){% endif %}
       </option>
       {% endfor %}
     </select>
-    <div class="sort-buttons">
+
+    <div class="btn-row">
       {% if not p.suggestion_reason %}
       <button type="submit" formaction="/queue/{{ p.id }}/match" formnovalidate
-              class="btn-suggest">Suggest</button>
+              class="btn btn-secondary">Suggest</button>
       {% endif %}
-      <button type="submit" class="btn-accept">Accept</button>
+      <button type="submit" class="btn btn-primary">Accept</button>
       <button type="submit" formaction="/queue/{{ p.id }}/delete" formmethod="post"
-              class="danger" formnovalidate>Reject</button>
+              class="btn btn-danger" formnovalidate>Reject</button>
     </div>
   </div>
 </form>
@@ -99,137 +94,80 @@
 const croppers = {};
 
 function toggleCrop(id) {
+  if (croppers[id]) { finalizeCrop(id); return; }
   const img = document.getElementById('crop-img-' + id);
-  const btn = document.getElementById('crop-btn-' + id);
-  const resetBtn = document.getElementById('reset-btn-' + id);
-  const clearBtn = document.getElementById('clear-btn-' + id);
-
-  if (croppers[id]) {
-    // Already active — finalize
-    finalizeCrop(id);
-    return;
-  }
-
-  // Read existing bbox from hidden inputs (if any) for initial crop area
   const cy0 = document.getElementById('cy0-' + id).value;
   const cx0 = document.getElementById('cx0-' + id).value;
   const cy1 = document.getElementById('cy1-' + id).value;
   const cx1 = document.getElementById('cx1-' + id).value;
-
-  const hasBbox = cy0 !== '' && cx0 !== '' && cy1 !== '' && cx1 !== '';
-
+  const hasBbox = cy0 && cx0 && cy1 && cx1;
   const opts = {
-    viewMode: 1,
-    dragMode: 'crop',
-    autoCropArea: 0.8,
-    responsive: true,
-    restore: false,
-    guides: true,
-    highlight: true,
-    cropBoxMovable: true,
-    cropBoxResizable: true,
-    toggleDragModeOnDblclick: false,
+    viewMode: 1, dragMode: 'crop', autoCropArea: 0.8,
+    responsive: true, guides: true, highlight: true,
+    cropBoxMovable: true, cropBoxResizable: true,
   };
-
   if (hasBbox) {
     opts.autoCrop = true;
     opts.ready = function() {
-      const imgData = croppers[id].getImageData();
-      const nw = imgData.naturalWidth;
-      const nh = imgData.naturalHeight;
+      const d = croppers[id].getImageData();
       croppers[id].setData({
-        x: parseFloat(cx0) / 1000 * nw,
-        y: parseFloat(cy0) / 1000 * nh,
-        width: (parseFloat(cx1) - parseFloat(cx0)) / 1000 * nw,
-        height: (parseFloat(cy1) - parseFloat(cy0)) / 1000 * nh,
+        x: parseFloat(cx0)/1000*d.naturalWidth,
+        y: parseFloat(cy0)/1000*d.naturalHeight,
+        width: (parseFloat(cx1)-parseFloat(cx0))/1000*d.naturalWidth,
+        height: (parseFloat(cy1)-parseFloat(cy0))/1000*d.naturalHeight,
       });
     };
   }
-
   croppers[id] = new Cropper(img, opts);
-  btn.textContent = 'Done';
-  btn.classList.add('active');
-  resetBtn.style.display = '';
-  clearBtn.style.display = '';
+  document.getElementById('crop-btn-' + id).textContent = 'Done';
+  document.getElementById('reset-btn-' + id).style.display = '';
+  document.getElementById('clear-btn-' + id).style.display = '';
 }
 
 function finalizeCrop(id) {
-  const cropper = croppers[id];
-  if (!cropper) return;
-
-  const data = cropper.getData(true);
-  const imgData = cropper.getImageData();
-  const nw = imgData.naturalWidth;
-  const nh = imgData.naturalHeight;
-
-  // Convert pixel coords to 0-1000 normalized
-  const y0 = Math.round(data.y / nh * 1000);
-  const x0 = Math.round(data.x / nw * 1000);
-  const y1 = Math.round((data.y + data.height) / nh * 1000);
-  const x1 = Math.round((data.x + data.width) / nw * 1000);
-
-  document.getElementById('cy0-' + id).value = Math.max(0, y0);
-  document.getElementById('cx0-' + id).value = Math.max(0, x0);
-  document.getElementById('cy1-' + id).value = Math.min(1000, y1);
-  document.getElementById('cx1-' + id).value = Math.min(1000, x1);
-
-  cropper.destroy();
-  delete croppers[id];
-
-  const btn = document.getElementById('crop-btn-' + id);
-  btn.textContent = 'Adjust crop';
-  btn.classList.remove('active');
+  const c = croppers[id]; if (!c) return;
+  const d = c.getData(true), img = c.getImageData();
+  document.getElementById('cy0-' + id).value = Math.max(0, Math.round(d.y/img.naturalHeight*1000));
+  document.getElementById('cx0-' + id).value = Math.max(0, Math.round(d.x/img.naturalWidth*1000));
+  document.getElementById('cy1-' + id).value = Math.min(1000, Math.round((d.y+d.height)/img.naturalHeight*1000));
+  document.getElementById('cx1-' + id).value = Math.min(1000, Math.round((d.x+d.width)/img.naturalWidth*1000));
+  document.getElementById('skip-crop-' + id).value = '';
+  c.destroy(); delete croppers[id];
+  document.getElementById('crop-btn-' + id).textContent = 'Adjust crop';
   document.getElementById('reset-btn-' + id).style.display = 'none';
   document.getElementById('clear-btn-' + id).style.display = 'none';
 }
 
-function resetCrop(id) {
-  if (croppers[id]) croppers[id].reset();
-}
+function resetCrop(id) { if (croppers[id]) croppers[id].reset(); }
 
 function clearCrop(id) {
-  // Remove crop entirely — submit full image
-  if (croppers[id]) {
-    croppers[id].destroy();
-    delete croppers[id];
-  }
-  document.getElementById('cy0-' + id).value = '';
-  document.getElementById('cx0-' + id).value = '';
-  document.getElementById('cy1-' + id).value = '';
-  document.getElementById('cx1-' + id).value = '';
+  if (croppers[id]) { croppers[id].destroy(); delete croppers[id]; }
+  ['cy0','cx0','cy1','cx1'].forEach(k => document.getElementById(k+'-'+id).value = '');
   document.getElementById('skip-crop-' + id).value = '1';
-
-  const btn = document.getElementById('crop-btn-' + id);
-  btn.textContent = 'Adjust crop';
-  btn.classList.remove('active');
+  document.getElementById('crop-btn-' + id).textContent = 'Adjust crop';
   document.getElementById('reset-btn-' + id).style.display = 'none';
   document.getElementById('clear-btn-' + id).style.display = 'none';
 }
 
-// Finalize any active cropper before form submit
-document.querySelectorAll('.sort-card').forEach(form => {
-  form.addEventListener('submit', function() {
-    const id = this.id.replace('card-', '');
+document.querySelectorAll('.sort-card').forEach(f => {
+  f.addEventListener('submit', function() {
+    const id = this.id.replace('card-','');
     if (croppers[id]) finalizeCrop(id);
   });
 });
 
-// Real-time polling (skip reload if cropper is active or input focused)
 (function() {
   const initial = "{{ fingerprint }}";
-  async function poll() {
+  setInterval(async function() {
     try {
-      const r = await fetch("/queue/state", {cache: "no-store"});
-      const {fingerprint} = await r.json();
+      const {fingerprint} = await (await fetch("/queue/state",{cache:"no-store"})).json();
       if (fingerprint !== initial) {
-        const hasCropper = Object.keys(croppers).length > 0;
         const active = document.activeElement;
-        const editing = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
-        if (!editing && !hasCropper) location.reload();
+        const busy = (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) || Object.keys(croppers).length;
+        if (!busy) location.reload();
       }
-    } catch (e) {}
-  }
-  setInterval(poll, 2000);
+    } catch(e) {}
+  }, 2000);
 })();
 </script>
 {% endblock %}
