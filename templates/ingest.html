@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Ingest · Stash{% endblock %}
+{% block head_extra %}
+{% set has_active = jobs|selectattr('status', 'in', ['pending', 'processing'])|list %}
+{% if has_active %}<meta http-equiv="refresh" content="3">{% endif %}
+{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Ingest a pile</h2>
+  <p style="color:var(--muted);margin-top:0;">
+    Take a photo of one item or a pile of stuff. Claude will spot every distinct
+    item and queue them up for sorting.
+  </p>
+  <form method="post" action="/ingest" enctype="multipart/form-data">
+    <label>Photo<input type="file" name="photo" accept="image/*" capture="environment" required></label>
+    <button type="submit">Upload</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Ingest queue ({{ jobs|length }})</h2>
+  {% if not jobs %}
+  <div class="empty">Nothing in flight.</div>
+  {% endif %}
+  {% for j in jobs %}
+  <div class="item">
+    {% if j.photo %}<img src="/uploads/{{ j.photo }}" alt="">{% endif %}
+    <div class="item-body">
+      <div class="row">
+        <div>
+          <span class="badge badge-{{ j.status }}">{{ j.status }}</span>
+          {% if j.status == 'done' %}
+            <span style="color:var(--muted);">— added {{ j.item_count }} item{{ '' if j.item_count == 1 else 's' }}
+            (<a href="/queue" style="color:var(--accent);">sort queue</a>)</span>
+          {% elif j.status == 'failed' %}
+            <span style="color:var(--danger);">— {{ j.error }}</span>
+          {% elif j.status == 'processing' %}
+            <span style="color:var(--muted);">— Claude is looking…</span>
+          {% else %}
+            <span style="color:var(--muted);">— queued</span>
+          {% endif %}
+        </div>
+        {% if j.status in ['failed', 'done'] %}
+        <form method="post" action="/ingest/{{ j.id }}/dismiss">
+          <button type="submit" class="danger">×</button>
+        </form>
+        {% endif %}
+      </div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;">
+        uploaded {{ j.created_at }}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

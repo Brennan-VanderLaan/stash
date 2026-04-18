@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Sort queue · Stash{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Sorting queue ({{ pending|length }})</h2>
+  {% if not pending %}
+  <div class="empty">
+    Queue is empty. <a href="/ingest" style="color:var(--accent);">Ingest a photo</a>
+    to get started.
+  </div>
+  {% endif %}
+  {% if not boxes %}
+  <p style="color:var(--muted);">
+    No boxes yet — <a href="/" style="color:var(--accent);">create one</a> before sorting.
+  </p>
+  {% endif %}
+</div>
+
+{% for p in pending %}
+<form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card">
+  <div class="item" style="border:none;padding:0;background:transparent;">
+    {% if p.photo %}<img src="/uploads/{{ p.photo }}" alt="">{% endif %}
+    <div class="item-body">
+      <input type="text" name="name" value="{{ p.name }}" required>
+      <textarea name="description" rows="2"
+        style="margin-top:0.4rem;">{{ p.description or '' }}</textarea>
+      {% if p.previous_box_name %}
+      <div style="font-size:0.8rem;color:var(--muted);margin-top:0.4rem;">
+        🔍 was in <strong>{{ p.previous_box_name }}</strong>, missing on last audit
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if p.suggestion_reason %}
+    <div style="margin-top:0.75rem;padding:0.6rem;background:var(--panel-2);border-radius:6px;font-size:0.9rem;">
+      <span style="color:var(--muted);">💡 </span>
+      {% if p.suggested_box_name %}
+        → <strong style="color:var(--accent);">{{ p.suggested_box_name }}</strong>
+      {% elif p.suggested_new_box_name %}
+        → suggests new box <strong style="color:var(--accent);">{{ p.suggested_new_box_name }}</strong>
+        (create it first if you want to use it)
+      {% endif %}
+      <span style="color:var(--muted);font-style:italic;"> — {{ p.suggestion_reason }}</span>
+    </div>
+  {% endif %}
+
+  <div class="row" style="margin-top:0.75rem;gap:0.5rem;">
+    <select name="box_id" required style="flex:1;">
+      <option value="">— pick a box —</option>
+      {% for b in boxes %}
+      <option value="{{ b.id }}"
+        {% if p.suggested_box_id == b.id %}selected{% endif %}>
+        {{ b.name }}{% if b.location %} ({{ b.location }}){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    {% if not p.suggestion_reason %}
+    <button type="submit" formaction="/queue/{{ p.id }}/match" formnovalidate>Suggest</button>
+    {% endif %}
+    <button type="submit">Accept</button>
+    <button type="submit" formaction="/queue/{{ p.id }}/delete" formmethod="post"
+      class="danger" formnovalidate>Reject</button>
+  </div>
+</form>
+{% endfor %}
+
+<script>
+(function() {
+  const initial = "{{ fingerprint }}";
+  async function poll() {
+    try {
+      const r = await fetch("/queue/state", {cache: "no-store"});
+      const {fingerprint} = await r.json();
+      if (fingerprint !== initial) {
+        // Don't stomp an in-progress edit
+        const active = document.activeElement;
+        const editing = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
+        if (!editing) location.reload();
+      }
+    } catch (e) { /* network blip — try again next tick */ }
+  }
+  setInterval(poll, 2000);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Audit: {{ box.name }} · Stash{% endblock %}
+{% block nav %}<a href="/boxes/{{ box.id }}">← Back to box</a>{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Audit: {{ box.name }}</h2>
+  <p style="color:var(--muted);margin-top:0;">
+    Tick every item you can physically find in the box. Anything you leave unchecked
+    is no longer in this box — it will move to the sort queue so you can re-file or
+    drop it.
+  </p>
+</div>
+
+<form method="post" action="/boxes/{{ box.id }}/audit">
+  {% if items %}
+  {% for it in items %}
+  <label class="card audit-row" for="found-{{ it.id }}">
+    <input type="checkbox" id="found-{{ it.id }}" name="found" value="{{ it.id }}"
+      checked style="width:auto;">
+    {% if it.photo %}<img src="/uploads/{{ it.photo }}" alt="" class="audit-thumb">{% endif %}
+    <div style="flex:1;">
+      <div class="item-name">{{ it.name }}</div>
+      {% if it.notes %}<div class="item-notes">{{ it.notes }}</div>{% endif %}
+    </div>
+  </label>
+  {% endfor %}
+  <div class="card">
+    <button type="submit">Complete audit</button>
+  </div>
+  {% else %}
+  <div class="card empty">No items in this box to audit.</div>
+  {% endif %}
+</form>
+{% endblock %}

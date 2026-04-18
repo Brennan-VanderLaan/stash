@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>New box</h2>
+  <form method="post" action="/boxes">
+    <label>Name<input type="text" name="name" required placeholder="e.g. Kitchen #1"></label>
+    <label>Location<input type="text" name="location" placeholder="e.g. Garage shelf B"></label>
+    <label>Notes<textarea name="notes"></textarea></label>
+    <button type="submit">Create box</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Boxes</h2>
+  {% if boxes %}
+  <ul class="box-list">
+    {% for b in boxes %}
+    <li><a href="/boxes/{{ b.id }}">
+      <div class="box-name">{{ b.name }}</div>
+      <div class="box-meta">
+        {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
+        {% if b.location %} · {{ b.location }}{% endif %}
+      </div>
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty">No boxes yet. Create one above.</div>
+  {% endif %}
+</div>
+{% endblock %}

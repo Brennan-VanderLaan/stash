@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Tags · Stash{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>All tags</h2>
+  {% if tags %}
+  <ul class="items">
+    {% for t in tags %}
+    <li class="item" style="padding:0.5rem;">
+      <div class="item-body">
+        <div class="row">
+          <span class="tag" style="font-size:0.9rem;">{{ t.name }}</span>
+          <span style="color:var(--muted);font-size:0.85rem;">
+            {{ t.item_count }} item{{ '' if t.item_count == 1 else 's' }}
+          </span>
+          <a href="/search?tag={{ t.name }}" style="color:var(--accent);font-size:0.85rem;">
+            Search →
+          </a>
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty">No tags yet. Add tags to items from a box detail page.</div>
+  {% endif %}
+</div>
+{% endblock %}
