@@ -88,6 +88,11 @@
           {% endfor %}
         </select>
         {% endif %}
+        {% if it.source_photo and it.source_photo != it.photo %}
+        <a href="/items/{{ it.id }}/recrop" style="font-size:0.8rem;color:var(--accent);">Re-crop</a>
+        {% elif it.photo %}
+        <a href="/items/{{ it.id }}/recrop" style="font-size:0.8rem;color:var(--muted);">Crop</a>
+        {% endif %}
         <button type="submit" formaction="/items/{{ it.id }}/delete" formnovalidate
           class="danger" style="padding:0.2rem 0.5rem;">×</button>
       </div>

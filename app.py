@@ -104,6 +104,13 @@ def migrate_db():
         _add_column_if_missing(conn, "items", "is_missing", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "items", "last_seen_at", "TEXT")
         _add_column_if_missing(conn, "pending_items", "previous_box_name", "TEXT")
+        # Bounding box from Gemini vision (0-1000 normalized coords)
+        _add_column_if_missing(conn, "pending_items", "bbox_y_min", "INTEGER")
+        _add_column_if_missing(conn, "pending_items", "bbox_x_min", "INTEGER")
+        _add_column_if_missing(conn, "pending_items", "bbox_y_max", "INTEGER")
+        _add_column_if_missing(conn, "pending_items", "bbox_x_max", "INTEGER")
+        # Source photo preserved on items for crop undo / re-crop
+        _add_column_if_missing(conn, "items", "source_photo", "TEXT")
         conn.commit()
 
 
@@ -169,6 +176,33 @@ def get_item_tags(conn, item_id: int) -> list[dict]:
 
 def format_tag(name: str, value: str | None) -> str:
     return f"{name}:{value}" if value else name
+
+
+def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
+    """Crop a photo using bbox (y_min, x_min, y_max, x_max in 0-1000 coords).
+    Returns the filename of the cropped image saved to UPLOAD_DIR."""
+    from PIL import Image
+    src = UPLOAD_DIR / photo_name
+    img = Image.open(src)
+    w, h = img.size
+    y_min, x_min, y_max, x_max = bbox
+    # Convert 0-1000 normalized coords to pixels
+    left = int(x_min / 1000 * w)
+    top = int(y_min / 1000 * h)
+    right = int(x_max / 1000 * w)
+    bottom = int(y_max / 1000 * h)
+    # Clamp and ensure minimum size
+    left = max(0, left)
+    top = max(0, top)
+    right = min(w, right)
+    bottom = min(h, bottom)
+    if right - left < 10 or bottom - top < 10:
+        return photo_name  # bbox too small, use original
+    cropped = img.crop((left, top, right, bottom))
+    ext = Path(photo_name).suffix.lower() or ".jpg"
+    crop_name = f"{secrets.token_hex(8)}{ext}"
+    cropped.save(UPLOAD_DIR / crop_name)
+    return crop_name
 
 
 @app.get("/uploads/{name}")
@@ -396,19 +430,76 @@ def remove_item_tag(item_id: int, tag_id: int):
     return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
 
 
+@app.get("/items/{item_id}/recrop", response_class=HTMLResponse)
+def recrop_item(request: Request, item_id: int):
+    with db() as conn:
+        item = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        if not item:
+            raise HTTPException(404)
+    return templates.TemplateResponse(
+        request, "recrop.html", {"item": item}
+    )
+
+
+@app.post("/items/{item_id}/recrop")
+def apply_recrop(
+    item_id: int,
+    crop_y_min: str = Form(""),
+    crop_x_min: str = Form(""),
+    crop_y_max: str = Form(""),
+    crop_x_max: str = Form(""),
+    skip_crop: str = Form(""),
+):
+    with db() as conn:
+        item = conn.execute(
+            "SELECT photo, source_photo, box_id FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if not item:
+            raise HTTPException(404)
+
+        source = item["source_photo"] or item["photo"]
+
+        if skip_crop.strip() == "1":
+            # Undo crop — revert to full source image
+            new_photo = source
+        elif crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
+            bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
+            new_photo = crop_photo(source, bbox)
+        else:
+            # No change
+            return RedirectResponse(f"/boxes/{item['box_id']}", status_code=303)
+
+        conn.execute(
+            "UPDATE items SET photo = ? WHERE id = ?", (new_photo, item_id)
+        )
+        conn.commit()
+    return RedirectResponse(f"/boxes/{item['box_id']}", status_code=303)
+
+
 @app.post("/items/{item_id}/delete")
 def delete_item(item_id: int):
     with db() as conn:
-        row = conn.execute("SELECT box_id, photo FROM items WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT box_id, photo, source_photo FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(404)
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
-    if row["photo"]:
-        try:
-            (UPLOAD_DIR / row["photo"]).unlink()
-        except FileNotFoundError:
-            pass
+        # Clean up photo files that are no longer referenced anywhere
+        for photo_name in {row["photo"], row["source_photo"]}:
+            if not photo_name:
+                continue
+            still_used = conn.execute(
+                "SELECT 1 FROM items WHERE photo = ? OR source_photo = ? "
+                "UNION SELECT 1 FROM pending_items WHERE photo = ? LIMIT 1",
+                (photo_name, photo_name, photo_name),
+            ).fetchone()
+            if not still_used:
+                try:
+                    (UPLOAD_DIR / photo_name).unlink()
+                except FileNotFoundError:
+                    pass
     return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
 
 
@@ -422,9 +513,12 @@ def process_ingest_job(job_id: int, photo_name: str, media_type: str) -> None:
         detected = vision.detect_items(image_bytes, media_type=media_type)
         with db() as conn:
             for item in detected:
+                bbox = item.bbox or [None, None, None, None]
                 conn.execute(
-                    "INSERT INTO pending_items (name, description, photo) VALUES (?, ?, ?)",
-                    (item.name, item.description, photo_name),
+                    "INSERT INTO pending_items "
+                    "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (item.name, item.description, photo_name, *bbox),
                 )
             conn.execute(
                 "UPDATE ingest_jobs SET status = 'done', item_count = ?, "
@@ -544,6 +638,11 @@ def queue_assign(
     box_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
+    crop_y_min: str = Form(""),
+    crop_x_min: str = Form(""),
+    crop_y_max: str = Form(""),
+    crop_x_max: str = Form(""),
+    skip_crop: str = Form(""),
 ):
     if not box_id.strip():
         raise HTTPException(400, "Pick a box")
@@ -552,7 +651,8 @@ def queue_assign(
 
     with db() as conn:
         row = conn.execute(
-            "SELECT photo FROM pending_items WHERE id = ?", (pending_id,)
+            "SELECT photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max "
+            "FROM pending_items WHERE id = ?", (pending_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404)
@@ -560,9 +660,20 @@ def queue_assign(
         if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (target_box_id,)).fetchone():
             raise HTTPException(400, "Unknown box")
 
+        # Use manual crop coords if submitted, fall back to DB bbox, skip if cleared
+        source_photo = row["photo"]
+        photo = source_photo
+        if skip_crop.strip() != "1":
+            if crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
+                bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
+                photo = crop_photo(photo, bbox)
+            elif photo and row["bbox_y_min"] is not None:
+                bbox = (row["bbox_y_min"], row["bbox_x_min"], row["bbox_y_max"], row["bbox_x_max"])
+                photo = crop_photo(photo, bbox)
+
         cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo) VALUES (?, ?, ?, ?)",
-            (target_box_id, name.strip(), description.strip(), row["photo"]),
+            "INSERT INTO items (box_id, name, notes, photo, source_photo) VALUES (?, ?, ?, ?, ?)",
+            (target_box_id, name.strip(), description.strip(), photo, source_photo),
         )
         new_item_id = cur.lastrowid
         # Transfer tags from pending to the real item
