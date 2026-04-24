@@ -9,7 +9,7 @@ import anthropic
 from google import genai
 
 CLAUDE_MODEL = "claude-opus-4-6"
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 _anthropic_client: Optional[anthropic.Anthropic] = None
 _gemini_client: Optional[genai.Client] = None
@@ -52,7 +52,7 @@ def detect_items(image_bytes: bytes, media_type: str = "image/jpeg") -> list[Det
         contents=[
             genai.types.Part.from_bytes(data=image_bytes, mime_type=media_type),
             genai.types.Part.from_text(
-                "List every distinct physical item in this photo that someone might want to "
+                text="List every distinct physical item in this photo that someone might want to "
                 "store and catalog. For each item, provide a bounding box.\n\n"
                 "Group obvious sets (e.g. 'set of 4 mugs') as one item. "
                 "Skip background, furniture, and the container/surface holding items.\n\n"

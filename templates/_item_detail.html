@@ -1,0 +1,84 @@
+{# Item detail partial — hero photo + grouped actions.
+   Expects `it` (item row), `tags` (list), `other_boxes` (list). #}
+
+<div class="item-detail">
+  {% if it.photo %}
+  <div class="item-hero">
+    <img src="/uploads/{{ it.photo }}" alt="{{ it.name }}">
+  </div>
+  {% endif %}
+
+  <div class="item-detail-body">
+    <h2 class="item-detail-name">{{ it.name }}</h2>
+    {% if it.notes %}<p class="item-detail-notes">{{ it.notes }}</p>{% endif %}
+
+    {# Tags — existing as removable chips, then an add input #}
+    <div class="item-detail-section">
+      <div class="section-label">Tags</div>
+      {% if tags %}
+      <div class="tag-list">
+        {% for tg in tags %}
+        <form method="post" action="/items/{{ it.id }}/tags/{{ tg.tag_id }}/delete"
+              style="display:inline;">
+          <span class="tag">
+            {% if tg.value %}{{ tg.name }}:{{ tg.value }}{% else %}{{ tg.name }}{% endif %}
+            <button type="submit" class="tag-remove" title="Remove">×</button>
+          </span>
+        </form>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <form method="post" action="/items/{{ it.id }}/tags" class="gap-row">
+        <input type="text" name="tag" placeholder="Type new or existing tag…"
+               list="tag-suggestions" autocomplete="off" style="flex:1;">
+        <button type="submit" class="btn btn-secondary btn-sm">Add</button>
+      </form>
+    </div>
+
+    {# Move #}
+    {% if other_boxes %}
+    <div class="item-detail-section">
+      <form method="post" action="/items/{{ it.id }}/move" class="gap-row">
+        <select name="box_id" style="flex:1;">
+          {% for b in other_boxes %}
+          <option value="{{ b.id }}">{{ b.name }}{% if b.location %} ({{ b.location }}){% endif %}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-secondary btn-sm">Move</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {# Photo actions — replace / crop / revert, inline row #}
+    <div class="item-detail-section">
+      <div class="section-label">Photo</div>
+      <div class="action-row">
+        {% if it.photo %}
+        <a href="/items/{{ it.id }}/recrop" class="btn btn-secondary btn-sm">
+          {% if it.source_photo and it.source_photo != it.photo %}Re-crop{% else %}Crop{% endif %}
+        </a>
+        {% endif %}
+        {% if it.source_photo and it.source_photo != it.photo %}
+        <form method="post" action="/items/{{ it.id }}/recrop" style="display:inline;">
+          <input type="hidden" name="skip_crop" value="1">
+          <button type="submit" class="btn btn-secondary btn-sm">Revert</button>
+        </form>
+        {% endif %}
+      </div>
+      <form method="post" action="/items/{{ it.id }}/replace-photo"
+            enctype="multipart/form-data" class="gap-row"
+            style="margin-top:0.5rem;">
+        <input type="file" name="photo" accept="image/*" capture="environment"
+               style="flex:1;min-height:40px;font-size:0.85rem;">
+        <button type="submit" class="btn btn-secondary btn-sm">Replace</button>
+      </form>
+    </div>
+
+    {# Delete #}
+    <form method="post" action="/items/{{ it.id }}/delete"
+          onsubmit="return confirm('Delete item “{{ it.name }}”? This cannot be undone.');"
+          class="item-detail-section">
+      <button type="submit" class="btn btn-danger btn-sm btn-block">Delete item</button>
+    </form>
+  </div>
+</div>

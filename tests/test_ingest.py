@@ -13,7 +13,7 @@ def test_ingest_uploads_then_processes_in_background(client):
     with patch("app.vision.detect_items", return_value=detected):
         r = client.post(
             "/ingest",
-            files={"photo": ("pile.jpg", io.BytesIO(b"\xff\xd8fakejpeg"), "image/jpeg")},
+            files={"photos": ("pile.jpg", io.BytesIO(b"\xff\xd8fakejpeg"), "image/jpeg")},
             follow_redirects=False,
         )
     assert r.status_code == 303
@@ -30,7 +30,7 @@ def test_ingest_failure_is_recorded_not_raised(client):
     with patch("app.vision.detect_items", side_effect=RuntimeError("API exploded")):
         r = client.post(
             "/ingest",
-            files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
+            files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
             follow_redirects=False,
         )
     assert r.status_code == 303
@@ -46,7 +46,7 @@ def test_ingest_done_jobs_disappear_from_ingest_view(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     page = client.get("/ingest").text
     # Done jobs are hidden from the ingest page (only pending/processing/failed shown)
@@ -54,9 +54,36 @@ def test_ingest_done_jobs_disappear_from_ingest_view(client):
     assert "Processing" not in page  # no active jobs section
 
 
+def test_ingest_retry_failed_job(client):
+    """Failed jobs can be re-processed without re-uploading the photo."""
+    with patch("app.vision.detect_items", side_effect=RuntimeError("transient")):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8bytes"), "image/jpeg")})
+    assert "failed" in client.get("/ingest").text
+
+    # Retry with vision now succeeding — pending item should land in queue
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="recovered", description="d")
+    ]):
+        r = client.post("/ingest/1/retry", follow_redirects=False)
+    assert r.status_code == 303
+    assert "recovered" in client.get("/queue").text
+    # Job is no longer failed
+    assert "failed" not in client.get("/ingest").text
+
+
+def test_ingest_retry_rejects_non_failed_job(client):
+    """Can't retry a job that isn't in failed state."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    r = client.post("/ingest/1/retry", follow_redirects=False)
+    assert r.status_code == 404
+
+
 def test_ingest_dismiss_failed_job(client):
     with patch("app.vision.detect_items", side_effect=RuntimeError("nope")):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     r = client.post("/ingest/1/dismiss", follow_redirects=False)
     assert r.status_code == 303
@@ -73,7 +100,7 @@ def test_match_existing_box(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="spatula", description="wooden")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     suggestion = BoxMatch(
         match="existing", box_id=1, reason="Spatulas are kitchen utensils."
@@ -91,7 +118,7 @@ def test_match_proposes_new_box(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="ski boot", description="left ski boot, size 10")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     suggestion = BoxMatch(
         match="new",
@@ -112,7 +139,7 @@ def test_assign_to_existing_box(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="spatula", description="wooden")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"jpegbytes"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"jpegbytes"), "image/jpeg")})
 
     r = client.post(
         "/queue/1/assign",
@@ -136,7 +163,7 @@ def test_assign_saves_edits(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="ugly autoname", description="vague")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     client.post("/queue/1/assign", data={
         "box_id": "1", "name": "Le Creuset spatula", "description": "silicone, red handle",
@@ -152,7 +179,7 @@ def test_assign_requires_box(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="t", description="d")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     r = client.post("/queue/1/assign", data={"name": "t"})
     assert r.status_code in (400, 422)
@@ -163,7 +190,7 @@ def test_queue_state_fingerprint_changes_on_edit(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     fp1 = client.get("/queue/state").json()["fingerprint"]
 
@@ -180,7 +207,7 @@ def test_drop_pending_item(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     r = client.post("/queue/1/delete", follow_redirects=False)
     assert r.status_code == 303

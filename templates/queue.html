@@ -6,6 +6,10 @@
 {% endblock %}
 {% block content %}
 
+<datalist id="tag-suggestions">
+  {% for t in all_tags %}<option value="{{ t }}">{% endfor %}
+</datalist>
+
 {% if not pending %}
 <div class="card">
   <div class="empty">
@@ -49,6 +53,9 @@
   <div class="sort-body">
     <input type="text" name="name" value="{{ p.name }}" required placeholder="Item name">
     <textarea name="description" rows="2" placeholder="Description">{{ p.description or '' }}</textarea>
+    <input type="text" name="tags" placeholder="Tags — type to create, comma-separated"
+           list="tag-suggestions" autocomplete="off">
+    <span class="help-text">e.g. costa-rica, serial:ABC123 — new tags are created on submit</span>
 
     {% if p.previous_box_name %}
     <div class="text-sm text-muted">

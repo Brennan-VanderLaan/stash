@@ -11,12 +11,22 @@
   <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
     Snap a photo — Claude spots every item and queues them for sorting.
   </p>
-  <form method="post" action="/ingest" enctype="multipart/form-data">
-    <label>
-      <input type="file" name="photo" accept="image/*" capture="environment" required>
-    </label>
-    <button type="submit" class="btn btn-primary btn-block">Upload</button>
-  </form>
+  <div class="btn-row">
+    <form method="post" action="/ingest" enctype="multipart/form-data" style="flex:1;">
+      <label class="btn btn-primary btn-block" style="margin:0;">
+        Take photo
+        <input type="file" name="photos" accept="image/*" capture="environment"
+               hidden onchange="this.form.submit()">
+      </label>
+    </form>
+    <form method="post" action="/ingest" enctype="multipart/form-data" style="flex:1;">
+      <label class="btn btn-secondary btn-block" style="margin:0;">
+        Select from gallery
+        <input type="file" name="photos" accept="image/*" multiple
+               hidden onchange="this.form.submit()">
+      </label>
+    </form>
+  </div>
 </div>
 
 {% if jobs %}
@@ -38,6 +48,11 @@
         <span class="text-sm text-muted">Queued</span>
       {% endif %}
     </div>
+    {% if j.status == 'failed' %}
+    <form method="post" action="/ingest/{{ j.id }}/retry">
+      <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
+    </form>
+    {% endif %}
     {% if j.status in ['failed', 'done'] %}
     <form method="post" action="/ingest/{{ j.id }}/dismiss">
       <button type="submit" class="btn btn-ghost btn-icon" title="Dismiss">×</button>

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(./venv/bin/pytest)",
-      "Bash(./venv/bin/pytest -x)"
+      "Bash(./venv/bin/pytest -x)",
+      "Bash(./venv/bin/python -m pytest --tb=short)"
     ]
   }
 }

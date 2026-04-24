@@ -125,12 +125,31 @@ def test_tags_preserved_through_audit(client):
     assert "serial:X99" in page
 
 
+def test_queue_assign_creates_new_tags(client):
+    """Typing new tag names in the queue sort card creates them on assign."""
+    client.post("/boxes", data={"name": "Kitchen"})
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="spatula", description="wooden")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+
+    client.post("/queue/1/assign", data={
+        "box_id": "1", "name": "spatula",
+        "tags": "kitchen, brand-new-tag, serial:XYZ",
+    })
+
+    page = client.get("/boxes/1").text
+    assert "kitchen" in page
+    assert "brand-new-tag" in page
+    assert "serial:XYZ" in page
+
+
 def test_tags_preserved_through_queue_assign(client):
     _box(client, "Dest box")
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="widget", description="a widget")
     ]):
-        client.post("/ingest", files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
 
     # Manually add a tag to the pending item via DB (simulate future vision tag support)
     import sys

@@ -25,6 +25,19 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
+def _static_version() -> str:
+    """Content hash of style.css, used for cache-busting. Picks up file changes
+    without requiring a server restart — recomputed per request (tiny file, cheap)."""
+    css = ROOT / "static" / "style.css"
+    if not css.exists():
+        return "0"
+    import hashlib
+    return hashlib.sha1(css.read_bytes()).hexdigest()[:8]
+
+
+templates.env.globals["static_version"] = _static_version
+
+
 def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -128,11 +141,30 @@ def save_photo(photo: UploadFile | None) -> str | None:
     return save_photo_bytes(photo.file.read(), photo.filename)
 
 
+MAX_IMAGE_DIM = 2048
+JPEG_QUALITY = 85
+
+
 def save_photo_bytes(data: bytes, filename: str) -> str:
-    ext = Path(filename).suffix.lower() or ".jpg"
-    name = f"{secrets.token_hex(8)}{ext}"
-    (UPLOAD_DIR / name).write_bytes(data)
-    return name
+    """Re-encode as JPEG with EXIF orientation baked in and longest side capped.
+    Falls back to raw bytes if PIL can't decode (keeps test fixtures working)."""
+    from PIL import Image, ImageOps
+    import io as _io
+    try:
+        img = Image.open(_io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        if max(img.size) > MAX_IMAGE_DIM:
+            img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM), Image.LANCZOS)
+        name = f"{secrets.token_hex(8)}.jpg"
+        img.save(UPLOAD_DIR / name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        return name
+    except Exception:
+        ext = Path(filename).suffix.lower() or ".jpg"
+        name = f"{secrets.token_hex(8)}{ext}"
+        (UPLOAD_DIR / name).write_bytes(data)
+        return name
 
 
 def ensure_tag(conn, name: str) -> int:
@@ -217,6 +249,27 @@ def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     return crop_name
 
 
+def _photo_still_referenced(conn, photo_name: str) -> bool:
+    """True if any row still points at this upload file."""
+    if not photo_name:
+        return True
+    return conn.execute(
+        "SELECT 1 FROM items WHERE photo = ? OR source_photo = ? "
+        "UNION SELECT 1 FROM pending_items WHERE photo = ? "
+        "UNION SELECT 1 FROM ingest_jobs WHERE photo = ? LIMIT 1",
+        (photo_name, photo_name, photo_name, photo_name),
+    ).fetchone() is not None
+
+
+def _delete_upload_if_orphan(conn, photo_name: str) -> None:
+    if not photo_name or _photo_still_referenced(conn, photo_name):
+        return
+    try:
+        (UPLOAD_DIR / photo_name).unlink()
+    except FileNotFoundError:
+        pass
+
+
 @app.get("/uploads/{name}")
 def serve_upload(name: str):
     p = UPLOAD_DIR / name
@@ -232,7 +285,19 @@ def index(request: Request):
             "SELECT b.*, COUNT(i.id) AS item_count FROM boxes b "
             "LEFT JOIN items i ON i.box_id = b.id GROUP BY b.id ORDER BY b.created_at DESC"
         ).fetchall()
-    return templates.TemplateResponse(request, "index.html", {"boxes": boxes})
+        # Up to 5 most-recent item photos per box, for the preview strip
+        thumb_rows = conn.execute(
+            "SELECT box_id, photo FROM items "
+            "WHERE photo IS NOT NULL ORDER BY box_id, created_at DESC"
+        ).fetchall()
+    thumbs: dict[int, list[str]] = {}
+    for r in thumb_rows:
+        lst = thumbs.setdefault(r["box_id"], [])
+        if len(lst) < 5:
+            lst.append(r["photo"])
+    return templates.TemplateResponse(
+        request, "index.html", {"boxes": boxes, "thumbs": thumbs},
+    )
 
 
 @app.post("/boxes")
@@ -315,7 +380,7 @@ def move_item(item_id: int, box_id: int = Form(...)):
             raise HTTPException(400, "Unknown box")
         conn.execute("UPDATE items SET box_id = ? WHERE id = ?", (box_id, item_id))
         conn.commit()
-    return RedirectResponse(f"/boxes/{box_id}", status_code=303)
+    return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
 
 
 @app.post("/boxes/{box_id}/move-items")
@@ -406,8 +471,8 @@ async def add_item(
             raise HTTPException(404)
         photo_name = save_photo(photo)
         cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo) VALUES (?, ?, ?, ?)",
-            (box_id, name.strip(), notes.strip(), photo_name),
+            "INSERT INTO items (box_id, name, notes, photo, source_photo) VALUES (?, ?, ?, ?, ?)",
+            (box_id, name.strip(), notes.strip(), photo_name, photo_name),
         )
         if tags.strip():
             set_item_tags(conn, cur.lastrowid, parse_tag_input(tags))
@@ -426,7 +491,7 @@ def add_item_tag(item_id: int, tag: str = Form(...)):
             raise HTTPException(404)
         set_item_tags(conn, item_id, entries)
         conn.commit()
-    return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
+    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/tags/{tag_id}/delete")
@@ -439,7 +504,7 @@ def remove_item_tag(item_id: int, tag_id: int):
             "DELETE FROM item_tags WHERE item_id = ? AND tag_id = ?", (item_id, tag_id)
         )
         conn.commit()
-    return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
+    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.get("/items/{item_id}/recrop", response_class=HTMLResponse)
@@ -470,6 +535,7 @@ def apply_recrop(
             raise HTTPException(404)
 
         source = item["source_photo"] or item["photo"]
+        old_photo = item["photo"]
 
         if skip_crop.strip() == "1":
             # Undo crop — revert to full source image
@@ -479,13 +545,17 @@ def apply_recrop(
             new_photo = crop_photo(source, bbox)
         else:
             # No change
-            return RedirectResponse(f"/boxes/{item['box_id']}", status_code=303)
+            return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
         conn.execute(
-            "UPDATE items SET photo = ? WHERE id = ?", (new_photo, item_id)
+            "UPDATE items SET photo = ?, source_photo = ? WHERE id = ?",
+            (new_photo, source, item_id),
         )
         conn.commit()
-    return RedirectResponse(f"/boxes/{item['box_id']}", status_code=303)
+        # Old crop file may now be orphaned
+        if old_photo and old_photo != new_photo and old_photo != source:
+            _delete_upload_if_orphan(conn, old_photo)
+    return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/replace-photo")
@@ -494,7 +564,7 @@ async def replace_item_photo(item_id: int, photo: UploadFile = File(...)):
         raise HTTPException(400, "Photo required")
     with db() as conn:
         row = conn.execute(
-            "SELECT box_id FROM items WHERE id = ?", (item_id,)
+            "SELECT box_id, photo, source_photo FROM items WHERE id = ?", (item_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404)
@@ -504,7 +574,9 @@ async def replace_item_photo(item_id: int, photo: UploadFile = File(...)):
             (new_photo, new_photo, item_id),
         )
         conn.commit()
-    return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
+        for old in {row["photo"], row["source_photo"]}:
+            _delete_upload_if_orphan(conn, old)
+    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/delete")
@@ -517,30 +589,22 @@ def delete_item(item_id: int):
             raise HTTPException(404)
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
-        # Clean up photo files that are no longer referenced anywhere
         for photo_name in {row["photo"], row["source_photo"]}:
-            if not photo_name:
-                continue
-            still_used = conn.execute(
-                "SELECT 1 FROM items WHERE photo = ? OR source_photo = ? "
-                "UNION SELECT 1 FROM pending_items WHERE photo = ? LIMIT 1",
-                (photo_name, photo_name, photo_name),
-            ).fetchone()
-            if not still_used:
-                try:
-                    (UPLOAD_DIR / photo_name).unlink()
-                except FileNotFoundError:
-                    pass
+            _delete_upload_if_orphan(conn, photo_name)
     return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
 
 
-def process_ingest_job(job_id: int, photo_name: str, media_type: str) -> None:
+_EXT_TO_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def process_ingest_job(job_id: int, photo_name: str) -> None:
     """Background worker: vision pass → insert pending items → mark job done."""
     with db() as conn:
         conn.execute("UPDATE ingest_jobs SET status = 'processing' WHERE id = ?", (job_id,))
         conn.commit()
     try:
         image_bytes = (UPLOAD_DIR / photo_name).read_bytes()
+        media_type = _EXT_TO_MIME.get(Path(photo_name).suffix.lower(), "image/jpeg")
         detected = vision.detect_items(image_bytes, media_type=media_type)
         with db() as conn:
             for item in detected:
@@ -578,21 +642,42 @@ def ingest_form(request: Request):
 
 
 @app.post("/ingest")
-async def ingest(background_tasks: BackgroundTasks, photo: UploadFile = File(...)):
-    if not photo or not photo.filename:
+async def ingest(background_tasks: BackgroundTasks, photos: list[UploadFile] = File(...)):
+    valid = [p for p in photos if p and p.filename]
+    if not valid:
         raise HTTPException(400, "Photo required")
-    image_bytes = await photo.read()
-    media_type = photo.content_type or "image/jpeg"
-    photo_name = save_photo_bytes(image_bytes, photo.filename)
 
+    for photo in valid:
+        image_bytes = await photo.read()
+        photo_name = save_photo_bytes(image_bytes, photo.filename)
+
+        with db() as conn:
+            cur = conn.execute(
+                "INSERT INTO ingest_jobs (photo, status) VALUES (?, 'pending')", (photo_name,)
+            )
+            job_id = cur.lastrowid
+            conn.commit()
+
+        background_tasks.add_task(process_ingest_job, job_id, photo_name)
+
+    return RedirectResponse("/ingest", status_code=303)
+
+
+@app.post("/ingest/{job_id}/retry")
+def ingest_retry(background_tasks: BackgroundTasks, job_id: int):
     with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO ingest_jobs (photo, status) VALUES (?, 'pending')", (photo_name,)
+        row = conn.execute(
+            "SELECT photo FROM ingest_jobs WHERE id = ? AND status = 'failed'", (job_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Job not found or not failed")
+        conn.execute(
+            "UPDATE ingest_jobs SET status = 'pending', error = NULL, "
+            "completed_at = NULL WHERE id = ?",
+            (job_id,),
         )
-        job_id = cur.lastrowid
         conn.commit()
-
-    background_tasks.add_task(process_ingest_job, job_id, photo_name, media_type)
+    background_tasks.add_task(process_ingest_job, job_id, row["photo"])
     return RedirectResponse("/ingest", status_code=303)
 
 
@@ -618,6 +703,7 @@ def queue(request: Request):
         boxes = conn.execute(
             "SELECT id, name, location FROM boxes ORDER BY name"
         ).fetchall()
+        all_tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()]
     import hashlib
     payload = "|".join(
         f"{r['id']}:{r['name']}:{r['description']}:{r['suggested_box_id']}:"
@@ -627,7 +713,7 @@ def queue(request: Request):
     fingerprint = hashlib.sha1(payload.encode()).hexdigest()
     return templates.TemplateResponse(
         request, "queue.html",
-        {"pending": pending, "boxes": boxes, "fingerprint": fingerprint},
+        {"pending": pending, "boxes": boxes, "fingerprint": fingerprint, "all_tags": all_tags},
     )
 
 
@@ -669,6 +755,7 @@ def queue_assign(
     box_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
+    tags: str = Form(""),
     crop_y_min: str = Form(""),
     crop_x_min: str = Form(""),
     crop_y_max: str = Form(""),
@@ -713,6 +800,8 @@ def queue_assign(
             "SELECT ?, tag_id, value FROM pending_item_tags WHERE pending_item_id = ?",
             (new_item_id, pending_id),
         )
+        if tags.strip():
+            set_item_tags(conn, new_item_id, parse_tag_input(tags))
         conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
         conn.commit()
     return RedirectResponse("/queue", status_code=303)
@@ -745,20 +834,8 @@ def queue_delete(pending_id: int):
         if not row:
             raise HTTPException(404)
         conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
-        # Only delete photo file if no other pending or item references it
-        photo = row["photo"]
-        if photo:
-            still_used = conn.execute(
-                "SELECT 1 FROM pending_items WHERE photo = ? "
-                "UNION SELECT 1 FROM items WHERE photo = ? LIMIT 1",
-                (photo, photo),
-            ).fetchone()
-            if not still_used:
-                try:
-                    (UPLOAD_DIR / photo).unlink()
-                except FileNotFoundError:
-                    pass
         conn.commit()
+        _delete_upload_if_orphan(conn, row["photo"])
     return RedirectResponse("/queue", status_code=303)
 
 
@@ -861,8 +938,13 @@ def labels_sheet(request: Request):
 
 
 @app.post("/boxes/{box_id}/delete")
-def delete_box(box_id: int):
+def delete_box(box_id: int, confirm: str = Form(...)):
     with db() as conn:
+        box = conn.execute("SELECT name FROM boxes WHERE id = ?", (box_id,)).fetchone()
+        if not box:
+            raise HTTPException(404)
+        if confirm.strip() != box["name"]:
+            raise HTTPException(400, "Type the box name to confirm deletion")
         photos = [r["photo"] for r in conn.execute(
             "SELECT photo FROM items WHERE box_id = ? AND photo IS NOT NULL", (box_id,)
         ).fetchall()]
@@ -874,3 +956,75 @@ def delete_box(box_id: int):
         except FileNotFoundError:
             pass
     return RedirectResponse("/", status_code=303)
+
+
+def _referenced_uploads() -> set[str]:
+    """All upload filenames referenced by any row in the DB."""
+    refs: set[str] = set()
+    with db() as conn:
+        for sql in (
+            "SELECT photo FROM items WHERE photo IS NOT NULL",
+            "SELECT source_photo FROM items WHERE source_photo IS NOT NULL",
+            "SELECT photo FROM pending_items WHERE photo IS NOT NULL",
+            "SELECT photo FROM ingest_jobs WHERE photo IS NOT NULL",
+        ):
+            refs.update(r[0] for r in conn.execute(sql).fetchall())
+    return refs
+
+
+@app.get("/maintenance", response_class=HTMLResponse)
+def maintenance(request: Request, cleaned: str = ""):
+    with db() as conn:
+        item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
+    on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
+    referenced = len(_referenced_uploads())
+    return templates.TemplateResponse(
+        request, "maintenance.html",
+        {
+            "item_count": item_count, "box_count": box_count,
+            "files_on_disk": on_disk, "files_referenced": referenced,
+            "orphan_count": max(0, on_disk - referenced),
+            "cleaned": cleaned,
+        },
+    )
+
+
+@app.post("/maintenance/cleanup")
+def maintenance_cleanup():
+    refs = _referenced_uploads()
+    cleaned = 0
+    if UPLOAD_DIR.exists():
+        for path in UPLOAD_DIR.iterdir():
+            if path.is_file() and path.name not in refs:
+                try:
+                    path.unlink()
+                    cleaned += 1
+                except FileNotFoundError:
+                    pass
+    return RedirectResponse(f"/maintenance?cleaned={cleaned}", status_code=303)
+
+
+@app.get("/maintenance/export")
+def maintenance_export():
+    """Stream a zip of stash.db + every upload file still referenced."""
+    import io as _io
+    import zipfile
+    from datetime import datetime
+
+    refs = _referenced_uploads()
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if DB_PATH.exists():
+            zf.write(DB_PATH, arcname="stash.db")
+        for name in sorted(refs):
+            p = UPLOAD_DIR / name
+            if p.exists():
+                zf.write(p, arcname=f"uploads/{name}")
+    buf.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="stash-backup-{stamp}.zip"'},
+    )

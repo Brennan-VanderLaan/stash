@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Maintenance · Stash{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Backup</div>
+  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+    Downloads a zip containing <code>stash.db</code> and every referenced photo in
+    <code>uploads/</code>. Unzip into the app directory to restore.
+  </p>
+  <a href="/maintenance/export" class="btn btn-primary btn-block" download>Download backup</a>
+</div>
+
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Cleanup</div>
+  <dl class="stat-row">
+    <div><dt>Items</dt><dd>{{ item_count }}</dd></div>
+    <div><dt>Boxes</dt><dd>{{ box_count }}</dd></div>
+    <div><dt>Files on disk</dt><dd>{{ files_on_disk }}</dd></div>
+    <div><dt>Files referenced</dt><dd>{{ files_referenced }}</dd></div>
+    <div><dt>Orphaned</dt><dd>{{ orphan_count }}</dd></div>
+  </dl>
+  {% if cleaned %}
+  <p class="text-sm text-muted">Removed {{ cleaned }} orphan file{{ '' if cleaned == '1' else 's' }}.</p>
+  {% endif %}
+  <form method="post" action="/maintenance/cleanup"
+        onsubmit="return confirm('Delete {{ orphan_count }} orphan file(s) from uploads/?');">
+    <button type="submit" class="btn btn-secondary btn-block"
+            {% if orphan_count == 0 %}disabled{% endif %}>
+      Clean up orphan files
+    </button>
+  </form>
+</div>
+
+{% endblock %}

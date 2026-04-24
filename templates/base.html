@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#16331f">
   <title>{% block title %}Stash{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
   {% block head_extra %}{% endblock %}
 </head>
 <body>
@@ -21,6 +21,7 @@
       <a href="/search">Search</a>
       <a href="/labels">Labels</a>
       <a href="/tags">Tags</a>
+      <a href="/maintenance">Maintenance</a>
     </nav>
     {% block header_actions %}{% endblock %}
   </header>

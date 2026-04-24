@@ -45,118 +45,106 @@
     <label>Notes<textarea name="notes" rows="2"></textarea></label>
     <label>
       Tags
-      <span class="help-text">comma-separated, key:value for metadata</span>
-      <input type="text" name="tags" placeholder="e.g. costa-rica, serial:ABC123">
+      <span class="help-text">comma-separated — type anything, new tags are created automatically</span>
+      <input type="text" name="tags" placeholder="e.g. costa-rica, serial:ABC123"
+             list="tag-suggestions" autocomplete="off">
     </label>
     <label>Photo<input type="file" name="photo" accept="image/*" capture="environment"></label>
     <button type="submit" class="btn btn-primary btn-block">Add to box</button>
   </form>
 </details>
 
-{# --- Contents --- #}
+{# --- Contents (grid) --- #}
 <div class="card">
   <div class="card-header">
     <span class="card-title">Contents ({{ items_with_tags|length }})</span>
   </div>
 
   {% if items_with_tags %}
-  {% for entry in items_with_tags %}
-  {% set it = entry.item %}
-  {% set tags = entry.tags %}
-  <div class="item-card" id="item-{{ it.id }}">
-    <div class="item-main" onclick="this.parentElement.classList.toggle('expanded')">
-      {% if it.photo %}<img src="/uploads/{{ it.photo }}" alt="" class="item-thumb">{% endif %}
-      <div class="item-info">
-        <div class="item-name">{{ it.name }}</div>
-        {% if it.notes %}<div class="item-desc">{{ it.notes }}</div>{% endif %}
-        {% if tags %}
-        <div class="tag-list">
-          {% for tg in tags %}
-          <span class="tag">{% if tg.value %}{{ tg.name }}:{{ tg.value }}{% else %}{{ tg.name }}{% endif %}</span>
-          {% endfor %}
-        </div>
+  <div class="item-grid">
+    {% for entry in items_with_tags %}
+    {% set it = entry.item %}
+    <button type="button" class="item-tile" data-item-id="{{ it.id }}"
+            onclick="openItem({{ it.id }})" title="{{ it.name }}">
+      <div class="item-tile-photo">
+        {% if it.photo %}
+        <img src="/uploads/{{ it.photo }}" alt="" loading="lazy">
+        {% else %}
+        <span class="item-tile-placeholder">📦</span>
         {% endif %}
       </div>
-    </div>
-
-    <div class="item-actions">
-      {# Tags #}
-      <form method="post" action="/items/{{ it.id }}/tags" class="gap-row">
-        <input type="text" name="tag" placeholder="Add tag…" list="tag-suggestions"
-               style="flex:1;min-height:40px;">
-        <button type="submit" class="btn btn-secondary btn-sm">Add</button>
-      </form>
-      {% if tags %}
-      <div class="tag-list">
-        {% for tg in tags %}
-        <form method="post" action="/items/{{ it.id }}/tags/{{ tg.tag_id }}/delete"
-              style="display:inline;">
-          <span class="tag">
-            {% if tg.value %}{{ tg.name }}:{{ tg.value }}{% else %}{{ tg.name }}{% endif %}
-            <button type="submit" class="tag-remove" title="Remove">×</button>
-          </span>
-        </form>
-        {% endfor %}
-      </div>
-      {% endif %}
-
-      {# Move #}
-      {% if other_boxes %}
-      <form method="post" action="/items/{{ it.id }}/move" class="gap-row">
-        <select name="box_id" style="flex:1;">
-          {% for b in other_boxes %}
-          <option value="{{ b.id }}">{{ b.name }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit" class="btn btn-secondary btn-sm">Move</button>
-      </form>
-      {% endif %}
-
-      {# Photo #}
-      <form method="post" action="/items/{{ it.id }}/replace-photo"
-            enctype="multipart/form-data" class="gap-row">
-        <input type="file" name="photo" accept="image/*" capture="environment"
-               style="flex:1;min-height:40px;font-size:0.8rem;">
-        <button type="submit" class="btn btn-secondary btn-sm">Replace photo</button>
-      </form>
-
-      {# Crop #}
-      {% if it.photo %}
-      <a href="/items/{{ it.id }}/recrop" class="btn btn-secondary btn-sm btn-block">
-        {% if it.source_photo and it.source_photo != it.photo %}Re-crop{% else %}Crop{% endif %}
-      </a>
-      {% endif %}
-
-      {# Revert #}
-      {% if it.source_photo and it.source_photo != it.photo %}
-      <form method="post" action="/items/{{ it.id }}/recrop">
-        <input type="hidden" name="skip_crop" value="1">
-        <button type="submit" class="btn btn-secondary btn-sm btn-block">Revert to original</button>
-      </form>
-      {% endif %}
-
-      {# Delete #}
-      <form method="post" action="/items/{{ it.id }}/delete"
-            onsubmit="return confirm('Delete this item?');">
-        <button type="submit" class="btn btn-danger btn-sm btn-block">Delete</button>
-      </form>
-    </div>
-
-    <button type="button" class="item-toggle"
-            onclick="this.parentElement.classList.toggle('expanded')">
-      <span>⋯</span>
+      <span class="item-tile-name">{{ it.name }}</span>
     </button>
+    {% endfor %}
   </div>
-  {% endfor %}
   {% else %}
   <div class="empty">No items yet.</div>
   {% endif %}
 </div>
 
+{# --- Item detail dialogs (one per item) --- #}
+{% for entry in items_with_tags %}
+{% set it = entry.item %}
+{% set tags = entry.tags %}
+<dialog id="dialog-item-{{ it.id }}" class="item-dialog">
+  <form method="dialog" class="item-dialog-close-form">
+    <button type="submit" class="item-dialog-close" aria-label="Close">×</button>
+  </form>
+  {% include "_item_detail.html" %}
+</dialog>
+{% endfor %}
+
+<script>
+  function openItem(id) {
+    const d = document.getElementById('dialog-item-' + id);
+    if (!d) return;
+    if (!d.open) d.showModal();
+    history.replaceState(null, '', '#item-' + id);
+    d.addEventListener('close', clearHash, { once: true });
+  }
+  function clearHash() {
+    if (location.hash.startsWith('#item-')) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }
+  // Reopen a dialog on load if URL carries an item hash (e.g. after a form redirect)
+  window.addEventListener('load', function() {
+    const m = location.hash.match(/^#item-(\d+)$/);
+    if (m) openItem(m[1]);
+  });
+</script>
+
 {# --- Delete Box --- #}
-<form method="post" action="/boxes/{{ box.id }}/delete"
-      onsubmit="return confirm('Delete this box and all its items?');">
-  <button type="submit" class="btn btn-danger btn-block">Delete entire box</button>
-</form>
+<details class="card danger-zone">
+  <summary class="card-title" style="cursor:pointer;list-style:none;color:var(--danger);">
+    ⚠ Delete entire box
+  </summary>
+  <p class="text-sm text-muted" style="margin:0.75rem 0 0.5rem;">
+    This will permanently delete <strong>{{ box.name }}</strong> and all
+    <strong>{{ items_with_tags|length }} item{{ '' if items_with_tags|length == 1 else 's' }}</strong> inside it,
+    including photos. This cannot be undone.
+  </p>
+  <form method="post" action="/boxes/{{ box.id }}/delete" id="delete-box-form">
+    <label>
+      Type <code>{{ box.name }}</code> to confirm
+      <input type="text" name="confirm" id="delete-box-confirm" autocomplete="off"
+             placeholder="Box name" data-expected="{{ box.name }}">
+    </label>
+    <button type="submit" id="delete-box-submit" class="btn btn-danger btn-block" disabled>
+      Permanently delete
+    </button>
+  </form>
+</details>
+<script>
+  (function() {
+    const input = document.getElementById('delete-box-confirm');
+    const btn = document.getElementById('delete-box-submit');
+    if (!input || !btn) return;
+    const expected = input.dataset.expected;
+    input.addEventListener('input', function() {
+      btn.disabled = input.value.trim() !== expected;
+    });
+  })();
+</script>
 
 {% endblock %}

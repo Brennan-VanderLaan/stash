@@ -47,7 +47,8 @@ def test_move_single_item_between_boxes(client):
 
     r = client.post("/items/1/move", data={"box_id": "2"}, follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/boxes/2"
+    # Redirect keeps the item anchor so the modal re-opens after the move
+    assert r.headers["location"] == "/boxes/2#item-1"
 
     assert "spatula" not in client.get("/boxes/1").text
     assert "spatula" in client.get("/boxes/2").text

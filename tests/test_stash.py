@@ -105,11 +105,19 @@ def test_delete_box_cascades_items_and_photos(client):
     upload_dir = Path(client.app_module.UPLOAD_DIR)
     photo = next(upload_dir.glob("*.jpg"))
 
-    r = client.post("/boxes/1/delete", follow_redirects=False)
+    r = client.post("/boxes/1/delete", data={"confirm": "Box A"}, follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/"
     assert not photo.exists()
     assert client.get("/boxes/1").status_code == 404
+
+
+def test_delete_box_requires_name_confirmation(client):
+    """Posting to delete without the correct name must be rejected."""
+    client.post("/boxes", data={"name": "Precious"})
+    assert client.post("/boxes/1/delete").status_code in (400, 422)
+    assert client.post("/boxes/1/delete", data={"confirm": "wrong"}).status_code == 400
+    assert client.get("/boxes/1").status_code == 200  # still there
 
 
 def test_add_item_to_missing_box_404(client):
@@ -132,7 +140,7 @@ def test_replace_item_photo(client):
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert r.headers["location"] == "/boxes/1"
+    assert r.headers["location"] == "/boxes/1#item-1"
 
     with client.app_module.db() as conn:
         item = conn.execute("SELECT photo, source_photo FROM items WHERE id = 1").fetchone()
@@ -147,8 +155,8 @@ def test_replace_item_photo(client):
 def test_replace_photo_shows_in_box_detail(client):
     client.post("/boxes", data={"name": "Box A"})
     client.post("/boxes/1/items", data={"name": "mug"})
-    # Item has no photo initially
-    assert "Replace photo" in client.get("/boxes/1").text
+    # Item has no photo initially — dialog still offers a replace button
+    assert "/items/1/replace-photo" in client.get("/boxes/1").text
 
     client.post(
         "/items/1/replace-photo",
