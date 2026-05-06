@@ -35,12 +35,22 @@ services:
       OAUTH2_PROXY_UPSTREAMS: http://stash:8000
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_REVERSE_PROXY: "true"
-      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      # Cookie hardening — explicit so a future default change can't silently
+      # weaken the session.
+      OAUTH2_PROXY_COOKIE_SECURE: "true"      # only sent over HTTPS
+      OAUTH2_PROXY_COOKIE_HTTPONLY: "true"    # not readable from JS
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax       # blocks cross-site form CSRF
       OAUTH2_PROXY_COOKIE_DOMAINS: ${DOMAIN}
       OAUTH2_PROXY_WHITELIST_DOMAINS: ${DOMAIN}
+      # Re-validate the session against Google every 1h so a revoked Google
+      # account stops working within the hour, not at full cookie expiry.
+      OAUTH2_PROXY_COOKIE_REFRESH: 1h
       # Allow any email domain — the actual gate is the explicit allowlist file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
+      # No skip-auth routes / regex configured by design — every path on this
+      # stack must pass auth. /oauth2/* paths are owned by oauth2-proxy itself
+      # for sign-in/callback flow and are not forwarded to the upstream.
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
