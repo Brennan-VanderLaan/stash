@@ -97,6 +97,11 @@ services:
       NETWORKS: 1     # required so recreated containers rejoin the right nets
       POST: 1         # allow the POST verbs above
       DELETE: 1       # for WATCHTOWER_CLEANUP=true
+      # Read-only metadata endpoints. Without these, the Docker client can't
+      # negotiate an API version and falls back to 1.25 — newer daemons reject
+      # that with "client version 1.25 is too old".
+      PING: 1
+      VERSION: 1
       # Not enabled: EXEC, VOLUMES, SWARM, SECRETS, SERVICES, TASKS, NODES,
       # CONFIGS, BUILD, COMMIT, INFO, AUTH, SESSION, SYSTEM, PLUGINS.
     volumes:
