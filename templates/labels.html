@@ -30,10 +30,10 @@
             {% if art_enabled %}
               {% if b.background_art %}
               <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
-                      class="btn btn-ghost btn-sm label-action" title="Regenerate art"
+                      class="btn btn-sm label-action label-action-regen" title="Regenerate art (Nano Banana 2)"
                       data-art-button data-art-state="regen"
                       onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
-                <span class="art-icon">🎨</span>
+                <span class="art-icon">↻</span>
               </button>
               <button type="submit" formaction="/boxes/{{ b.id }}/clear-art" formmethod="post"
                       class="btn btn-ghost btn-sm label-action" title="Clear art"
@@ -42,7 +42,7 @@
               </button>
               {% else %}
               <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
-                      class="btn btn-ghost btn-sm label-action" title="Generate art"
+                      class="btn btn-sm label-action label-action-generate" title="Generate art (Nano Banana 2)"
                       data-art-button data-art-state="new"
                       onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
                 <span class="art-icon">🎨</span>
