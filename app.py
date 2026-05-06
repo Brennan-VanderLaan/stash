@@ -307,6 +307,9 @@ def save_photo_bytes(data: bytes, filename: str) -> str:
     headers PIL can't decode), but ALWAYS as `.jpg` — never honor the caller's
     extension. Combined with `X-Content-Type-Options: nosniff` at the edge, this
     closes the stored-XSS path where an authenticated user uploads `evil.html`.
+
+    Also writes the companion thumbnail in the same pass so the first grid
+    view of a fresh upload doesn't have to lazy-generate it.
     """
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Upload too large")
@@ -321,6 +324,10 @@ def save_photo_bytes(data: bytes, filename: str) -> str:
             img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM), Image.LANCZOS)
         name = f"{secrets.token_hex(8)}.jpg"
         img.save(UPLOAD_DIR / name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        # Pre-generate the thumb from the in-memory image — cheaper than
+        # opening the file again, and covers the new-upload-then-immediately-
+        # render case without paying the lazy-gen cost on the first request.
+        _save_thumb_from_image(img, name)
         return name
     except HTTPException:
         raise
@@ -328,6 +335,21 @@ def save_photo_bytes(data: bytes, filename: str) -> str:
         name = f"{secrets.token_hex(8)}.jpg"
         (UPLOAD_DIR / name).write_bytes(data)
         return name
+
+
+def _save_thumb_from_image(img, name: str) -> None:
+    """Write a thumbnail for `name` from an already-decoded PIL image."""
+    from PIL import Image as _Image
+    try:
+        thumb_img = img.copy()
+        if max(thumb_img.size) > THUMB_MAX_DIM:
+            thumb_img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), _Image.LANCZOS)
+        thumb = _thumb_path(name)
+        tmp = thumb.with_suffix(thumb.suffix + ".tmp")
+        thumb_img.save(tmp, format="JPEG", quality=80, optimize=True)
+        os.replace(tmp, thumb)
+    except Exception:
+        pass  # the lazy /thumbs endpoint will retry generation on first view
 
 
 def ensure_tag(conn, name: str) -> int:
@@ -434,10 +456,65 @@ def _delete_upload_if_orphan(conn, photo_name: str) -> None:
         (UPLOAD_DIR / photo_name).unlink()
     except FileNotFoundError:
         pass
+    # Companion thumbnail goes with the source. The thumb is a derived
+    # artifact, never tracked in the DB — so its lifetime is purely tied to
+    # whether anything still references the original.
+    _delete_thumb_if_exists(photo_name)
 
 
 import re as _re
 _UPLOAD_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Longest side of a generated thumbnail. 320 px renders crisply at 100 px CSS
+# squares on retina (3x = 300) without paying the cost of the 2048 px source.
+THUMB_MAX_DIM = 320
+
+
+def _thumb_path(name: str) -> Path:
+    """Companion thumbnail file for a given upload. Always .jpg since
+    save_photo_bytes re-encodes everything to JPEG anyway."""
+    return UPLOAD_DIR / f"{Path(name).stem}_thumb.jpg"
+
+
+def _is_thumb_name(name: str) -> bool:
+    return Path(name).stem.endswith("_thumb")
+
+
+def _ensure_thumb(name: str) -> Path | None:
+    """Lazy-generate the thumb for an existing upload. Returns the thumb path
+    or None if the source is missing / un-decodable. Writes via a tmp file +
+    rename so concurrent requests can't see a half-written thumb."""
+    src = UPLOAD_DIR / name
+    if not src.exists() or _is_thumb_name(name):
+        return None
+    thumb = _thumb_path(name)
+    if thumb.exists():
+        return thumb
+    try:
+        from PIL import Image, ImageOps
+        img = Image.open(src)
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        if max(img.size) > THUMB_MAX_DIM:
+            img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), Image.LANCZOS)
+        tmp = thumb.with_suffix(thumb.suffix + ".tmp")
+        img.save(tmp, format="JPEG", quality=80, optimize=True)
+        os.replace(tmp, thumb)
+        return thumb
+    except Exception:
+        # Any decode failure (test fixtures, corrupt jpegs, etc) — just let
+        # the caller fall back to serving the full-res source.
+        return None
+
+
+def _delete_thumb_if_exists(name: str) -> None:
+    if _is_thumb_name(name):
+        return
+    try:
+        _thumb_path(name).unlink()
+    except FileNotFoundError:
+        pass
 
 
 @app.get("/uploads/{name}")
@@ -454,6 +531,24 @@ def serve_upload(name: str):
     if not p.is_relative_to(upload_root) or not p.is_file():
         raise HTTPException(404)
     return FileResponse(p)
+
+
+@app.get("/thumbs/{name}")
+def serve_thumb(name: str):
+    """Serves a downscaled version of /uploads/{name} for grid + list views.
+    Filenames are content-hashed so the result is immutable — long-cached."""
+    if not _UPLOAD_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(404)
+    upload_root = UPLOAD_DIR.resolve()
+    src = (UPLOAD_DIR / name).resolve()
+    if not src.is_relative_to(upload_root) or not src.is_file():
+        raise HTTPException(404)
+    thumb = _ensure_thumb(name)
+    target = thumb if thumb and thumb.exists() else src
+    return FileResponse(
+        target,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1699,7 +1794,8 @@ def room_boxes(request: Request, room_id: int):
 
 
 def _referenced_uploads() -> set[str]:
-    """All upload filenames referenced by any row in the DB."""
+    """All upload filenames referenced by any row in the DB, plus their
+    derived thumbnail companions so the orphan sweep keeps both halves."""
     refs: set[str] = set()
     with db() as conn:
         for sql in (
@@ -1712,6 +1808,9 @@ def _referenced_uploads() -> set[str]:
             "SELECT floorplan FROM locations WHERE floorplan IS NOT NULL",
         ):
             refs.update(r[0] for r in conn.execute(sql).fetchall())
+    # The thumbs themselves aren't tracked in the DB but should follow
+    # whatever their source does.
+    refs.update(_thumb_path(name).name for name in list(refs))
     return refs
 
 

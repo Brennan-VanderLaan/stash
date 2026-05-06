@@ -19,7 +19,7 @@
   <div class="card-title" style="margin-bottom:0.5rem;">{{ results|length }} result{{ '' if results|length == 1 else 's' }}</div>
   {% for r in results %}
   <a href="/boxes/{{ r.bid }}" class="result-card">
-    {% if r.photo %}<img src="/uploads/{{ r.photo }}" alt="" class="item-thumb">{% endif %}
+    {% if r.photo %}<img src="/thumbs/{{ r.photo }}" alt="" class="item-thumb" loading="lazy">{% endif %}
     <div class="item-info">
       <div class="item-name">{{ r.name }}</div>
       {% if r.notes %}<div class="item-desc">{{ r.notes }}</div>{% endif %}

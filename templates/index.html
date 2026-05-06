@@ -28,7 +28,7 @@
         {% if box_thumbs %}
         <div class="box-thumbs">
           {% for photo in box_thumbs %}
-          <img src="/uploads/{{ photo }}" alt="" loading="lazy">
+          <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
           {% endfor %}
           {% if b.item_count > box_thumbs|length %}
           <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>

@@ -18,7 +18,7 @@
   {% for it in items %}
   <label class="audit-item" for="found-{{ it.id }}">
     <input type="checkbox" id="found-{{ it.id }}" name="found" value="{{ it.id }}" checked>
-    {% if it.photo %}<img src="/uploads/{{ it.photo }}" alt="" class="audit-thumb">{% endif %}
+    {% if it.photo %}<img src="/thumbs/{{ it.photo }}" alt="" class="audit-thumb" loading="lazy">{% endif %}
     <div>
       <div class="item-name">{{ it.name }}</div>
       {% if it.notes %}<div class="item-desc">{{ it.notes }}</div>{% endif %}

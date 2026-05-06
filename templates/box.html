@@ -95,7 +95,7 @@
             onclick="openItem({{ it.id }})" title="{{ it.name }}">
       <div class="item-tile-photo">
         {% if it.photo %}
-        <img src="/uploads/{{ it.photo }}" alt="" loading="lazy">
+        <img src="/thumbs/{{ it.photo }}" alt="" loading="lazy">
         {% else %}
         <span class="item-tile-placeholder">📦</span>
         {% endif %}
