@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.3.0...v0.4.0) (2026-05-06)
+
+
+### Features
+
+* enrich release notes with container image + deploy info ([b9d1a68](https://github.com/Brennan-VanderLaan/stash/commit/b9d1a6826bee1e703d7a6cf937025c63cc4adc9d))
+* QR labels point at the live box URL and show box ID + description ([a7c3114](https://github.com/Brennan-VanderLaan/stash/commit/a7c3114fba4f3f118fd5f9eaa46ca7dfa5aaaf06))
+
 ## [0.3.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.2.0...v0.3.0) (2026-05-06)
 
 
