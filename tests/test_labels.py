@@ -153,7 +153,7 @@ def test_generate_art_endpoint_saves_and_links_image(client, monkeypatch):
     client.post("/boxes", data={"name": "Bedroom Clothing", "notes": "shirts and socks"})
     fake_jpg = _fake_jpg_bytes()
 
-    def fake_gen(name, description=""):
+    def fake_gen(name, description="", items=None, item_photos=None):
         # Sanity-check the prompt inputs reach the generator
         assert name == "Bedroom Clothing"
         assert "shirts" in description
@@ -173,7 +173,7 @@ def test_label_svg_embeds_background_art_when_set(client, monkeypatch):
     client.post("/boxes", data={"name": "Crochet Box"})
     monkeypatch.setattr(
         client.app_module.vision, "generate_label_art",
-        lambda name, description="": _fake_jpg_bytes(),
+        lambda *args, **kwargs: _fake_jpg_bytes(),
     )
     client.post("/boxes/1/generate-art")
 
@@ -181,15 +181,16 @@ def test_label_svg_embeds_background_art_when_set(client, monkeypatch):
     # Embedded as a base64 data URI so the SVG is self-contained.
     assert "<image" in svg
     assert "data:image/jpeg;base64," in svg
-    # Faded so QR + text remain readable on top.
-    assert 'opacity="0.18"' in svg
+    # Faded so QR + text remain readable on top, but visible enough to
+    # carry through after print.
+    assert 'opacity="0.32"' in svg
 
 
 def test_clear_art_drops_image_and_orphans_file(client, monkeypatch):
     client.post("/boxes", data={"name": "Coat Box"})
     monkeypatch.setattr(
         client.app_module.vision, "generate_label_art",
-        lambda name, description="": _fake_jpg_bytes(),
+        lambda *args, **kwargs: _fake_jpg_bytes(),
     )
     client.post("/boxes/1/generate-art")
     with client.app_module.db() as conn:
@@ -204,12 +205,114 @@ def test_clear_art_drops_image_and_orphans_file(client, monkeypatch):
     assert not (client.app_module.UPLOAD_DIR / art).exists(), "orphan art file leaked"
 
 
+def test_generate_art_returns_json_for_ajax_clients(client, monkeypatch):
+    """The labels page calls /generate-art via fetch with Accept: application/json
+    so it can update in place. Must return a JSON body, not a 303 redirect."""
+    client.post("/boxes", data={"name": "JSON Box"})
+    monkeypatch.setattr(
+        client.app_module.vision, "generate_label_art",
+        lambda *args, **kwargs: _fake_jpg_bytes(),
+    )
+    r = client.post(
+        "/boxes/1/generate-art",
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["ok"] is True
+    assert payload["box_id"] == 1
+    assert payload["background_art"]
+
+
+def test_clear_art_returns_json_for_ajax_clients(client, monkeypatch):
+    client.post("/boxes", data={"name": "JSON Box"})
+    monkeypatch.setattr(
+        client.app_module.vision, "generate_label_art",
+        lambda *args, **kwargs: _fake_jpg_bytes(),
+    )
+    client.post("/boxes/1/generate-art")
+    r = client.post(
+        "/boxes/1/clear-art",
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["background_art"] is None
+
+
+def test_generate_art_threads_items_and_photos_into_prompt(client, monkeypatch):
+    """The endpoint must pull items + their photo bytes and pass them to the
+    generator so Nano Banana 2 grounds the output in real contents."""
+    import io
+    from PIL import Image
+    from unittest.mock import patch
+    from vision import DetectedItem
+
+    client.post("/boxes", data={"name": "Closet"})
+    # Add a couple of items with photos via the ingest pipeline
+    photo = io.BytesIO()
+    Image.new("RGB", (200, 200), (10, 100, 200)).save(photo, format="JPEG")
+    photo_bytes = photo.getvalue()
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="red mug", description="ceramic", bbox=[0, 0, 500, 500]),
+        DetectedItem(name="kettle", description="copper teakettle", bbox=[100, 100, 600, 600]),
+    ]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(photo_bytes), "image/jpeg")},
+        )
+    # Assign both items into the box so they're real items, not pending.
+    # Pending IDs are sequential — after the first assign, id=1 is gone and
+    # id=2 is the kettle.
+    client.post("/queue/1/assign", data={"box_id": "1", "name": "red mug", "skip_crop": "1"})
+    client.post("/queue/2/assign", data={"box_id": "1", "name": "kettle", "skip_crop": "1"})
+
+    captured = {}
+    def fake_gen(name, description="", items=None, item_photos=None):
+        captured["name"] = name
+        captured["items"] = items or []
+        captured["item_photos"] = item_photos or []
+        return _fake_jpg_bytes()
+    monkeypatch.setattr(client.app_module.vision, "generate_label_art", fake_gen)
+
+    r = client.post("/boxes/1/generate-art", follow_redirects=False)
+    assert r.status_code == 303
+    item_names = [it["name"] for it in captured["items"]]
+    assert "red mug" in item_names
+    assert "kettle" in item_names
+    # At least one photo reference should have made it through
+    assert len(captured["item_photos"]) >= 1
+    photo_bytes_passed, mime = captured["item_photos"][0]
+    assert isinstance(photo_bytes_passed, bytes) and len(photo_bytes_passed) > 0
+    assert mime.startswith("image/")
+
+
+def test_parallel_art_generations_each_succeed(client, monkeypatch):
+    """Two boxes regenerated back-to-back must both end up with art set —
+    the old form-post flow only stored the last one because earlier requests
+    were canceled. With JSON/AJAX they each settle independently."""
+    client.post("/boxes", data={"name": "A"})
+    client.post("/boxes", data={"name": "B"})
+    monkeypatch.setattr(
+        client.app_module.vision, "generate_label_art",
+        lambda *args, **kwargs: _fake_jpg_bytes(),
+    )
+    r1 = client.post("/boxes/1/generate-art", headers={"Accept": "application/json"})
+    r2 = client.post("/boxes/2/generate-art", headers={"Accept": "application/json"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    with client.app_module.db() as conn:
+        rows = conn.execute("SELECT id, background_art FROM boxes ORDER BY id").fetchall()
+    assert all(row["background_art"] for row in rows), \
+        f"expected both boxes to have art set, got {[(r['id'], r['background_art']) for r in rows]}"
+
+
 def test_art_files_are_protected_from_orphan_cleanup(client, monkeypatch):
     """The maintenance cleanup sweep must treat background_art as referenced."""
     client.post("/boxes", data={"name": "Wedding Dress"})
     monkeypatch.setattr(
         client.app_module.vision, "generate_label_art",
-        lambda name, description="": _fake_jpg_bytes(),
+        lambda *args, **kwargs: _fake_jpg_bytes(),
     )
     client.post("/boxes/1/generate-art")
     with client.app_module.db() as conn:

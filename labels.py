@@ -92,7 +92,7 @@ def _background_art_svg(art_path: Path | None) -> str:
     return (
         f'<image href="data:{mime};base64,{b64}" '
         f'x="{art_x}" y="{art_y}" width="{art_w}" height="{art_h}" '
-        f'preserveAspectRatio="xMidYMid slice" opacity="0.18"/>'
+        f'preserveAspectRatio="xMidYMid slice" opacity="0.32"/>'
     )
 
 

@@ -5,55 +5,48 @@
 <div class="card">
   <div class="card-title" style="margin-bottom:0.25rem;">Print labels</div>
   <p class="text-sm text-muted">
-    Select boxes, then print or download. Each label has a QR code that resolves to the live box page when scanned.
+    Click any label to preview at full size. Toggle the checkbox to include or exclude it from the print sheet.
     {% if art_enabled %}Generate a fun illustrated background for any box with Nano Banana 2.{% endif %}
   </p>
 </div>
 
 {% if boxes %}
-<form id="labels-form" action="/labels/print" method="get">
+<form id="labels-form" action="/labels/print" method="get" data-art-enabled="{{ '1' if art_enabled else '0' }}">
   <div class="card label-grid-card">
     <div class="label-grid">
       {% for b in boxes %}
-      <label class="label-card" data-box-id="{{ b.id }}">
-        <input type="checkbox" name="box_ids" value="{{ b.id }}" checked>
-        <div class="label-card-inner">
-          <div class="label-card-thumb">
-            <img src="/boxes/{{ b.id }}/label.svg" alt="" loading="lazy">
-          </div>
-          <div class="label-card-meta">
-            <div class="label-card-name">{{ b.name }}</div>
-            {% if b.notes %}<div class="label-card-notes">{{ b.notes }}</div>{% endif %}
-            {% if b.location %}<div class="label-card-location">{{ b.location }}</div>{% endif %}
-          </div>
-          <div class="label-card-actions">
-            {% if art_enabled %}
-              {% if b.background_art %}
-              <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
-                      class="btn btn-sm label-action label-action-regen" title="Regenerate art (Nano Banana 2)"
-                      data-art-button data-art-state="regen"
-                      onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
-                <span class="art-icon">↻</span>
-              </button>
-              <button type="submit" formaction="/boxes/{{ b.id }}/clear-art" formmethod="post"
-                      class="btn btn-ghost btn-sm label-action" title="Clear art"
-                      onclick="window.__labelsArtClick=1;">
-                <span class="art-icon">✕</span>
-              </button>
-              {% else %}
-              <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
-                      class="btn btn-sm label-action label-action-generate" title="Generate art (Nano Banana 2)"
-                      data-art-button data-art-state="new"
-                      onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
-                <span class="art-icon">🎨</span>
-              </button>
-              {% endif %}
-            {% endif %}
-            <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm label-action"
-               onclick="event.stopPropagation();" title="Download single label">↓</a>
-          </div>
+      <div class="label-card" data-box-id="{{ b.id }}" data-box-name="{{ b.name }}"
+           data-box-notes="{{ b.notes or '' }}" data-has-art="{{ '1' if b.background_art else '0' }}">
+        <input type="checkbox" name="box_ids" value="{{ b.id }}" id="lc-{{ b.id }}"
+               class="label-card-select" checked aria-label="Include {{ b.name }} on print sheet">
+        <label class="label-card-checkbox-affordance" for="lc-{{ b.id }}"
+               aria-hidden="true" tabindex="-1"></label>
+        <button type="button" class="label-card-trigger" data-open-preview>
+          <span class="label-card-thumb">
+            <img src="/boxes/{{ b.id }}/label.svg" alt="" loading="lazy" data-thumb>
+          </span>
+          <span class="label-card-meta">
+            <span class="label-card-name">{{ b.name }}</span>
+            {% if b.notes %}<span class="label-card-notes">{{ b.notes }}</span>{% endif %}
+            {% if b.location %}<span class="label-card-location">{{ b.location }}</span>{% endif %}
+          </span>
+        </button>
+        <div class="label-card-actions">
+          {% if art_enabled %}
+            <button type="button" class="btn btn-sm label-action {% if b.background_art %}label-action-regen{% else %}label-action-generate{% endif %}"
+                    data-art-action="generate" title="{% if b.background_art %}Regenerate art (Nano Banana 2){% else %}Generate art (Nano Banana 2){% endif %}">
+              <span class="art-icon">{% if b.background_art %}↻{% else %}🎨{% endif %}</span>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm label-action label-action-clear"
+                    data-art-action="clear" title="Clear art"
+                    {% if not b.background_art %}hidden{% endif %}>
+              <span class="art-icon">✕</span>
+            </button>
+          {% endif %}
+          <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm label-action"
+             title="Download single label" download>↓</a>
         </div>
-      </label>
+      </div>
       {% endfor %}
     </div>
   </div>
@@ -73,23 +66,53 @@
   </div>
 </form>
 
+{# Modal preview, populated by JS on label-card click. Shared across all cards #}
+<dialog id="label-preview-modal" class="label-preview-modal">
+  <button type="button" class="label-preview-close" data-close-preview aria-label="Close">×</button>
+  <div class="label-preview-image-wrap">
+    <img class="label-preview-image" alt="" data-modal-thumb>
+  </div>
+  <div class="label-preview-meta">
+    <h2 class="label-preview-name" data-modal-name></h2>
+    <p class="label-preview-notes" data-modal-notes></p>
+  </div>
+  <div class="label-preview-actions">
+    {% if art_enabled %}
+    <button type="button" class="btn btn-primary" data-modal-action="generate">
+      <span class="art-icon" data-modal-art-icon>🎨</span>
+      <span data-modal-art-label>Generate art</span>
+    </button>
+    <button type="button" class="btn btn-secondary" data-modal-action="clear" hidden>
+      <span class="art-icon">✕</span>
+      Clear art
+    </button>
+    {% endif %}
+    <a class="btn btn-secondary" data-modal-download download>
+      <span class="art-icon">↓</span>
+      Download SVG
+    </a>
+  </div>
+</dialog>
+
 <script>
 (function() {
   const form = document.getElementById('labels-form');
   const checkboxes = form.querySelectorAll('input[name="box_ids"]');
   const labelsPerPage = {{ labels_per_page }};
+  const artEnabled = form.dataset.artEnabled === '1';
   const countEl = document.getElementById('label-count');
   const pagesEl = document.getElementById('label-pages');
   const pagesSEl = document.getElementById('label-pages-s');
   const printButton = document.getElementById('print-button');
   const svgLink = document.getElementById('download-svg');
   const toggleAll = document.getElementById('toggle-all');
+  const modal = document.getElementById('label-preview-modal');
 
+  // ── Selection summary + URLs ──────────────────────────────────────
   function selectedIds() {
     return Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
   }
-
-  function refresh() {
+  function refreshSummary() {
     const ids = selectedIds();
     const n = ids.length;
     countEl.textContent = n;
@@ -97,39 +120,184 @@
     pagesEl.textContent = pages;
     pagesSEl.textContent = pages === 1 ? '' : 's';
     printButton.disabled = n === 0;
-    // Build the SVG download URL with the same selection so it matches what
-    // the print button will generate.
     const params = ids.map(id => 'box_ids=' + encodeURIComponent(id)).join('&');
     svgLink.href = '/labels/sheet.svg' + (params ? '?' + params : '');
   }
-
-  checkboxes.forEach(cb => cb.addEventListener('change', refresh));
+  checkboxes.forEach(cb => cb.addEventListener('change', refreshSummary));
   toggleAll.addEventListener('click', () => {
     const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked);
     checkboxes.forEach(cb => { cb.checked = anyUnchecked; });
-    refresh();
+    refreshSummary();
   });
+  refreshSummary();
 
-  // Stop the per-card art / download buttons from toggling the surrounding
-  // label (which would untoggle the checkbox on every click).
-  form.querySelectorAll('.label-action').forEach(el => {
-    el.addEventListener('click', (e) => e.stopPropagation());
-  });
-
-  // While the per-card art generator is running (synchronous server call),
-  // give the user a clear signal so they don't think it stalled.
-  form.addEventListener('submit', (e) => {
-    if (window.__labelsArtClick) {
-      window.__labelsArtClick = 0;
-      const busyBtn = form.querySelector('button[data-art-button][data-busy]');
-      if (busyBtn) {
-        busyBtn.classList.add('art-busy');
-        busyBtn.querySelector('.art-icon').textContent = '⏳';
+  // ── Per-card art generation (parallel-safe, AJAX) ─────────────────
+  // Each click fires its own fetch — no form submit, so multiple boxes
+  // can generate concurrently and each card shows its own spinner.
+  function bumpThumb(card) {
+    const thumbs = card.querySelectorAll('[data-thumb]');
+    const stamp = '?t=' + Date.now();
+    thumbs.forEach(img => {
+      const base = img.src.split('?')[0];
+      img.src = base + stamp;
+    });
+    // Modal thumbnail too if it's currently showing this card
+    if (modal.dataset.boxId === card.dataset.boxId) {
+      const m = modal.querySelector('[data-modal-thumb]');
+      if (m) {
+        const base = m.src.split('?')[0];
+        m.src = base + stamp;
       }
     }
+  }
+
+  async function runArtAction(card, action, button) {
+    const boxId = card.dataset.boxId;
+    const url = action === 'generate'
+      ? `/boxes/${boxId}/generate-art`
+      : `/boxes/${boxId}/clear-art`;
+    setBusy(button, true, action);
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!r.ok) {
+        const text = await r.text().catch(() => '');
+        throw new Error(text.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const data = await r.json();
+      card.dataset.hasArt = data.background_art ? '1' : '0';
+      bumpThumb(card);
+      syncCardArtControls(card);
+      if (modal.dataset.boxId === boxId) syncModalArtControls();
+    } catch (err) {
+      alert(`Art ${action} failed: ${err.message || err}`);
+    } finally {
+      setBusy(button, false, action);
+    }
+  }
+
+  function setBusy(button, busy, action) {
+    if (!button) return;
+    if (busy) {
+      button.classList.add('art-busy');
+      const icon = button.querySelector('.art-icon');
+      if (icon) {
+        button.dataset.originalIcon = icon.textContent;
+        icon.textContent = '⏳';
+      }
+      button.disabled = true;
+    } else {
+      button.classList.remove('art-busy');
+      const icon = button.querySelector('.art-icon');
+      if (icon && button.dataset.originalIcon) {
+        icon.textContent = button.dataset.originalIcon;
+        delete button.dataset.originalIcon;
+      }
+      button.disabled = false;
+    }
+  }
+
+  function syncCardArtControls(card) {
+    if (!artEnabled) return;
+    const hasArt = card.dataset.hasArt === '1';
+    const generateBtn = card.querySelector('[data-art-action="generate"]');
+    const clearBtn = card.querySelector('[data-art-action="clear"]');
+    if (generateBtn) {
+      const icon = generateBtn.querySelector('.art-icon');
+      if (icon && !generateBtn.classList.contains('art-busy')) {
+        icon.textContent = hasArt ? '↻' : '🎨';
+      }
+      generateBtn.classList.toggle('label-action-regen', hasArt);
+      generateBtn.classList.toggle('label-action-generate', !hasArt);
+      generateBtn.title = hasArt
+        ? 'Regenerate art (Nano Banana 2)'
+        : 'Generate art (Nano Banana 2)';
+    }
+    if (clearBtn) {
+      clearBtn.hidden = !hasArt;
+    }
+  }
+
+  // Wire up card-level art buttons
+  form.querySelectorAll('.label-card').forEach(card => {
+    card.querySelectorAll('[data-art-action]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        runArtAction(card, btn.dataset.artAction, btn);
+      });
+    });
   });
 
-  refresh();
+  // ── Modal preview ─────────────────────────────────────────────────
+  function openPreview(card) {
+    modal.dataset.boxId = card.dataset.boxId;
+    const stamp = '?t=' + Date.now();
+    modal.querySelector('[data-modal-thumb]').src =
+      `/boxes/${card.dataset.boxId}/label.svg${stamp}`;
+    modal.querySelector('[data-modal-name]').textContent = card.dataset.boxName;
+    const notesEl = modal.querySelector('[data-modal-notes]');
+    notesEl.textContent = card.dataset.boxNotes;
+    notesEl.hidden = !card.dataset.boxNotes;
+    modal.querySelector('[data-modal-download]').href =
+      `/boxes/${card.dataset.boxId}/label.svg`;
+    syncModalArtControls();
+    modal.showModal();
+  }
+
+  function syncModalArtControls() {
+    if (!artEnabled) return;
+    const card = currentModalCard();
+    if (!card) return;
+    const hasArt = card.dataset.hasArt === '1';
+    const genBtn = modal.querySelector('[data-modal-action="generate"]');
+    const clearBtn = modal.querySelector('[data-modal-action="clear"]');
+    if (genBtn) {
+      const icon = modal.querySelector('[data-modal-art-icon]');
+      const label = modal.querySelector('[data-modal-art-label]');
+      if (icon && !genBtn.classList.contains('art-busy')) {
+        icon.textContent = hasArt ? '↻' : '🎨';
+      }
+      if (label) label.textContent = hasArt ? 'Regenerate art' : 'Generate art';
+    }
+    if (clearBtn) {
+      clearBtn.hidden = !hasArt;
+    }
+  }
+
+  function currentModalCard() {
+    return form.querySelector(`.label-card[data-box-id="${modal.dataset.boxId}"]`);
+  }
+
+  // Card click → modal (but ignore clicks on the action buttons or
+  // the checkbox label itself, which have their own behavior).
+  form.querySelectorAll('[data-open-preview]').forEach(trigger => {
+    trigger.addEventListener('click', (e) => {
+      e.preventDefault();
+      const card = trigger.closest('.label-card');
+      openPreview(card);
+    });
+  });
+
+  // Close affordances
+  modal.querySelector('[data-close-preview]').addEventListener('click', () => modal.close());
+  modal.addEventListener('click', (e) => {
+    // backdrop click
+    if (e.target === modal) modal.close();
+  });
+
+  // Modal art actions delegate to the same runArtAction
+  if (artEnabled) {
+    modal.querySelectorAll('[data-modal-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const card = currentModalCard();
+        if (!card) return;
+        const action = btn.dataset.modalAction;
+        runArtAction(card, action, btn);
+      });
+    });
+  }
 })();
 </script>
 {% else %}

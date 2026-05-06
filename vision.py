@@ -93,22 +93,58 @@ def detect_items(image_bytes: bytes, media_type: str = "image/jpeg") -> list[Det
     return items
 
 
-def generate_label_art(name: str, description: str = "") -> bytes:
+def generate_label_art(
+    name: str,
+    description: str = "",
+    items: list[dict] | None = None,
+    item_photos: list[tuple[bytes, str]] | None = None,
+) -> bytes:
     """Generate playful background art for a printed label using Nano Banana 2.
 
     The result is downscaled and JPEG-encoded so it fits cleanly in a label
     SVG (embedded as a base64 data URI). Returns the raw image bytes.
 
-    The prompt steers the model toward simple, faded-friendly illustrations
-    because the art is composited at low opacity behind label text — busy
-    images muddy the readability of the box name."""
+    `items` is a list of {name, notes} dicts pulled from the box's contents —
+    they ground the prompt in what's actually inside instead of guessing from
+    the box name alone. `item_photos` is up to a few (bytes, mime_type) pairs
+    sent as multimodal Parts so the model can match the actual look of the
+    contents, not just their text labels."""
+    items = items or []
+    item_photos = item_photos or []
+
+    items_text = ""
+    if items:
+        listing = "\n".join(
+            "- " + (it.get("name") or "?") +
+            (f": {it['notes']}" if it.get("notes") else "")
+            for it in items[:12]
+        )
+        items_text = (
+            "\n\nKnown items in this box (use these to ground the illustration in "
+            "what's actually inside; pick a recognizable subset, don't try to draw "
+            "all of them):\n"
+            f"{listing}"
+        )
+
+    photos_note = ""
+    if item_photos:
+        photos_note = (
+            "\n\nReference photos of items currently in the box are attached. "
+            "Match the general vibe of the contents (kind of stuff, color palette, "
+            "vibe) — but render them in the watercolor sketch style described "
+            "below, not photographically. Don't redraw photo backgrounds, just "
+            "the items themselves."
+        )
+
     prompt = (
         "Create a playful illustration for the BACKGROUND of a storage-box label. "
-        "It will be composited at ~18% opacity behind the box name and a QR code, "
+        "It will be composited at ~32% opacity behind the box name and a QR code, "
         "so the image must read clearly even when faded.\n\n"
         f"Box name: {name}\n"
-        f"Likely contents: {description or '(unspecified — surprise me with something fun based on the name)'}\n\n"
-        "Style requirements (apply consistently across every label):\n"
+        f"Likely contents: {description or '(unspecified — surprise me with something fun based on the name)'}"
+        f"{items_text}"
+        f"{photos_note}"
+        "\n\nStyle requirements (apply consistently across every label):\n"
         "- Pencil and pen sketch with watercolor paints for color. Visible graphite "
         "and ink lines, loose hand-drawn feel, soft watercolor washes for fills with "
         "a little bleed at the edges.\n"
@@ -119,9 +155,14 @@ def generate_label_art(name: str, description: str = "") -> bytes:
         "- Compose the subject so it remains recognizable when the right ~30% of the image is partially obscured by typography.\n"
         "- One clear focal idea — not a busy collage."
     )
+
+    contents = [prompt]
+    for photo_bytes, mime in item_photos[:3]:
+        contents.append(genai.types.Part.from_bytes(data=photo_bytes, mime_type=mime))
+
     response = get_gemini().models.generate_content(
         model=NANO_BANANA_MODEL,
-        contents=prompt,
+        contents=contents,
     )
 
     image_bytes = _extract_image_bytes(response)

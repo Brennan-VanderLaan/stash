@@ -1060,13 +1060,31 @@ def labels_print(request: Request):
     )
 
 
+def _wants_json(request: Request) -> bool:
+    """The labels page calls these endpoints from fetch() with Accept: application/json
+    so it can re-render in place; the form-post fallback gets a 303 redirect."""
+    return "application/json" in request.headers.get("accept", "")
+
+
+def _safe_internal_redirect(target: str, default: str = "/labels") -> str:
+    """Reject open-redirect targets — only honor relative paths beneath this app."""
+    if not target.startswith("/") or target.startswith("//"):
+        return default
+    return target
+
+
 @app.post("/boxes/{box_id}/generate-art")
-def generate_box_art(box_id: int, next_url: str = Form("/labels")):
+def generate_box_art(
+    request: Request,
+    box_id: int,
+    next_url: str = Form("/labels"),
+):
     """Synchronously generate label background art via Nano Banana 2.
 
-    Synchronous because it's user-triggered (one box at a time from the
-    labels page) and the model takes ~10-20s — short enough to wait. The
-    old image, if any, is cleaned up only after the new one writes
+    Synchronous because the user is waiting on it from the labels page; the
+    model takes ~10-20s. Each call independently grabs items + a few photos
+    so the prompt is grounded in actual contents instead of just the box
+    name. The old image, if any, is cleaned up only after the new one writes
     successfully so a failed generation doesn't strand the box without art."""
     with db() as conn:
         box = conn.execute(
@@ -1075,9 +1093,36 @@ def generate_box_art(box_id: int, next_url: str = Form("/labels")):
         ).fetchone()
         if not box:
             raise HTTPException(404)
+        items = [
+            dict(r) for r in conn.execute(
+                "SELECT name, notes, photo FROM items WHERE box_id = ? "
+                "ORDER BY created_at DESC LIMIT 12",
+                (box_id,),
+            ).fetchall()
+        ]
+
+    # Up to 3 small photo references for the multimodal prompt. Read once so
+    # the genai call sees raw bytes; mime sniffed from extension since we
+    # always re-encode to JPEG on upload.
+    photo_refs: list[tuple[bytes, str]] = []
+    for it in items:
+        if not it.get("photo"):
+            continue
+        p = UPLOAD_DIR / it["photo"]
+        if not p.exists():
+            continue
+        photo_refs.append((p.read_bytes(), _EXT_TO_MIME.get(p.suffix.lower(), "image/jpeg")))
+        if len(photo_refs) >= 3:
+            break
+
     try:
-        image_bytes = vision.generate_label_art(box["name"], box["notes"] or "")
+        image_bytes = vision.generate_label_art(
+            box["name"], box["notes"] or "",
+            items=items, item_photos=photo_refs,
+        )
     except Exception as e:
+        if _wants_json(request):
+            raise HTTPException(502, f"Art generation failed: {e}")
         raise HTTPException(502, f"Art generation failed: {e}")
 
     new_name = f"art-{secrets.token_hex(8)}.jpg"
@@ -1093,14 +1138,19 @@ def generate_box_art(box_id: int, next_url: str = Form("/labels")):
         if old and old != new_name:
             _delete_upload_if_orphan(conn, old)
 
-    # Only redirect to whitelisted internal targets — never honor an absolute
-    # URL or one that escapes the app, even with the form coming from us.
-    target = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/labels"
-    return RedirectResponse(target, status_code=303)
+    if _wants_json(request):
+        return {"ok": True, "box_id": box_id, "background_art": new_name}
+    return RedirectResponse(
+        _safe_internal_redirect(next_url), status_code=303,
+    )
 
 
 @app.post("/boxes/{box_id}/clear-art")
-def clear_box_art(box_id: int, next_url: str = Form("/labels")):
+def clear_box_art(
+    request: Request,
+    box_id: int,
+    next_url: str = Form("/labels"),
+):
     """Drop the generated background art for a box."""
     with db() as conn:
         row = conn.execute(
@@ -1112,8 +1162,12 @@ def clear_box_art(box_id: int, next_url: str = Form("/labels")):
         conn.commit()
         if row["background_art"]:
             _delete_upload_if_orphan(conn, row["background_art"])
-    target = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/labels"
-    return RedirectResponse(target, status_code=303)
+
+    if _wants_json(request):
+        return {"ok": True, "box_id": box_id, "background_art": None}
+    return RedirectResponse(
+        _safe_internal_redirect(next_url), status_code=303,
+    )
 
 
 @app.post("/boxes/{box_id}/delete")
