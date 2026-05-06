@@ -3,6 +3,37 @@
 {% block content %}
 
 <div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Version</div>
+  <dl class="stat-row">
+    <div><dt>Running</dt><dd>{{ version }}{% if git_sha %} <span class="text-muted">({{ git_sha }})</span>{% endif %}</dd></div>
+  </dl>
+  {% if update_status == "triggered" %}
+  <p class="text-sm text-muted">Update check started. If a new image is available, the app will restart shortly — refresh in ~30s.</p>
+  {% elif update_status == "disabled" %}
+  <p class="text-sm text-muted">Updates are not configured (no <code>WATCHTOWER_URL</code> set).</p>
+  {% endif %}
+  <form method="post" action="/maintenance/update"
+        onsubmit="return confirm('Check for updates and restart if a new image is available?');">
+    <button type="submit" class="btn btn-primary btn-block"
+            {% if not update_enabled %}disabled{% endif %}>
+      Check for updates
+    </button>
+  </form>
+</div>
+
+{% if changelog_html %}
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Changelog</div>
+  <details>
+    <summary class="text-sm text-muted" style="cursor:pointer;">Show release notes</summary>
+    <div class="changelog">
+      {{ changelog_html | safe }}
+    </div>
+  </details>
+</div>
+{% endif %}
+
+<div class="card">
   <div class="card-title" style="margin-bottom:0.5rem;">Backup</div>
   <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
     Downloads a zip containing <code>stash.db</code> and every referenced photo in

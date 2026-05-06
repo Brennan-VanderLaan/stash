@@ -20,6 +20,55 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 (ROOT / "static").mkdir(exist_ok=True)
 (ROOT / "templates").mkdir(exist_ok=True)
 
+def _read_version() -> str:
+    if v := os.environ.get("STASH_VERSION"):
+        return v
+    vf = ROOT / "VERSION"
+    return vf.read_text().strip() if vf.exists() else "dev"
+
+
+VERSION = _read_version()
+GIT_SHA = os.environ.get("STASH_GIT_SHA", "")
+WATCHTOWER_URL = os.environ.get("WATCHTOWER_URL", "").rstrip("/")
+WATCHTOWER_TOKEN = os.environ.get("WATCHTOWER_TOKEN", "")
+
+
+def _load_changelog_html() -> str:
+    """Render CHANGELOG.md to HTML. Cached at import time — only changes on container restart."""
+    path = ROOT / "CHANGELOG.md"
+    if not path.exists():
+        return ""
+    try:
+        import markdown as _md
+        return _md.markdown(path.read_text(), extensions=["fenced_code", "tables"])
+    except Exception:
+        # Fall back to escaped plain text so a render error never breaks the page.
+        from html import escape
+        return f"<pre>{escape(path.read_text())}</pre>"
+
+
+CHANGELOG_HTML = _load_changelog_html()
+
+
+def _trigger_watchtower_update() -> None:
+    """POST to watchtower's HTTP API to force an immediate scan+update.
+    Runs as a background task so the HTTP response returns before our own
+    container is potentially restarted."""
+    if not WATCHTOWER_URL:
+        return
+    import urllib.request
+    req = urllib.request.Request(
+        f"{WATCHTOWER_URL}/v1/update",
+        method="POST",
+        headers={"Authorization": f"Bearer {WATCHTOWER_TOKEN}"} if WATCHTOWER_TOKEN else {},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=120).read()
+    except Exception:
+        # The container can be killed mid-call once watchtower pulls a new image —
+        # that's expected, not an error worth surfacing.
+        pass
+
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
@@ -973,7 +1022,7 @@ def _referenced_uploads() -> set[str]:
 
 
 @app.get("/maintenance", response_class=HTMLResponse)
-def maintenance(request: Request, cleaned: str = ""):
+def maintenance(request: Request, cleaned: str = "", update: str = ""):
     with db() as conn:
         item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
         box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
@@ -986,8 +1035,21 @@ def maintenance(request: Request, cleaned: str = ""):
             "files_on_disk": on_disk, "files_referenced": referenced,
             "orphan_count": max(0, on_disk - referenced),
             "cleaned": cleaned,
+            "version": VERSION,
+            "git_sha": GIT_SHA[:7] if GIT_SHA else "",
+            "update_enabled": bool(WATCHTOWER_URL),
+            "update_status": update,
+            "changelog_html": CHANGELOG_HTML,
         },
     )
+
+
+@app.post("/maintenance/update")
+def maintenance_update(background: BackgroundTasks):
+    if not WATCHTOWER_URL:
+        return RedirectResponse("/maintenance?update=disabled", status_code=303)
+    background.add_task(_trigger_watchtower_update)
+    return RedirectResponse("/maintenance?update=triggered", status_code=303)
 
 
 @app.post("/maintenance/cleanup")
