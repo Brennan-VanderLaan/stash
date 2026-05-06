@@ -184,19 +184,33 @@ init_db()
 migrate_db()
 
 
+MAX_IMAGE_DIM = 2048
+JPEG_QUALITY = 85
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB; matches Caddy's request_body cap
+
+# Refuse to decode anything that would expand to > 50M pixels (~50MB raw RGB).
+# Defends against PNG/TIFF "decompression bombs" — small files that allocate
+# huge amounts of memory when decoded.
+from PIL import Image as _PilImage
+_PilImage.MAX_IMAGE_PIXELS = 50_000_000
+
+
 def save_photo(photo: UploadFile | None) -> str | None:
     if not photo or not photo.filename:
         return None
     return save_photo_bytes(photo.file.read(), photo.filename)
 
 
-MAX_IMAGE_DIM = 2048
-JPEG_QUALITY = 85
-
-
 def save_photo_bytes(data: bytes, filename: str) -> str:
     """Re-encode as JPEG with EXIF orientation baked in and longest side capped.
-    Falls back to raw bytes if PIL can't decode (keeps test fixtures working)."""
+
+    On PIL failure we still write the bytes (test fixtures use synthetic JPEG
+    headers PIL can't decode), but ALWAYS as `.jpg` — never honor the caller's
+    extension. Combined with `X-Content-Type-Options: nosniff` at the edge, this
+    closes the stored-XSS path where an authenticated user uploads `evil.html`.
+    """
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Upload too large")
     from PIL import Image, ImageOps
     import io as _io
     try:
@@ -209,9 +223,10 @@ def save_photo_bytes(data: bytes, filename: str) -> str:
         name = f"{secrets.token_hex(8)}.jpg"
         img.save(UPLOAD_DIR / name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
         return name
+    except HTTPException:
+        raise
     except Exception:
-        ext = Path(filename).suffix.lower() or ".jpg"
-        name = f"{secrets.token_hex(8)}{ext}"
+        name = f"{secrets.token_hex(8)}.jpg"
         (UPLOAD_DIR / name).write_bytes(data)
         return name
 
@@ -319,10 +334,22 @@ def _delete_upload_if_orphan(conn, photo_name: str) -> None:
         pass
 
 
+import re as _re
+_UPLOAD_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 @app.get("/uploads/{name}")
 def serve_upload(name: str):
-    p = UPLOAD_DIR / name
-    if not p.exists():
+    # Reject obviously hostile names before any filesystem touch. We only
+    # generate names like `<hex>.jpg` — anything outside that alphabet is not
+    # ours and not worth resolving.
+    if not _UPLOAD_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(404)
+    upload_root = UPLOAD_DIR.resolve()
+    p = (UPLOAD_DIR / name).resolve()
+    # Defense-in-depth: even after the regex check, refuse to serve anything
+    # that lands outside UPLOAD_DIR (e.g. through symlink shenanigans).
+    if not p.is_relative_to(upload_root) or not p.is_file():
         raise HTTPException(404)
     return FileResponse(p)
 
