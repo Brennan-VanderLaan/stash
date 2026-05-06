@@ -25,34 +25,20 @@
 		-Server
 	}
 
-	# Backup restore needs to accept multi-GB zips (db + every photo). Scoped
-	# to just the import endpoint so the photo-upload paths keep their tighter
-	# 50 MB cap as a defense-in-depth ceiling on hostile uploads.
-	@import {
-		method POST
-		path /maintenance/import
+	# Body-size policy:
+	#   - /maintenance/import takes whole-database backups. Cap at 2 GB.
+	#   - Everything else stays at 50 MB so a hostile photo upload can't fill
+	#     disk before the in-app size guard rejects it.
+	# Caddy picks the matched request_body before the unmatched one.
+	@import path /maintenance/import
+	request_body @import {
+		max_size 2GB
 	}
-	handle @import {
-		request_body {
-			max_size 2GB
-		}
-		reverse_proxy oauth2-proxy:4180 {
-			header_up X-Real-IP {remote_host}
-			# Long uploads + DB swap can run for minutes on slow links.
-			transport http {
-				read_timeout 30m
-				write_timeout 30m
-			}
-		}
+	request_body {
+		max_size 50MB
 	}
 
-	# Photos can be a few MB; let oauth2-proxy + stash handle large ingest uploads.
-	handle {
-		request_body {
-			max_size 50MB
-		}
-		reverse_proxy oauth2-proxy:4180 {
-			header_up X-Real-IP {remote_host}
-		}
+	reverse_proxy oauth2-proxy:4180 {
+		header_up X-Real-IP {remote_host}
 	}
 }
