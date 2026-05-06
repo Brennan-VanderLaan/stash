@@ -52,5 +52,13 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             GIT_SHA=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Layered cache strategy: try GHA cache first (fast, free, but
+          # 10 GB LRU evictable), fall back to a dedicated `cache` tag in
+          # GHCR (persistent across branches, no eviction). Both are
+          # populated on every successful main build.
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache,mode=max
