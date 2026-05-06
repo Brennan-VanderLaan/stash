@@ -845,6 +845,64 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   white-space: nowrap;
 }
 
+.floor-bar { padding: 0.5rem; }
+.floor-tabs {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.floor-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  cursor: pointer;
+  user-select: none;
+}
+.floor-tab:hover { color: var(--accent); border-color: var(--accent); }
+.floor-tab.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.floor-tab-add { color: var(--accent); list-style: none; }
+.floor-tab-add::-webkit-details-marker { display: none; }
+.floor-add { position: relative; }
+.floor-add[open] > .floor-tab-add { background: var(--accent-dim); }
+.floor-add-form {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 5;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+.floor-add-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-family: inherit;
+  min-width: 160px;
+}
+
 .floorplan-card {
   padding: 0.5rem;
 }
@@ -858,6 +916,8 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   touch-action: none;  /* let pointer events drive panning instead of scroll */
 }
 .floorplan-stage[data-edit="1"] { cursor: crosshair; }
+.floorplan-stage[data-edit="1"] .room-rect { cursor: move; }
+.floorplan-stage[data-edit="0"] .room-rect { cursor: pointer; }
 .floorplan-stage img {
   width: 100%;
   height: auto;
@@ -920,6 +980,25 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   background: rgba(74, 222, 128, 0.15);
   pointer-events: none;
 }
+
+/* Corner resize handles. Only rendered in edit mode (the template only emits
+   them then), but cursor: col/row-resize signals their function. */
+.room-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--room-color, var(--accent));
+  border: 2px solid #0a1810;
+  border-radius: 50%;
+  pointer-events: auto;
+  z-index: 2;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.handle-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.room-handle:hover { transform: scale(1.25); }
 
 /* Room edit dialog — reuses some of the label-preview styles for consistency */
 .room-edit-dialog {

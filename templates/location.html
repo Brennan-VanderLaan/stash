@@ -10,8 +10,8 @@
   <div class="card-header">
     <span class="card-title">{{ location.name }}</span>
     <div style="display:flex; gap:0.4rem;">
-      {% if location.floorplan %}
-      <a href="/locations/{{ location.id }}{% if not edit_mode %}?edit=1{% endif %}"
+      {% if current_floor and current_floor.floorplan %}
+      <a href="/locations/{{ location.id }}?floor={{ current_floor.id }}{% if not edit_mode %}&edit=1{% endif %}"
          class="btn btn-secondary btn-sm">{% if edit_mode %}Done editing{% else %}Edit rooms{% endif %}</a>
       {% endif %}
     </div>
@@ -24,7 +24,7 @@
     </form>
     <form method="post" action="/locations/{{ location.id }}/delete" style="margin-top:0.5rem;">
       <label>
-        Type <code>{{ location.name }}</code> to delete this location and all its rooms
+        Type <code>{{ location.name }}</code> to delete this location and all its floors
         <input type="text" name="confirm" placeholder="{{ location.name }}" autocomplete="off">
       </label>
       <button type="submit" class="btn btn-danger btn-block">Delete location</button>
@@ -32,34 +32,78 @@
   </details>
 </div>
 
-{% if not location.floorplan %}
+{# ── Floor tabs ──────────────────────────────────────────────────── #}
+<div class="card floor-bar">
+  <div class="floor-tabs" role="tablist">
+    {% for f in floors %}
+    <a href="/locations/{{ location.id }}?floor={{ f.id }}{% if edit_mode %}&edit=1{% endif %}"
+       class="floor-tab {% if current_floor and f.id == current_floor.id %}active{% endif %}"
+       role="tab">
+      {{ f.name }}
+    </a>
+    {% endfor %}
+    <details class="floor-add">
+      <summary class="floor-tab floor-tab-add" role="button">+ Add floor</summary>
+      <form method="post" action="/locations/{{ location.id }}/floors" class="floor-add-form">
+        <input type="text" name="name" placeholder="e.g. 2nd floor" required autocomplete="off">
+        <button type="submit" class="btn btn-primary btn-sm">Add</button>
+      </form>
+    </details>
+  </div>
+</div>
+
+{% if not floors %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Upload a floorplan</div>
+  <div class="card-title" style="margin-bottom:0.5rem;">Add your first floor</div>
   <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
-    A clean overhead view of the space — a real floorplan, a hand-drawn sketch, even a satellite screenshot.
-    You'll draw rectangles over it to mark where each room is.
+    A location can have many floors — basement, ground floor, attic. Each floor gets
+    its own floorplan image and its own rooms.
   </p>
-  <form method="post" action="/locations/{{ location.id }}/floorplan" enctype="multipart/form-data">
+  <form method="post" action="/locations/{{ location.id }}/floors">
+    <label>Floor name<input type="text" name="name" required placeholder="Ground floor"></label>
+    <button type="submit" class="btn btn-primary btn-block">Add floor</button>
+  </form>
+</div>
+{% elif current_floor and not current_floor.floorplan %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">{{ current_floor.name }}</span>
+    <form method="post" action="/floors/{{ current_floor.id }}/delete"
+          onsubmit="return confirm('Delete the {{ current_floor.name }} floor?');">
+      <button type="submit" class="btn btn-ghost btn-sm">Delete floor</button>
+    </form>
+  </div>
+  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+    Upload a floorplan image — a real plan, a hand sketch, or even a satellite screenshot.
+    You'll draw rectangles over it to mark each room.
+  </p>
+  <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data">
     <label>Floorplan image<input type="file" name="image" accept="image/*" required></label>
     <button type="submit" class="btn btn-primary btn-block">Upload floorplan</button>
   </form>
 </div>
-{% else %}
+{% elif current_floor %}
 
 <div class="card floorplan-card">
   <div id="floorplan-stage" class="floorplan-stage" data-edit="{{ '1' if edit_mode else '0' }}"
-       data-location-id="{{ location.id }}">
-    <img id="floorplan-image" src="/uploads/{{ location.floorplan }}" alt="Floorplan of {{ location.name }}"
-         draggable="false">
+       data-floor-id="{{ current_floor.id }}">
+    <img id="floorplan-image" src="/uploads/{{ current_floor.floorplan }}"
+         alt="Floorplan of {{ current_floor.name }}" draggable="false">
     <div id="floorplan-overlay" class="floorplan-overlay">
       {% for r in rooms %}
-      <div class="room-rect" data-room-id="{{ r.id }}" data-name="{{ r.name }}"
+      <div class="room-rect" id="room-{{ r.id }}" data-room-id="{{ r.id }}" data-name="{{ r.name }}"
            data-color="{{ r.color or '#4ade80' }}"
            style="--room-color: {{ r.color or '#4ade80' }};
                   left: {{ (r.x * 100) }}%; top: {{ (r.y * 100) }}%;
                   width: {{ (r.w * 100) }}%; height: {{ (r.h * 100) }}%;">
         <span class="room-rect-label">{{ r.name }}</span>
         <span class="room-rect-count" data-box-count>{{ r.box_count }}</span>
+        {% if edit_mode %}
+        <span class="room-handle handle-nw" data-handle="nw"></span>
+        <span class="room-handle handle-ne" data-handle="ne"></span>
+        <span class="room-handle handle-sw" data-handle="sw"></span>
+        <span class="room-handle handle-se" data-handle="se"></span>
+        {% endif %}
       </div>
       {% endfor %}
       <div id="floorplan-draft" class="room-rect room-rect-draft" hidden></div>
@@ -67,16 +111,26 @@
   </div>
   {% if edit_mode %}
   <p class="text-sm text-muted" style="margin-top:0.5rem;">
-    Click and drag on the floorplan to draw a new room. Click an existing room to rename or delete it.
+    <strong>Drag empty space</strong> to draw a new room.
+    <strong>Drag a rectangle</strong> to move it, or grab a corner handle to resize.
+    <strong>Click</strong> a rectangle to rename or delete it.
   </p>
-  <form method="post" action="/locations/{{ location.id }}/floorplan" enctype="multipart/form-data"
-        style="margin-top:0.5rem;">
-    <details>
-      <summary class="text-sm text-muted" style="cursor:pointer;">Replace floorplan image</summary>
-      <label style="margin-top:0.5rem;">New floorplan<input type="file" name="image" accept="image/*" required></label>
-      <button type="submit" class="btn btn-secondary btn-block">Replace</button>
-    </details>
-  </form>
+  <details style="margin-top:0.5rem;">
+    <summary class="text-sm text-muted" style="cursor:pointer;">Rename or replace this floor</summary>
+    <form method="post" action="/floors/{{ current_floor.id }}" style="margin-top:0.5rem;">
+      <label>Floor name<input type="text" name="name" value="{{ current_floor.name }}" required></label>
+      <button type="submit" class="btn btn-secondary btn-block">Rename floor</button>
+    </form>
+    <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data"
+          style="margin-top:0.5rem;">
+      <label>Replace floorplan image<input type="file" name="image" accept="image/*" required></label>
+      <button type="submit" class="btn btn-secondary btn-block">Replace floorplan</button>
+    </form>
+    <form method="post" action="/floors/{{ current_floor.id }}/delete" style="margin-top:0.5rem;"
+          onsubmit="return confirm('Delete the {{ current_floor.name }} floor and all its rooms?');">
+      <button type="submit" class="btn btn-danger btn-block">Delete this floor</button>
+    </form>
+  </details>
   {% endif %}
 </div>
 
@@ -94,8 +148,11 @@
   </div>
 </dialog>
 
+{% endif %}
+
+{% if current_floor %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Rooms ({{ rooms | length }})</div>
+  <div class="card-title" style="margin-bottom:0.5rem;">Rooms on {{ current_floor.name }} ({{ rooms | length }})</div>
   {% if rooms %}
   <ul class="box-list">
     {% for r in rooms %}
@@ -110,13 +167,34 @@
     {% endfor %}
   </ul>
   {% else %}
-  <div class="empty">No rooms yet. {% if edit_mode %}Drag on the floorplan to draw one.{% else %}Click <strong>Edit rooms</strong> to start mapping.{% endif %}</div>
+  <div class="empty">No rooms on this floor yet. {% if edit_mode %}Drag on the floorplan to draw one.{% else %}Click <strong>Edit rooms</strong> to start mapping.{% endif %}</div>
   {% endif %}
 </div>
-
 {% endif %}
 
-{% if location.floorplan %}
+{% if unassigned_rooms %}
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Unassigned rooms ({{ unassigned_rooms | length }})</div>
+  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+    These rooms aren't on any floor yet — they were carried over from your old free-text locations.
+    They still hold their assigned boxes; once you have a floor, you can drag them into shape.
+  </p>
+  <ul class="box-list">
+    {% for r in unassigned_rooms %}
+    <li>
+      <a href="/rooms/{{ r.id }}/boxes" class="box-card">
+        <div>
+          <div class="box-name room-chip" style="--room-color: {{ r.color or '#4ade80' }};">{{ r.name }}</div>
+          <div class="box-meta">{{ r.box_count }} box{{ '' if r.box_count == 1 else 'es' }}</div>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if current_floor and current_floor.floorplan %}
 <script>
 (function() {
   const stage = document.getElementById('floorplan-stage');
@@ -124,13 +202,8 @@
   const draft = document.getElementById('floorplan-draft');
   const dialog = document.getElementById('room-edit-dialog');
   const isEdit = stage.dataset.edit === '1';
-  const locationId = Number(stage.dataset.locationId);
-
-  // ── Drag-to-draw new rooms ─────────────────────────────────────────
-  // Coordinates are stored as fractions of the stage (image) dimensions
-  // so rooms remain correct if the image is later re-uploaded at a
-  // different resolution.
-  let drag = null;
+  const floorId = Number(stage.dataset.floorId);
+  const DRAG_THRESHOLD_PX = 4;
 
   function stageRect() { return stage.getBoundingClientRect(); }
   function fracPos(e) {
@@ -140,44 +213,153 @@
       y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
     };
   }
+  function clamp01(n) { return Math.max(0, Math.min(1, n)); }
+  function rectFromEl(el) {
+    return {
+      x: parseFloat(el.style.left) / 100,
+      y: parseFloat(el.style.top) / 100,
+      w: parseFloat(el.style.width) / 100,
+      h: parseFloat(el.style.height) / 100,
+    };
+  }
+  function applyRect(el, r) {
+    el.style.left = (r.x * 100) + '%';
+    el.style.top = (r.y * 100) + '%';
+    el.style.width = (r.w * 100) + '%';
+    el.style.height = (r.h * 100) + '%';
+  }
+
+  // ── Pointer state machine ─────────────────────────────────────────
+  // Possible modes: null, 'drafting', 'moving', 'resizing'
+  let mode = null;
+  let drag = null;
 
   if (isEdit) {
-    stage.addEventListener('pointerdown', (e) => {
-      // Don't start a draft when clicking on an existing rectangle —
-      // that's a click for editing.
-      if (e.target.closest('.room-rect') && !e.target.closest('.room-rect-draft')) return;
+    stage.addEventListener('pointerdown', onPointerDown);
+    stage.addEventListener('pointermove', onPointerMove);
+    stage.addEventListener('pointerup', onPointerUp);
+    stage.addEventListener('pointercancel', onPointerUp);
+  }
+
+  function onPointerDown(e) {
+    if (e.button !== 0) return;  // ignore right-click
+    const handle = e.target.closest('.room-handle');
+    const rect = e.target.closest('.room-rect:not(.room-rect-draft)');
+    const start = fracPos(e);
+    const startClient = { x: e.clientX, y: e.clientY };
+
+    if (handle && rect) {
       e.preventDefault();
-      const start = fracPos(e);
-      drag = { startX: start.x, startY: start.y, lastX: start.x, lastY: start.y };
+      mode = 'resizing';
+      drag = {
+        rect, handle: handle.dataset.handle,
+        original: rectFromEl(rect),
+        startClient,
+      };
       stage.setPointerCapture(e.pointerId);
-      placeDraft(drag);
-      draft.hidden = false;
-    });
-    stage.addEventListener('pointermove', (e) => {
-      if (!drag) return;
+      return;
+    }
+    if (rect) {
+      e.preventDefault();
+      mode = 'maybe-move';
+      drag = {
+        rect,
+        original: rectFromEl(rect),
+        startFrac: start, startClient,
+      };
+      stage.setPointerCapture(e.pointerId);
+      return;
+    }
+    // Empty space: start drafting a new rect
+    e.preventDefault();
+    mode = 'drafting';
+    drag = { startX: start.x, startY: start.y, lastX: start.x, lastY: start.y };
+    stage.setPointerCapture(e.pointerId);
+    placeDraft(drag);
+    draft.hidden = false;
+  }
+
+  function onPointerMove(e) {
+    if (!mode) return;
+    if (mode === 'drafting') {
       const cur = fracPos(e);
       drag.lastX = cur.x;
       drag.lastY = cur.y;
       placeDraft(drag);
-    });
-    stage.addEventListener('pointerup', async (e) => {
-      if (!drag) return;
-      stage.releasePointerCapture(e.pointerId);
-      const rect = normalizedRect(drag);
-      drag = null;
+      return;
+    }
+    // For move/resize, only commit to a drag once the pointer has moved a
+    // meaningful distance — otherwise it was just a click and we open the
+    // edit dialog on pointerup.
+    if (mode === 'maybe-move') {
+      const dx = Math.abs(e.clientX - drag.startClient.x);
+      const dy = Math.abs(e.clientY - drag.startClient.y);
+      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX) return;
+      mode = 'moving';
+    }
+    if (mode === 'moving') {
+      const cur = fracPos(e);
+      const dx = cur.x - drag.startFrac.x;
+      const dy = cur.y - drag.startFrac.y;
+      let nx = drag.original.x + dx;
+      let ny = drag.original.y + dy;
+      // Keep the rect inside the stage
+      nx = Math.max(0, Math.min(1 - drag.original.w, nx));
+      ny = Math.max(0, Math.min(1 - drag.original.h, ny));
+      applyRect(drag.rect, { x: nx, y: ny, w: drag.original.w, h: drag.original.h });
+      return;
+    }
+    if (mode === 'resizing') {
+      const cur = fracPos(e);
+      const o = drag.original;
+      let { x, y, w, h } = o;
+      // Adjust the appropriate edges based on which handle is being dragged.
+      if (drag.handle.includes('w')) {
+        const right = o.x + o.w;
+        x = Math.min(cur.x, right - 0.005);
+        w = right - x;
+      }
+      if (drag.handle.includes('e')) {
+        const left = o.x;
+        w = Math.max(0.005, cur.x - left);
+      }
+      if (drag.handle.includes('n')) {
+        const bottom = o.y + o.h;
+        y = Math.min(cur.y, bottom - 0.005);
+        h = bottom - y;
+      }
+      if (drag.handle.includes('s')) {
+        const top = o.y;
+        h = Math.max(0.005, cur.y - top);
+      }
+      x = clamp01(x); y = clamp01(y);
+      w = Math.min(w, 1 - x); h = Math.min(h, 1 - y);
+      applyRect(drag.rect, { x, y, w, h });
+    }
+  }
+
+  async function onPointerUp(e) {
+    if (!mode) return;
+    if (stage.hasPointerCapture(e.pointerId)) stage.releasePointerCapture(e.pointerId);
+    const finishedMode = mode;
+    const finishedDrag = drag;
+    mode = null;
+    drag = null;
+
+    if (finishedMode === 'drafting') {
+      const rect = normalizedRect(finishedDrag);
       draft.hidden = true;
       if (rect.w < 0.01 || rect.h < 0.01) return;  // tap, not a drag
       const name = prompt('Name this room:');
       if (!name || !name.trim()) return;
       try {
-        const body = new URLSearchParams({
-          name: name.trim(),
-          x: rect.x, y: rect.y, w: rect.w, h: rect.h,
-        });
-        const r = await fetch(`/locations/${locationId}/rooms`, {
+        const r = await fetch(`/floors/${floorId}/rooms`, {
           method: 'POST',
           headers: { 'Accept': 'application/json' },
-          body,
+          body: new URLSearchParams({
+            name: name.trim(),
+            x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+          }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
@@ -185,15 +367,42 @@
       } catch (err) {
         alert('Could not create room: ' + err.message);
       }
-    });
+      return;
+    }
+    if (finishedMode === 'maybe-move') {
+      // Was a click — open edit dialog
+      openRoomDialog(finishedDrag.rect);
+      return;
+    }
+    if (finishedMode === 'moving' || finishedMode === 'resizing') {
+      await persistRoomGeometry(finishedDrag.rect, finishedDrag.original);
+      return;
+    }
+  }
+
+  async function persistRoomGeometry(rect, originalForRollback) {
+    const id = rect.dataset.roomId;
+    const cur = rectFromEl(rect);
+    try {
+      const r = await fetch(`/rooms/${id}`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({
+          name: rect.dataset.name,
+          x: cur.x, y: cur.y, w: cur.w, h: cur.h,
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (err) {
+      // Roll back the visual change so the user sees what's actually saved.
+      applyRect(rect, originalForRollback);
+      alert('Could not save: ' + err.message);
+    }
   }
 
   function placeDraft(d) {
     const r = normalizedRect(d);
-    draft.style.left = (r.x * 100) + '%';
-    draft.style.top = (r.y * 100) + '%';
-    draft.style.width = (r.w * 100) + '%';
-    draft.style.height = (r.h * 100) + '%';
+    applyRect(draft, r);
   }
   function normalizedRect(d) {
     const x = Math.min(d.startX, d.lastX);
@@ -205,6 +414,7 @@
   function appendRoomElement({ id, name, color, x, y, w, h }) {
     const el = document.createElement('div');
     el.className = 'room-rect';
+    el.id = 'room-' + id;
     el.dataset.roomId = id;
     el.dataset.name = name;
     el.dataset.color = color;
@@ -213,25 +423,29 @@
     el.style.top = (y * 100) + '%';
     el.style.width = (w * 100) + '%';
     el.style.height = (h * 100) + '%';
-    el.innerHTML = `<span class="room-rect-label">${escapeHtml(name)}</span><span class="room-rect-count" data-box-count>0</span>`;
+    el.innerHTML =
+      `<span class="room-rect-label">${escapeHtml(name)}</span>` +
+      `<span class="room-rect-count" data-box-count>0</span>` +
+      `<span class="room-handle handle-nw" data-handle="nw"></span>` +
+      `<span class="room-handle handle-ne" data-handle="ne"></span>` +
+      `<span class="room-handle handle-sw" data-handle="sw"></span>` +
+      `<span class="room-handle handle-se" data-handle="se"></span>`;
     overlay.appendChild(el);
   }
   function escapeHtml(s) {
     return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   }
 
-  // ── Click an existing rectangle to edit it ──────────────────────────
-  overlay.addEventListener('click', (e) => {
-    const rect = e.target.closest('.room-rect');
-    if (!rect || rect === draft) return;
-    if (isEdit) {
-      openRoomDialog(rect);
-    } else {
-      // View mode: jump to the boxes-in-room page
+  // View-mode click on a rect → jump to its boxes page
+  if (!isEdit) {
+    overlay.addEventListener('click', (e) => {
+      const rect = e.target.closest('.room-rect');
+      if (!rect || rect === draft) return;
       window.location.href = `/rooms/${rect.dataset.roomId}/boxes`;
-    }
-  });
+    });
+  }
 
+  // ── Edit dialog (rename / delete / view boxes) ────────────────────
   function openRoomDialog(rect) {
     const id = rect.dataset.roomId;
     dialog.dataset.roomId = id;
@@ -251,16 +465,12 @@
     const rect = overlay.querySelector(`.room-rect[data-room-id="${id}"]`);
     const newName = dialog.querySelector('[data-room-name]').value.trim();
     if (!rect || !newName) return;
-    // Read current geometry off the rect — the user only edits name in the dialog
-    const x = parseFloat(rect.style.left) / 100;
-    const y = parseFloat(rect.style.top) / 100;
-    const w = parseFloat(rect.style.width) / 100;
-    const h = parseFloat(rect.style.height) / 100;
+    const cur = rectFromEl(rect);
     try {
       const r = await fetch(`/rooms/${id}`, {
         method: 'POST',
         headers: { 'Accept': 'application/json' },
-        body: new URLSearchParams({ name: newName, x, y, w, h }),
+        body: new URLSearchParams({ name: newName, x: cur.x, y: cur.y, w: cur.w, h: cur.h }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       rect.dataset.name = newName;
