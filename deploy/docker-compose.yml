@@ -70,13 +70,40 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 
+  # Tightly-scoped proxy in front of /var/run/docker.sock. Watchtower talks
+  # to this over a private network instead of mounting the socket directly,
+  # so a watchtower compromise (or a 0-day in any image it pulls) doesn't
+  # automatically equal root on the host. Only the API endpoints watchtower
+  # actually needs are exposed.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1   # list / inspect / create / start / stop / restart
+      IMAGES: 1       # list / inspect / pull
+      NETWORKS: 1     # required so recreated containers rejoin the right nets
+      POST: 1         # allow the POST verbs above
+      DELETE: 1       # for WATCHTOWER_CLEANUP=true
+      # Not enabled: EXEC, VOLUMES, SWARM, SECRETS, SERVICES, TASKS, NODES,
+      # CONFIGS, BUILD, COMMIT, INFO, AUTH, SESSION, SYSTEM, PLUGINS.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-control
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
   watchtower:
     image: containrrr/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     networks:
       - backend
+      - docker-control
     environment:
+      # Talk to the proxy, not the host's docker socket.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
       # Only act on containers explicitly opted-in via the label above.
       WATCHTOWER_LABEL_ENABLE: "true"
       # Disable the scheduled poll; updates are driven on-demand from the
@@ -86,10 +113,10 @@ services:
       WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN}
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_INCLUDE_RESTARTING: "true"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      # If you push to a private GHCR image, mount a docker config with creds:
-      # - ${HOME}/.docker/config.json:/config.json:ro
+    # No docker.sock mount — talks to the proxy over the network instead.
+    # If you push to a private GHCR image, mount a docker config with creds:
+    # volumes:
+    #   - ${HOME}/.docker/config.json:/config.json:ro
 
 volumes:
   stash-data:
@@ -104,3 +131,9 @@ networks:
   # AND from any future container that doesn't explicitly join `backend`.
   # oauth2-proxy bridges the two networks — it's the only path in.
   backend:
+  # Even more private: only watchtower and docker-socket-proxy live here.
+  # `internal: true` strips the network of internet routing entirely — the
+  # proxy doesn't need it, and it shrinks blast-radius if either container
+  # is ever compromised.
+  docker-control:
+    internal: true

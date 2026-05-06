@@ -1,29 +1,46 @@
 # Deploy
 
-Stash runs as a four-container compose stack designed for a single small EC2
+Stash runs as a five-container compose stack designed for a single small EC2
 instance:
 
 ```
                   Internet
                      │
-              ┌──────▼──────┐
-              │    caddy    │   :80 / :443 (public)
-              │  (TLS, ACME)│
-              └──────┬──────┘
-                     │
-              ┌──────▼──────┐
-              │ oauth2-proxy│   Google sign-in
-              │             │   (allowlist of emails)
-              └──────┬──────┘
-                     │
-              ┌──────▼──────┐    ┌─────────────┐
-              │    stash    │◄──►│ watchtower  │  on-demand image updates
-              │             │    │ (HTTP API)  │  triggered from /maintenance
-              └─────────────┘    └─────────────┘
+                ┌────▼────┐
+                │  caddy  │      :80 / :443 (only ports published to host)
+                │ TLS+HSTS│
+                └────┬────┘
+                     │  frontend network
+                ┌────▼────────┐
+                │ oauth2-proxy│  Google sign-in + emails.txt allowlist
+                └────┬────────┘
+                     │  backend network (no internet ingress)
+        ┌────────────┴───────────┐
+        │                        │
+  ┌─────▼─────┐            ┌─────▼──────┐
+  │   stash   │◄───────────│ watchtower │   on-demand image updates
+  │           │  HTTP API  │            │   triggered from /maintenance
+  └───────────┘            └─────┬──────┘
+                                 │  docker-control network (internal: true)
+                          ┌──────▼─────────────┐
+                          │ docker-socket-proxy│   narrow API surface to
+                          │                    │   /var/run/docker.sock
+                          └────────────────────┘
 ```
 
-Only Caddy is exposed to the internet. Stash, oauth2-proxy, and watchtower
-talk over the internal compose network.
+**Trust boundaries:**
+
+| Container | Network(s) | Reachable from |
+|---|---|---|
+| caddy | frontend | internet (80/443) |
+| oauth2-proxy | frontend + backend | caddy (frontend) |
+| stash | backend | only oauth2-proxy + watchtower |
+| watchtower | backend + docker-control | only stash |
+| docker-socket-proxy | docker-control (internal) | only watchtower |
+
+Stash has no path from the internet that doesn't go through Google sign-in,
+and no host bypasses /var/run/docker.sock — watchtower talks to a tightly
+scoped proxy that exposes only the Docker API endpoints it actually needs.
 
 ## What you'll need before starting
 
