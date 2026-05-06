@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.2...v0.10.0) (2026-05-06)
+
+
+### Features
+
+* full-surface UX pass — wider canvas, brand turtle, mascot empties ([d605fda](https://github.com/Brennan-VanderLaan/stash/commit/d605fda3c1f3cb0c526985ac160070984e1a1422))
+
 ## [0.9.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.1...v0.9.2) (2026-05-06)
 
 
