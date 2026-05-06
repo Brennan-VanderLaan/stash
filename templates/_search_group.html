@@ -1,0 +1,43 @@
+{# One result group — boxed items grouped under their box header. The
+   client-side renderer in search.html mirrors this markup so SSR + AJAX
+   updates produce visually identical output. #}
+<div class="card search-group">
+  <div class="search-group-header">
+    <a href="/boxes/{{ g.box_id }}" class="search-group-box">{{ g.box_name }}</a>
+    <span class="search-group-where">
+      {% if g.room_name %}
+      <span class="room-chip" style="--room-color: {{ g.room_color or '#4ade80' }};">{{ g.room_name }}</span>
+      {% endif %}
+      {% if g.location_name %}<span class="text-muted">{{ g.location_name }}</span>{% endif %}
+    </span>
+    <span class="search-group-count">{{ g['items'] | length }}</span>
+  </div>
+  <ul class="search-group-items">
+    {% for it in g['items'] %}
+    <li>
+      <button type="button" class="search-result"
+              data-item-id="{{ it.id }}" data-box-id="{{ g.box_id }}">
+        {% if it.photo %}
+        <img class="item-thumb" src="/thumbs/{{ it.photo }}" alt="" loading="lazy">
+        {% else %}
+        <span class="item-thumb item-thumb-empty">📦</span>
+        {% endif %}
+        <span class="search-result-info">
+          <span class="search-result-name">
+            {{ it.name }}
+            {% if it.is_missing %}<span class="badge badge-failed" title="Missing">⚠ missing</span>{% endif %}
+          </span>
+          {% if it.notes %}<span class="search-result-notes">{{ it.notes }}</span>{% endif %}
+          {% if it['tags'] %}
+          <span class="tag-list">
+            {% for t in it['tags'] %}
+            <span class="tag">{{ t.name }}{% if t.value %}:{{ t.value }}{% endif %}</span>
+            {% endfor %}
+          </span>
+          {% endif %}
+        </span>
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>

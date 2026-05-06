@@ -2,36 +2,429 @@
 {% block title %}Search · Stash{% endblock %}
 {% block content %}
 
-<form class="card" method="get" action="/search">
-  <div class="card-title">Search items</div>
-  <input type="text" name="q" value="{{ q }}" placeholder="Search by name or notes…">
-  <select name="tag">
-    <option value="">All tags</option>
-    {% for t in all_tags %}
-    <option value="{{ t }}" {% if tag == t %}selected{% endif %}>{{ t }}</option>
+<form id="search-form" method="get" action="/search" class="search-shell">
+  {# Top: query bar — full width on mobile, big and obvious. #}
+  <div class="search-bar">
+    <span class="search-bar-icon" aria-hidden="true">🔍</span>
+    <input
+      type="search"
+      name="q"
+      value="{{ q }}"
+      autocomplete="off"
+      placeholder="Search names, descriptions, contents…"
+      autofocus
+      aria-label="Search items"
+      id="search-q">
+    {% if q %}
+    <button type="button" class="search-bar-clear" data-clear-q aria-label="Clear search">×</button>
+    {% endif %}
+  </div>
+
+  {# Filter row: location → room → box (cascading), tag, two booleans.
+     Each is a real form control so the page works without JS too. #}
+  <div class="search-filters">
+    <label class="search-filter">
+      <span class="search-filter-label">Location</span>
+      <select name="location_id" data-filter="location">
+        <option value="">All</option>
+        {% for loc in all_locations %}
+        <option value="{{ loc.id }}" {% if loc.id == location_id %}selected{% endif %}>{{ loc.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="search-filter">
+      <span class="search-filter-label">Room</span>
+      <select name="room_id" data-filter="room">
+        <option value="">All</option>
+        {% set seen_loc = none %}
+        {% for r in all_rooms %}
+          {% if r.location_id != seen_loc %}
+            {% if not loop.first %}</optgroup>{% endif %}
+            <optgroup label="{{ r.location_name }}">
+            {% set seen_loc = r.location_id %}
+          {% endif %}
+          <option value="{{ r.id }}" data-location="{{ r.location_id }}"
+                  {% if r.id == room_id %}selected{% endif %}>{{ r.name }}</option>
+          {% if loop.last %}</optgroup>{% endif %}
+        {% endfor %}
+      </select>
+    </label>
+    <label class="search-filter">
+      <span class="search-filter-label">Box</span>
+      <select name="box_id" data-filter="box">
+        <option value="">All</option>
+        {% for b in all_boxes %}
+        <option value="{{ b.id }}"
+                data-location-name="{{ b.location_name or '' }}"
+                data-room-name="{{ b.room_name or '' }}"
+                {% if b.id == box_id %}selected{% endif %}>{{ b.name }}{% if b.room_name %} — {{ b.room_name }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="search-filter">
+      <span class="search-filter-label">Tag</span>
+      <select name="tag">
+        <option value="">All</option>
+        {% for t in all_tags %}
+        <option value="{{ t }}" {% if t == tag %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="search-toggle">
+      <input type="checkbox" name="has_photo" value="1" {% if has_photo %}checked{% endif %}>
+      <span>📷 Has photo</span>
+    </label>
+    <label class="search-toggle">
+      <input type="checkbox" name="missing" value="1" {% if missing %}checked{% endif %}>
+      <span>⚠ Missing</span>
+    </label>
+    <noscript>
+      <button type="submit" class="btn btn-primary btn-sm">Search</button>
+    </noscript>
+  </div>
+
+  {# Active-filter chip strip. Click any chip to remove the filter. JS
+     populates these on filter change; server-rendered ones are the
+     initial state. #}
+  {% set active_filters = [] %}
+  {% if q %}{% set _ = active_filters.append({"label": "“" ~ q ~ "”", "name": "q"}) %}{% endif %}
+  {% if tag %}{% set _ = active_filters.append({"label": "tag: " ~ tag, "name": "tag"}) %}{% endif %}
+  {% if box_id %}
+    {% for b in all_boxes if b.id == box_id %}
+      {% set _ = active_filters.append({"label": "box: " ~ b.name, "name": "box_id"}) %}
     {% endfor %}
-  </select>
-  <button type="submit" class="btn btn-primary btn-block">Search</button>
+  {% endif %}
+  {% if room_id %}
+    {% for r in all_rooms if r.id == room_id %}
+      {% set _ = active_filters.append({"label": "room: " ~ r.name, "name": "room_id"}) %}
+    {% endfor %}
+  {% endif %}
+  {% if location_id %}
+    {% for l in all_locations if l.id == location_id %}
+      {% set _ = active_filters.append({"label": "in " ~ l.name, "name": "location_id"}) %}
+    {% endfor %}
+  {% endif %}
+  {% if has_photo %}{% set _ = active_filters.append({"label": "📷 has photo", "name": "has_photo"}) %}{% endif %}
+  {% if missing %}{% set _ = active_filters.append({"label": "⚠ missing", "name": "missing"}) %}{% endif %}
+
+  <div class="search-chips" id="search-chips" {% if not active_filters %}hidden{% endif %}>
+    {% for f in active_filters %}
+    <button type="button" class="search-chip" data-clear-filter="{{ f.name }}">
+      {{ f.label }} <span aria-hidden="true">×</span>
+    </button>
+    {% endfor %}
+    {% if active_filters %}
+    <a href="/search" class="search-chip-clear-all">Clear all</a>
+    {% endif %}
+  </div>
 </form>
 
-<div class="card">
-  {% if results %}
-  <div class="card-title">{{ results|length }} result{{ '' if results|length == 1 else 's' }}</div>
-  {% for r in results %}
-  <a href="/boxes/{{ r.bid }}" class="result-card">
-    {% if r.photo %}<img src="/thumbs/{{ r.photo }}" alt="" class="item-thumb" loading="lazy">{% endif %}
-    <div class="item-info">
-      <div class="item-name">{{ r.name }}</div>
-      {% if r.notes %}<div class="item-desc">{{ r.notes }}</div>{% endif %}
-      <div class="text-sm text-muted mt-1">📦 {{ r.box_name }}</div>
-    </div>
-  </a>
-  {% endfor %}
-  {% elif q or tag %}
-  <div class="empty">No items matched.</div>
+{# Result summary — present even at 0 to give immediate feedback. #}
+<div class="search-summary" id="search-summary">
+  {% if total_items > 0 %}
+    <strong>{{ total_items }}</strong> item{{ '' if total_items == 1 else 's' }}
+    in <strong>{{ total_boxes }}</strong> box{{ '' if total_boxes == 1 else 'es' }}
+  {% elif q or tag or location_id or room_id or box_id or has_photo or missing %}
+    No items matched.
   {% else %}
-  <div class="empty">Enter a search term or pick a tag.</div>
+    Pick a filter or type something.
   {% endif %}
 </div>
 
+{# Result groups — one card per box. Server already sorted the SQL by
+   location → room → box → item name, so the visual order is predictable. #}
+<div id="search-results">
+  {% if groups %}
+    {% for g in groups %}
+    {% include "_search_group.html" %}
+    {% endfor %}
+  {% elif (q or tag or location_id or room_id or box_id or has_photo or missing) %}
+    <div class="card empty empty-mascot" data-mascot="cat">
+      <p>The cat looked everywhere. Nothing matched.<br>
+         Try removing a filter or two.</p>
+    </div>
+  {% else %}
+    <div class="card empty empty-mascot" data-mascot="boxes">
+      <p>Search across every item in every box.<br>
+         Filter by where it lives, by tag, or by photo / missing status.</p>
+    </div>
+  {% endif %}
+</div>
+
+{% if has_more %}
+<div class="search-loadmore" id="search-loadmore">
+  <button type="button" class="btn btn-secondary btn-block" data-load-more
+          data-offset="{{ page_loaded }}">
+    Load more · showing {{ page_loaded }} of {{ total_items }}
+  </button>
+</div>
+{% endif %}
+
+<script>
+(function() {
+  const form = document.getElementById('search-form');
+  const qInput = document.getElementById('search-q');
+  const chipsRow = document.getElementById('search-chips');
+  const resultsEl = document.getElementById('search-results');
+  const summaryEl = document.getElementById('search-summary');
+  const loadMoreContainer = document.getElementById('search-loadmore');
+  let activeFetch = null;
+
+  // ── Cascading dropdowns ───────────────────────────────────────────
+  // When the user picks a location, the Room dropdown should show only
+  // rooms in that location; same for the Box dropdown vs Room.
+  const locSel = form.querySelector('[data-filter="location"]');
+  const roomSel = form.querySelector('[data-filter="room"]');
+  const boxSel = form.querySelector('[data-filter="box"]');
+
+  function filterDependent() {
+    const loc = locSel.value;
+    Array.from(roomSel.querySelectorAll('option')).forEach(opt => {
+      if (!opt.value) return;  // "All"
+      const ok = !loc || opt.dataset.location === loc;
+      opt.hidden = !ok;
+    });
+    // If the currently-selected room got hidden, clear it
+    if (roomSel.selectedOptions[0] && roomSel.selectedOptions[0].hidden) {
+      roomSel.value = '';
+    }
+    // Box dropdown can't easily be cascaded against location_id without
+    // cross-references in the data; rely on the result list narrowing
+    // for that case rather than complicating the UI.
+  }
+  locSel.addEventListener('change', () => { filterDependent(); submit(); });
+  filterDependent();
+
+  // ── Submit pipeline ───────────────────────────────────────────────
+  // Every change re-fetches /search via JSON and rebuilds the results
+  // section in place. Free-text input is debounced; selects/checkboxes
+  // submit immediately.
+  function currentParams(extra = {}) {
+    const params = new URLSearchParams();
+    const fd = new FormData(form);
+    for (const [k, v] of fd.entries()) {
+      if (v !== '' && v !== null) params.append(k, v);
+    }
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== null && v !== undefined) params.set(k, v);
+    }
+    return params;
+  }
+
+  function pushHistory(params) {
+    const url = '/search' + (params.toString() ? '?' + params.toString() : '');
+    history.replaceState(null, '', url);
+  }
+
+  async function submit({ append = false, offset = 0 } = {}) {
+    if (activeFetch) activeFetch.abort();
+    const ctrl = new AbortController();
+    activeFetch = ctrl;
+    const params = currentParams({ offset });
+    if (!append) pushHistory(currentParams());
+    try {
+      const r = await fetch('/search?' + params.toString(), {
+        headers: { 'Accept': 'application/json' },
+        signal: ctrl.signal,
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      renderResults(data, append);
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error(err);
+    } finally {
+      if (activeFetch === ctrl) activeFetch = null;
+    }
+  }
+
+  // ── Render helpers ────────────────────────────────────────────────
+  function renderResults(data, append) {
+    if (!append) resultsEl.innerHTML = '';
+    if (data.groups.length === 0 && !append) {
+      const empty = document.createElement('div');
+      empty.className = 'card empty empty-mascot';
+      empty.dataset.mascot = 'cat';
+      empty.innerHTML = '<p>The cat looked everywhere. Nothing matched.<br>Try removing a filter or two.</p>';
+      resultsEl.appendChild(empty);
+    } else {
+      data.groups.forEach(g => resultsEl.appendChild(renderGroup(g)));
+    }
+    summaryEl.innerHTML = data.total_items === 0
+      ? 'No items matched.'
+      : `<strong>${data.total_items}</strong> item${data.total_items === 1 ? '' : 's'} in <strong>${data.total_boxes}</strong> box${data.total_boxes === 1 ? '' : 'es'}`;
+    // Load-more button
+    if (data.has_more) {
+      ensureLoadMore(data);
+    } else {
+      removeLoadMore();
+    }
+    refreshChips();
+  }
+
+  function renderGroup(g) {
+    const div = document.createElement('div');
+    div.className = 'card search-group';
+    const where = [g.location_name, g.room_name].filter(Boolean).join(' · ');
+    const colorStyle = g.room_color ? `style="--room-color: ${g.room_color};"` : '';
+    const chip = g.room_name
+      ? `<span class="room-chip" ${colorStyle}>${escapeHtml(g.room_name)}</span>`
+      : '';
+    div.innerHTML = `
+      <div class="search-group-header">
+        <a href="/boxes/${g.box_id}" class="search-group-box">${escapeHtml(g.box_name)}</a>
+        <span class="search-group-where">${chip}${g.location_name ? '<span class="text-muted"> ' + escapeHtml(g.location_name) + '</span>' : ''}</span>
+        <span class="search-group-count">${g.items.length}</span>
+      </div>
+      <ul class="search-group-items">
+        ${g.items.map(it => renderItem(it, g)).join('')}
+      </ul>`;
+    return div;
+  }
+
+  function renderItem(it, g) {
+    const tagsHtml = (it.tags || []).map(t =>
+      `<span class="tag">${escapeHtml(t.name)}${t.value ? ':' + escapeHtml(t.value) : ''}</span>`
+    ).join('');
+    const photoHtml = it.photo
+      ? `<img class="item-thumb" src="/thumbs/${encodeURIComponent(it.photo)}" alt="" loading="lazy">`
+      : '<span class="item-thumb item-thumb-empty">📦</span>';
+    const missingFlag = it.is_missing
+      ? '<span class="badge badge-failed" title="Missing">⚠ missing</span>'
+      : '';
+    return `
+      <li>
+        <button type="button" class="search-result" data-item-id="${it.id}" data-box-id="${g.box_id}">
+          ${photoHtml}
+          <span class="search-result-info">
+            <span class="search-result-name">${escapeHtml(it.name)} ${missingFlag}</span>
+            ${it.notes ? '<span class="search-result-notes">' + escapeHtml(it.notes) + '</span>' : ''}
+            ${tagsHtml ? '<span class="tag-list">' + tagsHtml + '</span>' : ''}
+          </span>
+        </button>
+      </li>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  function ensureLoadMore(data) {
+    let btn = document.querySelector('[data-load-more]');
+    let container = document.getElementById('search-loadmore');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'search-loadmore';
+      container.className = 'search-loadmore';
+      resultsEl.parentNode.insertBefore(container, resultsEl.nextSibling);
+    }
+    container.innerHTML = `<button type="button" class="btn btn-secondary btn-block" data-load-more data-offset="${data.page_loaded}">Load more · showing ${data.page_loaded} of ${data.total_items}</button>`;
+    container.querySelector('[data-load-more]').addEventListener('click', loadMoreClick);
+  }
+  function removeLoadMore() {
+    const c = document.getElementById('search-loadmore');
+    if (c) c.remove();
+  }
+  function loadMoreClick(e) {
+    const offset = Number(e.currentTarget.dataset.offset) || 0;
+    submit({ append: true, offset });
+  }
+  if (loadMoreContainer) {
+    loadMoreContainer.querySelector('[data-load-more]').addEventListener('click', loadMoreClick);
+  }
+
+  // ── Chip + clear handling ────────────────────────────────────────
+  function refreshChips() {
+    chipsRow.innerHTML = '';
+    const fd = new FormData(form);
+    const items = [];
+    if (fd.get('q')) items.push({ name: 'q', label: '“' + fd.get('q') + '”' });
+    if (fd.get('tag')) items.push({ name: 'tag', label: 'tag: ' + fd.get('tag') });
+    if (fd.get('box_id')) {
+      const opt = boxSel.selectedOptions[0];
+      if (opt) items.push({ name: 'box_id', label: 'box: ' + opt.textContent.trim() });
+    }
+    if (fd.get('room_id')) {
+      const opt = roomSel.selectedOptions[0];
+      if (opt) items.push({ name: 'room_id', label: 'room: ' + opt.textContent.trim() });
+    }
+    if (fd.get('location_id')) {
+      const opt = locSel.selectedOptions[0];
+      if (opt) items.push({ name: 'location_id', label: 'in ' + opt.textContent.trim() });
+    }
+    if (fd.get('has_photo')) items.push({ name: 'has_photo', label: '📷 has photo' });
+    if (fd.get('missing')) items.push({ name: 'missing', label: '⚠ missing' });
+
+    if (!items.length) { chipsRow.hidden = true; return; }
+    chipsRow.hidden = false;
+    items.forEach(f => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'search-chip';
+      b.dataset.clearFilter = f.name;
+      b.innerHTML = escapeHtml(f.label) + ' <span aria-hidden="true">×</span>';
+      chipsRow.appendChild(b);
+    });
+    const a = document.createElement('a');
+    a.href = '/search';
+    a.className = 'search-chip-clear-all';
+    a.textContent = 'Clear all';
+    chipsRow.appendChild(a);
+  }
+
+  chipsRow.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-clear-filter]');
+    if (!chip) return;
+    const name = chip.dataset.clearFilter;
+    const field = form.elements[name];
+    if (!field) return;
+    if (field.type === 'checkbox') field.checked = false;
+    else field.value = '';
+    if (name === 'location_id') filterDependent();
+    submit();
+  });
+
+  // Also wire the in-bar "×" clear-search button
+  const clearQ = form.querySelector('[data-clear-q]');
+  if (clearQ) clearQ.addEventListener('click', () => {
+    qInput.value = '';
+    submit();
+  });
+
+  // ── Live wiring ───────────────────────────────────────────────────
+  let qDebounce;
+  qInput.addEventListener('input', () => {
+    clearTimeout(qDebounce);
+    qDebounce = setTimeout(submit, 220);
+  });
+  form.querySelectorAll('select, input[type="checkbox"]').forEach(el => {
+    el.addEventListener('change', () => submit());
+  });
+  form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+
+  // Click a result → jump to its box with a #item-N anchor so the
+  // existing box-page modal pops it open. Saves us from duplicating the
+  // edit / move / recrop / delete affordances here.
+  resultsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.search-result');
+    if (!btn) return;
+    const boxId = btn.dataset.boxId;
+    const itemId = btn.dataset.itemId;
+    if (!boxId || !itemId) return;
+    window.location.href = `/boxes/${boxId}#item-${itemId}`;
+  });
+
+  // / focuses search; Esc clears
+  window.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      qInput.focus();
+      qInput.select();
+    } else if (e.key === 'Escape' && document.activeElement === qInput && qInput.value) {
+      qInput.value = '';
+      submit();
+    }
+  });
+})();
+</script>
 {% endblock %}

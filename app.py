@@ -1222,34 +1222,205 @@ def queue_delete(pending_id: int):
     return RedirectResponse("/queue", status_code=303)
 
 
+SEARCH_PAGE_SIZE = 100
+
+
+def _coerce_search_int(value: str) -> int | None:
+    if not value or value in ("none", "0", "all"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_search_query(
+    q: str, tag: str, location_id: int | None, room_id: int | None,
+    box_id: int | None, missing: bool, has_photo: bool,
+) -> tuple[str, list]:
+    """Compose the WHERE clause + params for the search query. Pulled out so
+    both the listing query and the count/facet queries can share it."""
+    clauses = ["1=1"]
+    params: list = []
+    if q.strip():
+        like = f"%{q.strip()}%"
+        clauses.append("(i.name LIKE ? OR i.notes LIKE ?)")
+        params.extend([like, like])
+    if tag.strip():
+        clauses.append(
+            "i.id IN (SELECT it.item_id FROM item_tags it "
+            "JOIN tags t ON t.id = it.tag_id WHERE t.name = ?)"
+        )
+        params.append(tag.strip())
+    if box_id is not None:
+        clauses.append("b.id = ?")
+        params.append(box_id)
+    if room_id is not None:
+        clauses.append("r.id = ?")
+        params.append(room_id)
+    if location_id is not None:
+        clauses.append("l.id = ?")
+        params.append(location_id)
+    if missing:
+        clauses.append("i.is_missing = 1")
+    if has_photo:
+        clauses.append("i.photo IS NOT NULL AND i.photo != ''")
+    return " AND ".join(clauses), params
+
+
 @app.get("/search", response_class=HTMLResponse)
-def search(request: Request, q: str = "", tag: str = ""):
+def search(
+    request: Request,
+    q: str = "",
+    tag: str = "",
+    location_id: str = "",
+    room_id: str = "",
+    box_id: str = "",
+    missing: str = "",
+    has_photo: str = "",
+    offset: int = 0,
+):
+    """Faceted search across all items.
+
+    Supports filtering by free text, tag, location/room/box, missing-flag,
+    and has-photo. Results are grouped by box and paginated server-side
+    (LIMIT/OFFSET) so a stash with thousands of items still renders.
+    Honors Accept: application/json so the client can use it as the API
+    behind a "load more" button without re-rendering the chrome.
+    """
+    loc_id = _coerce_search_int(location_id)
+    rm_id = _coerce_search_int(room_id)
+    bx_id = _coerce_search_int(box_id)
+    is_missing = bool(missing)
+    has_photo_flag = bool(has_photo)
+    offset = max(0, offset)
+
     with db() as conn:
         all_tags = [
             r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
         ]
-        clauses = ["1=1"]
-        params: list = []
-        if q.strip():
-            clauses.append("(i.name LIKE ? OR i.notes LIKE ?)")
-            like = f"%{q.strip()}%"
-            params.extend([like, like])
-        if tag.strip():
-            clauses.append(
-                "i.id IN (SELECT it.item_id FROM item_tags it "
-                "JOIN tags t ON t.id = it.tag_id WHERE t.name = ?)"
-            )
-            params.append(tag.strip())
-        where = " AND ".join(clauses)
-        results = conn.execute(
-            f"SELECT i.*, b.name AS box_name, b.id AS bid "
-            f"FROM items i JOIN boxes b ON b.id = i.box_id "
-            f"WHERE {where} ORDER BY i.name LIMIT 200",
+        all_locations = [
+            dict(r) for r in conn.execute(
+                "SELECT id, name FROM locations ORDER BY name"
+            ).fetchall()
+        ]
+        all_rooms = _rooms_for_picker(conn)
+        all_boxes = [
+            dict(r) for r in conn.execute(
+                "SELECT b.id, b.name, l.name AS location_name, r.name AS room_name "
+                "FROM boxes b "
+                "LEFT JOIN rooms r ON r.id = b.room_id "
+                "LEFT JOIN locations l ON l.id = r.location_id "
+                "ORDER BY l.name IS NULL, l.name, r.name, b.name"
+            ).fetchall()
+        ]
+
+        where, params = _build_search_query(
+            q, tag, loc_id, rm_id, bx_id, is_missing, has_photo_flag,
+        )
+        common_join = (
+            "FROM items i "
+            "JOIN boxes b ON b.id = i.box_id "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+        )
+
+        # Headline counts so the user knows the result size before pagination.
+        totals = conn.execute(
+            f"SELECT COUNT(DISTINCT i.id) AS items, COUNT(DISTINCT b.id) AS boxes "
+            f"{common_join}WHERE {where}",
             params,
+        ).fetchone()
+        total_items = totals["items"]
+        total_boxes = totals["boxes"]
+
+        rows = conn.execute(
+            f"SELECT i.id, i.name, i.notes, i.photo, i.is_missing, "
+            f"       b.id AS box_id, b.name AS box_name, "
+            f"       r.id AS room_id, r.name AS room_name, r.color AS room_color, "
+            f"       l.id AS location_id, l.name AS location_name "
+            f"{common_join}WHERE {where} "
+            f"ORDER BY l.name IS NULL, l.name, r.name, b.name, i.name "
+            f"LIMIT ? OFFSET ?",
+            [*params, SEARCH_PAGE_SIZE, offset],
         ).fetchall()
+
+        # Pull tags per item in a single pass so the row template doesn't
+        # round-trip per item.
+        item_ids = [r["id"] for r in rows]
+        tags_by_item: dict[int, list[dict]] = {}
+        if item_ids:
+            placeholders = ",".join("?" * len(item_ids))
+            for r in conn.execute(
+                f"SELECT it.item_id, t.id AS tag_id, t.name, it.value "
+                f"FROM item_tags it JOIN tags t ON t.id = it.tag_id "
+                f"WHERE it.item_id IN ({placeholders}) ORDER BY t.name",
+                item_ids,
+            ).fetchall():
+                tags_by_item.setdefault(r["item_id"], []).append(dict(r))
+
+    # Group server-side so the template renders one section per box without
+    # a stateful loop in Jinja. Boxes are already ordered by location/room
+    # in the SQL, so we just bucket on transitions.
+    groups: list[dict] = []
+    current_box_id = None
+    for r in rows:
+        if r["box_id"] != current_box_id:
+            groups.append({
+                "box_id": r["box_id"],
+                "box_name": r["box_name"],
+                "room_name": r["room_name"],
+                "room_color": r["room_color"],
+                "location_name": r["location_name"],
+                "items": [],
+            })
+            current_box_id = r["box_id"]
+        groups[-1]["items"].append({
+            **dict(r),
+            "tags": tags_by_item.get(r["id"], []),
+        })
+
+    page_loaded = offset + len(rows)
+    has_more = page_loaded < total_items
+
+    if "application/json" in request.headers.get("accept", ""):
+        # JSON response for the "Load more" path — just the new groups +
+        # whether there's more behind them. Wrap in JSONResponse so the
+        # endpoint's response_class=HTMLResponse default doesn't try to
+        # render the dict as HTML.
+        from fastapi.responses import JSONResponse
+        return JSONResponse({
+            "groups": groups,
+            "total_items": total_items,
+            "total_boxes": total_boxes,
+            "page_loaded": page_loaded,
+            "has_more": has_more,
+            "offset": offset,
+        })
+
+    # Reflect the current filter state so the template can render filter
+    # chips and pre-select dropdowns.
     return templates.TemplateResponse(
         request, "search.html",
-        {"results": results, "q": q, "tag": tag, "all_tags": all_tags},
+        {
+            "q": q,
+            "tag": tag,
+            "location_id": loc_id,
+            "room_id": rm_id,
+            "box_id": bx_id,
+            "missing": is_missing,
+            "has_photo": has_photo_flag,
+            "groups": groups,
+            "total_items": total_items,
+            "total_boxes": total_boxes,
+            "page_loaded": page_loaded,
+            "has_more": has_more,
+            "page_size": SEARCH_PAGE_SIZE,
+            "all_tags": all_tags,
+            "all_locations": all_locations,
+            "all_rooms": all_rooms,
+            "all_boxes": all_boxes,
+        },
     )
 
 
@@ -1833,7 +2004,8 @@ def _clamp01(v: float) -> float:
 @app.get("/rooms/{room_id}/boxes", response_class=HTMLResponse)
 def room_boxes(request: Request, room_id: int):
     """Boxes assigned to a single room — used as the click-through target from
-    the floorplan view."""
+    the floorplan view. Renders with the same card+thumb-strip presentation
+    as the main /boxes index so the user gets parity."""
     with db() as conn:
         row = conn.execute(
             "SELECT r.*, l.name AS location_name, l.id AS location_id "
@@ -1849,9 +2021,23 @@ def room_boxes(request: Request, room_id: int):
             "WHERE b.room_id = ? GROUP BY b.id ORDER BY b.name",
             (room_id,),
         ).fetchall()
+        # Same per-box thumb-strip as index.html — limited to this room's
+        # boxes to keep the query small.
+        thumb_rows = conn.execute(
+            "SELECT i.box_id, i.photo FROM items i "
+            "JOIN boxes b ON b.id = i.box_id "
+            "WHERE b.room_id = ? AND i.photo IS NOT NULL "
+            "ORDER BY i.box_id, i.created_at DESC",
+            (room_id,),
+        ).fetchall()
+    thumbs: dict[int, list[str]] = {}
+    for r in thumb_rows:
+        lst = thumbs.setdefault(r["box_id"], [])
+        if len(lst) < 5:
+            lst.append(r["photo"])
     return templates.TemplateResponse(
         request, "room_boxes.html",
-        {"room": dict(row), "boxes": boxes},
+        {"room": dict(row), "boxes": boxes, "thumbs": thumbs},
     )
 
 

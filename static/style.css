@@ -18,6 +18,14 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; }
 
+/* Default link color — explicit so browsers don't fall back to blue/purple
+   on visited state, which is unreadable on the dark green theme. Specific
+   surfaces (.box-card, .header-back, room-chip, etc.) still override their
+   color independently. */
+a { color: var(--accent); }
+a:visited { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
@@ -711,6 +719,255 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   color: var(--text);
 }
 .result-card:hover { background: var(--panel-2); }
+
+/* === Search redesign — query bar, facet filters, grouped results === */
+.search-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Query bar — looks like a real search box, not a card. */
+.search-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.5rem 0.4rem 2.4rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.search-bar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.search-bar-icon {
+  position: absolute;
+  left: 0.85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1rem;
+  opacity: 0.7;
+}
+.search-bar input[type="search"] {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+  padding: 0.45rem 0;
+  flex: 1;
+  min-width: 0;
+  outline: none;
+}
+.search-bar input[type="search"]::placeholder { color: var(--muted); }
+.search-bar-clear {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+.search-bar-clear:hover { color: var(--accent); }
+
+/* Filter row — wraps gracefully on narrow screens. Each select is a
+   compact "pill" so the row stays scannable. */
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
+  align-items: center;
+}
+.search-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 0.25rem 0.6rem 0.25rem 0.85rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  transition: border-color 0.15s;
+}
+.search-filter:focus-within { border-color: var(--accent); }
+.search-filter-label { font-weight: 500; white-space: nowrap; }
+.search-filter select {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.2rem 0.1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  min-height: auto;
+}
+.search-filter select:focus { box-shadow: none; }
+
+/* Boolean toggle — a checkbox dressed up as a pill. */
+.search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.search-toggle input { display: none; }
+.search-toggle:has(input:checked) {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Active-filter chip strip. */
+.search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 100px;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.search-chip:hover { background: var(--accent); color: #0a1810; }
+.search-chip-clear-all {
+  margin-left: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.search-summary {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0.25rem 0.25rem 0.5rem;
+}
+.search-summary strong { color: var(--accent); }
+
+/* Result groups — one card per box, with item rows packed in. */
+.search-group { padding: 0.65rem 0.85rem; }
+.search-group-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.search-group-box {
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+.search-group-where {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.search-group-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 0.05rem 0.55rem;
+  color: var(--muted);
+}
+.search-group-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.search-result {
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  align-items: flex-start;
+  transition: background 0.12s, border-color 0.12s;
+}
+.search-result:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+.search-result .item-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.item-thumb-empty {
+  background: var(--panel-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.search-result-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.search-result-name {
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.95rem;
+}
+.search-result-notes {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-loadmore {
+  margin-top: 0.5rem;
+  margin-bottom: 1rem;
+}
 
 /* === Re-crop === */
 .recrop-layout { display: flex; flex-direction: column; gap: 0.75rem; }
