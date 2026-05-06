@@ -71,6 +71,8 @@ services:
     env_file:
       - .env
     environment:
+      # Used to build the URL encoded into printed-label QR codes.
+      STASH_PUBLIC_URL: https://${DOMAIN}
       WATCHTOWER_URL: http://watchtower:8080
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN}
     volumes:

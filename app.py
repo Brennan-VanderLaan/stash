@@ -24,6 +24,10 @@ VERSION = os.environ.get("STASH_VERSION", "dev")
 GIT_SHA = os.environ.get("STASH_GIT_SHA", "")
 WATCHTOWER_URL = os.environ.get("WATCHTOWER_URL", "").rstrip("/")
 WATCHTOWER_TOKEN = os.environ.get("WATCHTOWER_TOKEN", "")
+# Public-facing base URL for QR codes on printed labels. Set in production
+# (deploy/.env via the compose stack) to e.g. https://stash.example.com.
+# Empty in local dev — labels fall back to the `stash:box:N` custom scheme.
+PUBLIC_URL = os.environ.get("STASH_PUBLIC_URL", "").rstrip("/")
 
 
 def _load_changelog_html() -> str:
@@ -969,7 +973,7 @@ def box_label_svg(box_id: int):
         box = conn.execute("SELECT * FROM boxes WHERE id = ?", (box_id,)).fetchone()
         if not box:
             raise HTTPException(404)
-    svg = labels.render_label_svg(box["id"], box["name"], box["location"] or "")
+    svg = labels.render_label_svg(box["id"], box["name"], box["notes"] or "", PUBLIC_URL)
     return Response(
         content=svg,
         media_type="image/svg+xml",
@@ -991,14 +995,14 @@ def labels_sheet(request: Request):
         if box_ids_raw:
             placeholders = ",".join("?" * len(box_ids_raw))
             boxes = conn.execute(
-                f"SELECT id, name, location FROM boxes WHERE id IN ({placeholders}) ORDER BY name",
+                f"SELECT id, name, notes FROM boxes WHERE id IN ({placeholders}) ORDER BY name",
                 [int(b) for b in box_ids_raw],
             ).fetchall()
         else:
             boxes = conn.execute(
-                "SELECT id, name, location FROM boxes ORDER BY name"
+                "SELECT id, name, notes FROM boxes ORDER BY name"
             ).fetchall()
-    svg = labels.render_sheet_svg([dict(b) for b in boxes])
+    svg = labels.render_sheet_svg([dict(b) for b in boxes], PUBLIC_URL)
     return Response(
         content=svg,
         media_type="image/svg+xml",

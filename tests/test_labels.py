@@ -1,5 +1,8 @@
 def test_single_label_svg_downloads(client):
-    client.post("/boxes", data={"name": "Kitchen #1", "location": "Garage shelf B"})
+    client.post("/boxes", data={
+        "name": "Kitchen #1", "location": "Garage shelf B",
+        "notes": "Mugs and small appliances",
+    })
     r = client.get("/boxes/1/label.svg")
     assert r.status_code == 200
     assert "image/svg+xml" in r.headers["content-type"]
@@ -7,9 +10,14 @@ def test_single_label_svg_downloads(client):
     svg = r.text
     assert "<svg" in svg
     assert "Kitchen #1" in svg
-    assert "Garage shelf B" in svg
-    assert "stash:box:1" not in svg  # QR data is encoded as a path, not raw text
-    assert "stash:box:1" not in svg  # QR encodes it, not displayed as text
+    # Notes are now the on-label description; location is intentionally dropped
+    # to keep the printed label dead simple.
+    assert "Mugs and small appliances" in svg
+    assert "Garage shelf B" not in svg
+    # Box ID badge is rendered as `#1` so you can reference boxes verbally.
+    assert ">#1<" in svg
+    # QR is rendered as a path, so the encoded string never appears as text.
+    assert "stash:box:1" not in svg
 
 
 def test_single_label_404_for_unknown_box(client):
@@ -61,13 +69,37 @@ def test_sheet_pads_with_blanks(client):
 
 def test_long_name_fits_label(client):
     long_name = "Box of interesting crap for project xyz pt 2"
-    client.post("/boxes", data={"name": long_name, "location": "Garage shelf B"})
+    client.post("/boxes", data={"name": long_name, "notes": "miscellany"})
     r = client.get("/boxes/1/label.svg")
     assert r.status_code == 200
     svg = r.text
     assert long_name in svg
-    assert "Garage shelf B" in svg
+    assert "miscellany" in svg
+    # Confirm the ID badge format is the bare `#1` style, not `ID: 1`.
     assert "ID:" not in svg
+    assert ">#1<" in svg
+
+
+def test_qr_payload_uses_public_url_when_set():
+    import labels
+    # With a public URL, scanning the code lands on the live box page.
+    assert labels._qr_data_for_box(7, "https://stash.example.com") == \
+        "https://stash.example.com/boxes/7"
+    # Trailing slashes on the configured URL should not double up.
+    assert labels._qr_data_for_box(7, "https://stash.example.com/") == \
+        "https://stash.example.com/boxes/7"
+    # Without one (local dev), fall back to the custom scheme so it's obvious
+    # the labels aren't print-ready.
+    assert labels._qr_data_for_box(7, "") == "stash:box:7"
+
+
+def test_sheet_uses_notes_not_location(client):
+    client.post("/boxes", data={
+        "name": "Toolbox", "location": "shed", "notes": "drill bits and tape",
+    })
+    svg = client.get("/labels/sheet.svg").text
+    assert "drill bits and tape" in svg
+    assert "shed" not in svg
 
 
 def test_label_escapes_special_chars(client):

@@ -21,10 +21,27 @@ ROW_GAP_MM = (SHEET_H_MM - ROWS * LABEL_H_MM) / (ROWS + 1)
 
 # Text layout — all units in mm (matches the viewBox)
 TEXT_X_MM = MARGIN_MM + QR_SIZE_MM + MARGIN_MM * 1.5
-TEXT_MAX_W_MM = LABEL_W_MM - TEXT_X_MM - MARGIN_MM
 NAME_FONT_MM = 10
-LOC_FONT_MM = 6
+DESC_FONT_MM = 6
+ID_FONT_MM = 5
 CHARS_PER_MM = 1.7  # approximate sans-serif chars per mm at font-size=1mm
+# Reserve space on the right for the #ID badge so the name doesn't run into it.
+ID_BADGE_RESERVE_MM = 16
+TEXT_MAX_W_MM = LABEL_W_MM - TEXT_X_MM - MARGIN_MM - ID_BADGE_RESERVE_MM
+
+
+def _qr_data_for_box(box_id: int, public_url: str) -> str:
+    """Build the URL the QR code resolves to.
+
+    With a public URL configured (production), phones scanning the code go
+    straight to the box detail page. Without one (local dev) we fall back to
+    the `stash:box:N` custom scheme — clearly broken for end users, which is
+    the point: it signals that STASH_PUBLIC_URL needs to be set before
+    printing labels for real use.
+    """
+    if public_url:
+        return f"{public_url.rstrip('/')}/boxes/{box_id}"
+    return f"stash:box:{box_id}"
 
 
 def _qr_svg_path(data: str) -> tuple[str, str]:
@@ -48,15 +65,14 @@ def _fit_font_size(text: str, max_width_mm: float, ideal_size_mm: float, min_siz
     return max(scaled, min_size_mm)
 
 
-def _label_content(box_id: int, name: str, location: str) -> str:
-    qr_data = f"stash:box:{box_id}"
-    qr_path, qr_vb = _qr_svg_path(qr_data)
+def _label_content(box_id: int, name: str, description: str, public_url: str) -> str:
+    qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
     vb_w = float(qr_vb.split()[2])
     vb_h = float(qr_vb.split()[3])
 
     qr_y = (LABEL_H_MM - QR_SIZE_MM) / 2
     name_size = _fit_font_size(name, TEXT_MAX_W_MM, NAME_FONT_MM)
-    name_y = LABEL_H_MM / 2 - (2 if location else 0)
+    name_y = LABEL_H_MM / 2 - (2 if description else 0)
 
     parts = [
         f'<rect width="{LABEL_W_MM}" height="{LABEL_H_MM}" rx="2" ry="2" '
@@ -65,26 +81,31 @@ def _label_content(box_id: int, name: str, location: str) -> str:
         f'scale({QR_SIZE_MM / vb_w},{QR_SIZE_MM / vb_h})">',
         f'  <path d="{qr_path}" fill="black"/>',
         f'</g>',
+        # Box ID badge in the top-right corner — small, monospace, easy to
+        # read across the room without scanning ("grab box 12").
+        f'<text x="{LABEL_W_MM - MARGIN_MM}" y="{MARGIN_MM + ID_FONT_MM * 0.8}" '
+        f'font-family="ui-monospace, Menlo, monospace" font-size="{ID_FONT_MM}" '
+        f'fill="#666" text-anchor="end">#{box_id}</text>',
         f'<text x="{TEXT_X_MM}" y="{name_y}" '
         f'font-family="sans-serif" font-size="{name_size}" font-weight="bold" '
         f'fill="#111" dominant-baseline="central">'
         f'{_escape(name)}</text>',
     ]
 
-    if location:
-        loc_size = _fit_font_size(location, TEXT_MAX_W_MM, LOC_FONT_MM)
-        loc_y = name_y + name_size * 0.6 + loc_size + 1
+    if description:
+        desc_size = _fit_font_size(description, TEXT_MAX_W_MM, DESC_FONT_MM)
+        desc_y = name_y + name_size * 0.6 + desc_size + 1
         parts.append(
-            f'<text x="{TEXT_X_MM}" y="{loc_y}" '
-            f'font-family="sans-serif" font-size="{loc_size}" '
-            f'fill="#666">{_escape(location)}</text>'
+            f'<text x="{TEXT_X_MM}" y="{desc_y}" '
+            f'font-family="sans-serif" font-size="{desc_size}" '
+            f'fill="#666">{_escape(description)}</text>'
         )
 
     return "\n    ".join(parts)
 
 
-def render_label_svg(box_id: int, box_name: str, box_location: str = "") -> str:
-    inner = _label_content(box_id, box_name, box_location)
+def render_label_svg(box_id: int, box_name: str, description: str = "", public_url: str = "") -> str:
+    inner = _label_content(box_id, box_name, description, public_url)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      width="{LABEL_W_MM}mm" height="{LABEL_H_MM}mm"
@@ -93,7 +114,7 @@ def render_label_svg(box_id: int, box_name: str, box_location: str = "") -> str:
 </svg>"""
 
 
-def render_sheet_svg(boxes: list[dict]) -> str:
+def render_sheet_svg(boxes: list[dict], public_url: str = "") -> str:
     slots = ROWS * COLS
     cells = []
     for i in range(slots):
@@ -104,7 +125,9 @@ def render_sheet_svg(boxes: list[dict]) -> str:
 
         if i < len(boxes):
             b = boxes[i]
-            inner = _label_content(b["id"], b["name"], b.get("location", ""))
+            inner = _label_content(
+                b["id"], b["name"], b.get("notes") or "", public_url,
+            )
         else:
             inner = (
                 f'<rect width="{LABEL_W_MM}" height="{LABEL_H_MM}" rx="2" ry="2" '
