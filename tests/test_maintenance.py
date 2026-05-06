@@ -154,3 +154,133 @@ def test_export_excludes_orphan_files(client):
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = set(zf.namelist())
     assert "uploads/orphan.jpg" not in names
+
+
+# ── Import ───────────────────────────────────────────────────────────
+
+def test_import_zip_round_trip_replaces_db_and_uploads(client):
+    """Export from a populated state, wipe, re-import — all data comes back."""
+    _ingest_and_assign(client)
+    backup = client.get("/maintenance/export").content
+
+    # Wipe state: drop the assigned item and remove its upload files
+    with client.app_module.db() as conn:
+        photos = [r[0] for r in conn.execute(
+            "SELECT photo FROM items UNION SELECT source_photo FROM items"
+        ).fetchall() if r[0]]
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM boxes")
+        conn.commit()
+    for p in photos:
+        try:
+            (_uploads(client) / p).unlink()
+        except FileNotFoundError:
+            pass
+
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("backup.zip", io.BytesIO(backup), "application/zip")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "imported=1" in r.headers["location"]
+
+    with client.app_module.db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+        photos = [r[0] for r in conn.execute("SELECT photo FROM items").fetchall()]
+    for p in photos:
+        assert (_uploads(client) / p).exists(), f"upload {p} not restored"
+
+
+def test_import_raw_db_file_replaces_db(client):
+    """Uploading just a .db file (no zip wrapper) replaces the running DB."""
+    # Build a known-good DB out of band using the running app's schema
+    client.post("/boxes", data={"name": "Original"})
+
+    # Snapshot the DB to bytes (like a user's local stash.db)
+    db_bytes = client.app_module.DB_PATH.read_bytes()
+
+    # Mutate state so we can confirm replacement
+    client.post("/boxes", data={"name": "Should be wiped"})
+    with client.app_module.db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 2
+
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("stash.db", io.BytesIO(db_bytes), "application/octet-stream")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with client.app_module.db() as conn:
+        names = [r[0] for r in conn.execute("SELECT name FROM boxes").fetchall()]
+    assert names == ["Original"]
+
+
+def test_import_creates_backup_of_existing_db(client):
+    """The current DB is preserved as stash.db.bak-<timestamp> before replacement."""
+    client.post("/boxes", data={"name": "Pre-import"})
+    db_bytes = client.app_module.DB_PATH.read_bytes()
+
+    db_path = client.app_module.DB_PATH
+    backups_before = list(db_path.parent.glob(f"{db_path.name}.bak-*"))
+
+    client.post(
+        "/maintenance/import",
+        files={"file": ("stash.db", io.BytesIO(db_bytes), "application/octet-stream")},
+    )
+
+    backups_after = list(db_path.parent.glob(f"{db_path.name}.bak-*"))
+    assert len(backups_after) == len(backups_before) + 1
+
+
+def test_import_rejects_non_sqlite_file(client):
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("evil.txt", io.BytesIO(b"not a database"), "text/plain")},
+    )
+    assert r.status_code == 400
+
+
+def test_import_rejects_zip_without_stash_db(client):
+    """A zip that doesn't carry stash.db is not a stash backup."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("readme.txt", "hello")
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("bad.zip", io.BytesIO(buf.getvalue()), "application/zip")},
+    )
+    assert r.status_code == 400
+
+
+def test_import_rejects_invalid_sqlite_with_correct_header(client):
+    """Bytes that *start with* the SQLite header but aren't a real DB still get rejected."""
+    fake = b"SQLite format 3\x00" + b"\x00" * 4096
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("fake.db", io.BytesIO(fake), "application/octet-stream")},
+    )
+    assert r.status_code == 400
+
+
+def test_import_zip_skips_path_traversal_entries(client):
+    """A malicious zip with `uploads/../evil` must not write outside UPLOAD_DIR."""
+    # Build a minimal valid backup zip
+    client.post("/boxes", data={"name": "Box"})
+    db_bytes = client.app_module.DB_PATH.read_bytes()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("stash.db", db_bytes)
+        zf.writestr("uploads/../escaped.txt", b"pwn")
+        zf.writestr("uploads/legit.jpg", _fake_jpg())
+
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("backup.zip", io.BytesIO(buf.getvalue()), "application/zip")},
+    )
+    assert r.status_code == 200  # followed redirect to /maintenance
+    uploads = _uploads(client)
+    assert (uploads / "legit.jpg").exists()
+    assert not (uploads.parent / "escaped.txt").exists()

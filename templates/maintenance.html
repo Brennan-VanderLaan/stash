@@ -43,6 +43,23 @@
 </div>
 
 <div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Restore</div>
+  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+    Upload a SQLite <code>.db</code> file or a backup <code>.zip</code> to replace the
+    running database. The current DB is saved to
+    <code>stash.db.bak-&lt;timestamp&gt;</code> first. Max 50&nbsp;MB.
+  </p>
+  {% if imported %}
+  <p class="text-sm">Import successful — {{ box_count }} box{{ '' if box_count == 1 else 'es' }}, {{ item_count }} item{{ '' if item_count == 1 else 's' }} loaded.</p>
+  {% endif %}
+  <form method="post" action="/maintenance/import" enctype="multipart/form-data"
+        onsubmit="return confirm('This will REPLACE your current database. A backup file will be created alongside it. Proceed?');">
+    <input type="file" name="file" accept=".db,.sqlite,.zip" required style="margin-bottom:0.5rem;">
+    <button type="submit" class="btn btn-danger btn-block">Import &amp; restore</button>
+  </form>
+</div>
+
+<div class="card">
   <div class="card-title" style="margin-bottom:0.5rem;">Cleanup</div>
   <dl class="stat-row">
     <div><dt>Items</dt><dd>{{ item_count }}</dd></div>

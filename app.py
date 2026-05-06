@@ -1046,7 +1046,7 @@ def _referenced_uploads() -> set[str]:
 
 
 @app.get("/maintenance", response_class=HTMLResponse)
-def maintenance(request: Request, cleaned: str = "", update: str = ""):
+def maintenance(request: Request, cleaned: str = "", update: str = "", imported: str = ""):
     with db() as conn:
         item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
         box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
@@ -1059,6 +1059,7 @@ def maintenance(request: Request, cleaned: str = "", update: str = ""):
             "files_on_disk": on_disk, "files_referenced": referenced,
             "orphan_count": max(0, on_disk - referenced),
             "cleaned": cleaned,
+            "imported": imported,
             "version": VERSION,
             "git_sha": GIT_SHA[:7] if GIT_SHA else "",
             "update_enabled": bool(WATCHTOWER_URL),
@@ -1114,3 +1115,121 @@ def maintenance_export():
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="stash-backup-{stamp}.zip"'},
     )
+
+
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+_ZIP_MAGIC = b"PK\x03\x04"
+
+
+def _validate_sqlite_file(path: Path) -> None:
+    """Raise HTTPException unless `path` is a SQLite DB with a `boxes` table."""
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='boxes'"
+            ).fetchone()
+            if not row:
+                raise HTTPException(400, "Database is missing the boxes table — not a stash backup")
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise HTTPException(400, f"Database failed integrity check: {integrity[0] if integrity else 'unknown'}")
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as e:
+        raise HTTPException(400, f"Not a valid SQLite database: {e}")
+
+
+def _backup_current_db() -> Path | None:
+    """Copy the live DB to stash.db.bak-<timestamp> so a bad import is recoverable."""
+    if not DB_PATH.exists():
+        return None
+    from datetime import datetime
+    import shutil
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = DB_PATH.with_name(f"{DB_PATH.name}.bak-{stamp}")
+    shutil.copy2(DB_PATH, backup)
+    return backup
+
+
+def _replace_db_from_bytes(db_bytes: bytes) -> None:
+    """Validate, back up, then copy the uploaded DB into the live location.
+
+    Uses SQLite's online backup API rather than `os.replace` — on Windows the
+    live DB file is held open by any active connection, which makes a rename
+    fail with `PermissionError`. `Connection.backup()` swaps page contents
+    through the SQLite library and is safe even with concurrent readers."""
+    if not db_bytes.startswith(_SQLITE_MAGIC):
+        raise HTTPException(400, "File is not a SQLite database")
+    tmp = DB_PATH.with_name(f"{DB_PATH.name}.import-tmp")
+    tmp.write_bytes(db_bytes)
+    try:
+        _validate_sqlite_file(tmp)
+        _backup_current_db()
+        src = sqlite3.connect(tmp)
+        dst = sqlite3.connect(DB_PATH)
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+    migrate_db()
+
+
+def _restore_uploads_from_zip(zf) -> int:
+    """Extract `uploads/<name>` entries into UPLOAD_DIR. Returns count restored.
+    Skips entries with hostile names (path traversal, suspicious chars)."""
+    upload_root = UPLOAD_DIR.resolve()
+    count = 0
+    for name in zf.namelist():
+        if not name.startswith("uploads/") or name.endswith("/"):
+            continue
+        base = name[len("uploads/"):]
+        if "/" in base or "\\" in base or ".." in base or not _UPLOAD_NAME_RE.match(base):
+            continue
+        target = (UPLOAD_DIR / base).resolve()
+        if not target.is_relative_to(upload_root):
+            continue
+        target.write_bytes(zf.read(name))
+        count += 1
+    return count
+
+
+@app.post("/maintenance/import")
+async def maintenance_import(file: UploadFile = File(...)):
+    """Replace the live DB (and optionally uploads/) from a `.db` or backup `.zip`.
+
+    The current DB is copied to `stash.db.bak-<timestamp>` before replacement so
+    a botched import can be reverted by hand. Caddy caps request bodies at 50MB
+    upstream — match that here so we fail with a clean 413 rather than mid-write."""
+    if not file or not file.filename:
+        raise HTTPException(400, "File required")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Upload too large")
+    if not data:
+        raise HTTPException(400, "File is empty")
+
+    if data.startswith(_ZIP_MAGIC):
+        import io as _io
+        import zipfile
+        try:
+            zf = zipfile.ZipFile(_io.BytesIO(data))
+        except zipfile.BadZipFile:
+            raise HTTPException(400, "File is not a valid zip archive")
+        with zf:
+            if "stash.db" not in zf.namelist():
+                raise HTTPException(400, "Zip is missing stash.db — not a stash backup")
+            _replace_db_from_bytes(zf.read("stash.db"))
+            _restore_uploads_from_zip(zf)
+    elif data.startswith(_SQLITE_MAGIC):
+        _replace_db_from_bytes(data)
+    else:
+        raise HTTPException(400, "File must be a SQLite .db or a stash backup .zip")
+
+    return RedirectResponse("/maintenance?imported=1", status_code=303)
