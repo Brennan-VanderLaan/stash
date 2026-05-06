@@ -8,14 +8,14 @@
     <label>Room
       <select name="room_id">
         <option value="">— none —</option>
-        {% set current_loc = none %}
         {% for r in rooms %}
-          {% if r.location_id != current_loc %}
+          {% if loop.first or loop.previtem.location_id != r.location_id %}
             {% if not loop.first %}</optgroup>{% endif %}
             <optgroup label="{{ r.location_name }}">
-            {% set current_loc = r.location_id %}
           {% endif %}
-          <option value="{{ r.id }}">{{ r.name }}</option>
+          <option value="{{ r.id }}">
+            {{ r.name }}{% if r.needs_floor_disambiguation and r.floor_name %} ({{ r.floor_name }}){% endif %}
+          </option>
           {% if loop.last %}</optgroup>{% endif %}
         {% endfor %}
       </select>
@@ -34,15 +34,18 @@
 <ul class="box-list">
   {% for b in boxes %}
   <li>
-    <a href="/boxes/{{ b.id }}" class="box-card">
-      <div>
-        <div class="box-name">{{ b.name }}</div>
+    <a href="/boxes/{{ b.id }}" class="box-card"
+       style="--room-color: {{ b.room_color or '#4ade80' }};">
+      <div class="box-card-body">
+        <div class="box-card-head">
+          <div class="box-name">{{ b.name }}</div>
+          <span class="box-card-count" aria-label="{{ b.item_count }} items">{{ b.item_count }}</span>
+        </div>
         <div class="box-meta">
-          {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
           {% if b.room_name %}
-            · <span class="room-chip" style="--room-color: {{ b.room_color or '#4ade80' }};">{{ b.room_name }}</span>
-            {% if b.location_name %}<span class="text-muted"> in {{ b.location_name }}</span>{% endif %}
-          {% elif b.location %} · {{ b.location }}{% endif %}
+            <span class="room-chip">{{ b.room_name }}</span>
+            {% if b.location_name %}<span class="text-muted">in {{ b.location_name }}</span>{% endif %}
+          {% elif b.location %}<span class="text-muted">{{ b.location }}</span>{% endif %}
         </div>
         {% set box_thumbs = thumbs.get(b.id, []) %}
         {% if box_thumbs %}
@@ -56,6 +59,7 @@
         </div>
         {% endif %}
       </div>
+      <span class="box-card-chevron" aria-hidden="true">›</span>
     </a>
   </li>
   {% endfor %}

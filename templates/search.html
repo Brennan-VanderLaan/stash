@@ -36,15 +36,18 @@
       <span class="search-filter-label">Room</span>
       <select name="room_id" data-filter="room">
         <option value="">All</option>
-        {% set seen_loc = none %}
+        {# Group by location. `loop.previtem` is the only Jinja-correct way
+           to do "did the bucket key just change?" inside a for loop —
+           {% set %} doesn't persist across iterations. #}
         {% for r in all_rooms %}
-          {% if r.location_id != seen_loc %}
+          {% if loop.first or loop.previtem.location_id != r.location_id %}
             {% if not loop.first %}</optgroup>{% endif %}
             <optgroup label="{{ r.location_name }}">
-            {% set seen_loc = r.location_id %}
           {% endif %}
-          <option value="{{ r.id }}" data-location="{{ r.location_id }}"
-                  {% if r.id == room_id %}selected{% endif %}>{{ r.name }}</option>
+          <option value="{{ r.id }}" data-location-id="{{ r.location_id }}"
+                  {% if r.id == room_id %}selected{% endif %}>
+            {{ r.name }}{% if r.needs_floor_disambiguation and r.floor_name %} ({{ r.floor_name }}){% endif %}
+          </option>
           {% if loop.last %}</optgroup>{% endif %}
         {% endfor %}
       </select>
@@ -53,11 +56,21 @@
       <span class="search-filter-label">Box</span>
       <select name="box_id" data-filter="box">
         <option value="">All</option>
+        {# Same optgroup pattern, keyed on location so boxes in the same
+           place stay together. JS uses data-location-id / data-room-id
+           to cascade visibility from the Location and Room pickers. #}
         {% for b in all_boxes %}
-        <option value="{{ b.id }}"
-                data-location-name="{{ b.location_name or '' }}"
-                data-room-name="{{ b.room_name or '' }}"
-                {% if b.id == box_id %}selected{% endif %}>{{ b.name }}{% if b.room_name %} — {{ b.room_name }}{% endif %}</option>
+          {% if loop.first or (loop.previtem.location_id or 0) != (b.location_id or 0) %}
+            {% if not loop.first %}</optgroup>{% endif %}
+            <optgroup label="{{ b.location_name or 'Unassigned' }}">
+          {% endif %}
+          <option value="{{ b.id }}"
+                  data-location-id="{{ b.location_id or '' }}"
+                  data-room-id="{{ b.room_id or '' }}"
+                  {% if b.id == box_id %}selected{% endif %}>
+            {{ b.name }}{% if b.room_name %} — {{ b.room_name }}{% endif %}
+          </option>
+          {% if loop.last %}</optgroup>{% endif %}
         {% endfor %}
       </select>
     </label>
@@ -96,7 +109,8 @@
   {% endif %}
   {% if room_id %}
     {% for r in all_rooms if r.id == room_id %}
-      {% set _ = active_filters.append({"label": "room: " ~ r.name, "name": "room_id"}) %}
+      {% set room_label = r.name + (' (' + r.floor_name + ')' if r.needs_floor_disambiguation and r.floor_name else '') %}
+      {% set _ = active_filters.append({"label": "room: " ~ room_label, "name": "room_id"}) %}
     {% endfor %}
   {% endif %}
   {% if location_id %}
@@ -179,20 +193,48 @@
 
   function filterDependent() {
     const loc = locSel.value;
+    const room = roomSel.value;
+
+    // Room dropdown narrows by selected Location.
     Array.from(roomSel.querySelectorAll('option')).forEach(opt => {
-      if (!opt.value) return;  // "All"
-      const ok = !loc || opt.dataset.location === loc;
+      if (!opt.value) return;
+      const ok = !loc || opt.dataset.locationId === loc;
       opt.hidden = !ok;
     });
-    // If the currently-selected room got hidden, clear it
+    // The optgroup itself should hide when none of its options match.
+    Array.from(roomSel.querySelectorAll('optgroup')).forEach(g => {
+      const visible = Array.from(g.children).some(o => !o.hidden && o.value);
+      g.hidden = !visible;
+    });
     if (roomSel.selectedOptions[0] && roomSel.selectedOptions[0].hidden) {
       roomSel.value = '';
     }
-    // Box dropdown can't easily be cascaded against location_id without
-    // cross-references in the data; rely on the result list narrowing
-    // for that case rather than complicating the UI.
+
+    // Box dropdown narrows by EITHER selected Location OR Room (whichever is
+    // tighter). If a room is selected, it implies a location, so room wins.
+    Array.from(boxSel.querySelectorAll('option')).forEach(opt => {
+      if (!opt.value) return;
+      let ok = true;
+      if (room) {
+        ok = opt.dataset.roomId === room;
+      } else if (loc) {
+        ok = opt.dataset.locationId === loc;
+      }
+      opt.hidden = !ok;
+    });
+    Array.from(boxSel.querySelectorAll('optgroup')).forEach(g => {
+      const visible = Array.from(g.children).some(o => !o.hidden && o.value);
+      g.hidden = !visible;
+    });
+    if (boxSel.selectedOptions[0] && boxSel.selectedOptions[0].hidden) {
+      boxSel.value = '';
+    }
   }
-  locSel.addEventListener('change', () => { filterDependent(); submit(); });
+  // The generic change-handler below calls submit() — we just need to
+  // run filterDependent BEFORE that submit so the dependent dropdowns
+  // settle to the right values. Wire it on the two selects that matter.
+  locSel.addEventListener('change', filterDependent);
+  roomSel.addEventListener('change', filterDependent);
   filterDependent();
 
   // ── Submit pipeline ───────────────────────────────────────────────

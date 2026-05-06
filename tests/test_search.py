@@ -197,6 +197,65 @@ def test_search_active_filter_chips_render(client):
     assert 'data-clear-filter="has_photo"' in page
 
 
+def test_room_dropdown_uses_optgroups_not_per_option_labels(client):
+    """Regression for the screenshot bug where '6 Edgehill Rd' appeared
+    above every single room option because Jinja {% set %} doesn't persist
+    across loop iterations. With loop.previtem the optgroup opens once
+    per location."""
+    _seed(client)
+    page = client.get("/search").text
+    # House has 2 rooms, Storage unit has 1 room → two optgroups in the
+    # Room dropdown (we can't easily count exactly, but at least each
+    # location's name should appear at most once per <select>).
+    import re
+    room_select = re.search(
+        r'<select name="room_id"[^>]*>(.*?)</select>', page, re.S
+    )
+    assert room_select, "room dropdown not found"
+    fragment = room_select.group(1)
+    # An <optgroup label="House"> should appear exactly once even though
+    # House contains multiple rooms.
+    assert fragment.count('<optgroup label="House">') == 1
+    assert fragment.count('<optgroup label="Storage unit">') == 1
+
+
+def test_box_dropdown_options_carry_location_and_room_ids(client):
+    """The box dropdown's data-location-id / data-room-id attributes are
+    what the JS uses to cascade filtering. They have to be on every option."""
+    _seed(client)
+    page = client.get("/search").text
+    import re
+    # Pull the box dropdown's options
+    box_select = re.search(
+        r'<select name="box_id"[^>]*>(.*?)</select>', page, re.S
+    )
+    assert box_select
+    fragment = box_select.group(1)
+    # Each non-"All" option should have both data attributes
+    options = re.findall(r'<option value="(\d+)"[^>]*>', fragment)
+    assert len(options) >= 4, f"expected at least 4 box options, got {options}"
+    for box_id in options:
+        m = re.search(rf'<option value="{box_id}"([^>]*)>', fragment)
+        attrs = m.group(1)
+        assert "data-location-id=" in attrs, f"box {box_id} missing data-location-id"
+        assert "data-room-id=" in attrs, f"box {box_id} missing data-room-id"
+
+
+def test_room_dropdown_disambiguates_same_named_rooms(client):
+    """Two 'Bathroom' rooms on different floors of the same location must be
+    distinguishable in the picker — the option text gets a floor suffix."""
+    client.post("/locations", data={"name": "House"})
+    client.post("/locations/1/floors", data={"name": "Ground"})
+    client.post("/locations/1/floors", data={"name": "Upstairs"})
+    client.post("/floors/1/rooms", data={"name": "Bathroom", "x": 0, "y": 0, "w": 0.2, "h": 0.2})
+    client.post("/floors/2/rooms", data={"name": "Bathroom", "x": 0, "y": 0, "w": 0.2, "h": 0.2})
+
+    page = client.get("/search").text
+    # Both Bathrooms appear with their floor in parentheses
+    assert "Bathroom (Ground)" in page or "(Ground)" in page
+    assert "Bathroom (Upstairs)" in page or "(Upstairs)" in page
+
+
 def test_search_empty_state_distinguishes_no_filters_vs_no_match(client):
     """Two distinct empty states: 'no filters yet, type something' vs 'your
     filters are active but nothing matched'. The mascot copy should differ."""

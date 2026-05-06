@@ -333,38 +333,100 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   .box-list { grid-template-columns: repeat(3, 1fr); gap: 0.7rem; }
 }
 .box-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem;
+  gap: 0.5rem;
+  padding: 0.85rem 0.6rem 0.85rem 1.1rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   text-decoration: none;
   color: var(--text);
   min-height: 56px;
-  transition: background 0.15s, border-color 0.15s, transform 0.12s;
+  position: relative;
+  overflow: hidden;
+  transition: background 0.15s, border-color 0.15s, transform 0.12s,
+              box-shadow 0.15s;
+}
+/* Left-edge stripe in the room's accent color — ties the .room-chip inside
+   to the card's identity. Falls back to global accent for unassigned boxes. */
+.box-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--room-color, var(--accent));
+  opacity: 0.85;
+  transition: width 0.15s, opacity 0.15s;
 }
 .box-card:hover {
   background: var(--panel-2);
-  border-color: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--room-color, var(--accent)) 50%, var(--border));
   transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25),
+              0 0 0 1px color-mix(in srgb, var(--room-color, var(--accent)) 25%, transparent);
 }
+.box-card:hover::before { width: 6px; opacity: 1; }
 .box-card:active { transform: translateY(0); }
-.box-card > div:first-child { min-width: 0; flex: 1; }
+
+.box-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.box-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
 .box-name {
   font-weight: 600;
   color: var(--accent);
-  font-size: 1rem;
+  font-size: 1.05rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.box-card-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--room-color, var(--accent));
+  background: color-mix(in srgb, var(--room-color, var(--accent)) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--room-color, var(--accent)) 35%, transparent);
+  padding: 0.1rem 0.55rem;
+  border-radius: 100px;
+  flex-shrink: 0;
 }
 .box-meta {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   color: var(--muted);
-  margin-top: 0.15rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.box-meta .room-chip { --room-color: var(--room-color); }
+
+.box-card-chevron {
+  font-size: 1.6rem;
+  font-weight: 300;
+  color: var(--muted);
+  opacity: 0.55;
+  padding: 0 0.25rem;
+  transition: color 0.15s, opacity 0.15s, transform 0.15s;
+  flex-shrink: 0;
+}
+.box-card:hover .box-card-chevron {
+  color: var(--room-color, var(--accent));
+  opacity: 1;
+  transform: translateX(3px);
 }
 
 /* === Item thumbs (shared with search / tags / audit) === */
@@ -382,30 +444,37 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 /* === Box-list thumbnail strip === */
 .box-thumbs {
   display: flex;
-  gap: 0.35rem;
-  margin-top: 0.5rem;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
   flex-wrap: nowrap;
   overflow: hidden;
+  /* Stretch thumbs across the available width — each one auto-fits up to
+     a max so the strip doesn't leave a gaping void on the right. */
 }
 .box-thumbs img {
-  width: 40px;
-  height: 40px;
+  flex: 1 1 0;
+  width: 0;            /* let flex distribute; min-width handles minimum */
+  min-width: 48px;
+  max-width: 64px;
+  aspect-ratio: 1 / 1;
+  height: auto;
   border-radius: var(--radius-sm);
   object-fit: cover;
-  flex-shrink: 0;
   border: 1px solid var(--border);
 }
 .box-thumbs-more {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  height: 40px;
+  min-width: 48px;
+  aspect-ratio: 1 / 1;
   padding: 0 0.5rem;
   border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
   border: 1px solid var(--border);
 }
 

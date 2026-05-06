@@ -1347,7 +1347,9 @@ def search(
         all_rooms = _rooms_for_picker(conn)
         all_boxes = [
             dict(r) for r in conn.execute(
-                "SELECT b.id, b.name, l.name AS location_name, r.name AS room_name "
+                "SELECT b.id, b.name, "
+                "       l.id AS location_id, l.name AS location_name, "
+                "       r.id AS room_id, r.name AS room_name "
                 "FROM boxes b "
                 "LEFT JOIN rooms r ON r.id = b.room_id "
                 "LEFT JOIN locations l ON l.id = r.location_id "
@@ -1777,13 +1779,31 @@ def _locations_with_room_counts(conn) -> list[dict]:
 
 
 def _rooms_for_picker(conn) -> list[dict]:
-    """Flat list suitable for an optgroup'd select: room id, room name, location name."""
+    """Flat list suitable for an optgroup'd select. Includes floor name so a
+    location with two rooms of the same name (e.g. two "Bathroom"s on
+    different floors) can be visually disambiguated in the dropdown."""
     rows = conn.execute(
-        "SELECT r.id, r.name, l.id AS location_id, l.name AS location_name "
-        "FROM rooms r JOIN locations l ON l.id = r.location_id "
-        "ORDER BY l.name, r.name"
+        "SELECT r.id, r.name, "
+        "       l.id AS location_id, l.name AS location_name, "
+        "       f.name AS floor_name "
+        "FROM rooms r "
+        "JOIN locations l ON l.id = r.location_id "
+        "LEFT JOIN floors f ON f.id = r.floor_id "
+        "ORDER BY l.name, f.name IS NULL, f.name, r.name"
     ).fetchall()
-    return [dict(r) for r in rows]
+    rooms = [dict(r) for r in rows]
+
+    # Mark each room with whether its name collides with another room in the
+    # same location — the template uses this flag to append the floor name so
+    # the user can tell them apart.
+    by_loc_name: dict[tuple, int] = {}
+    for r in rooms:
+        key = (r["location_id"], r["name"].casefold())
+        by_loc_name[key] = by_loc_name.get(key, 0) + 1
+    for r in rooms:
+        key = (r["location_id"], r["name"].casefold())
+        r["needs_floor_disambiguation"] = by_loc_name[key] > 1
+    return rooms
 
 
 @app.get("/locations", response_class=HTMLResponse)

@@ -18,11 +18,12 @@
 <ul class="box-list">
   {% for b in boxes %}
   <li>
-    <a href="/boxes/{{ b.id }}" class="box-card">
-      <div>
-        <div class="box-name">{{ b.name }}</div>
-        <div class="box-meta">
-          {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
+    <a href="/boxes/{{ b.id }}" class="box-card"
+       style="--room-color: {{ room.color or '#4ade80' }};">
+      <div class="box-card-body">
+        <div class="box-card-head">
+          <div class="box-name">{{ b.name }}</div>
+          <span class="box-card-count">{{ b.item_count }}</span>
         </div>
         {% set box_thumbs = thumbs.get(b.id, []) %}
         {% if box_thumbs %}
@@ -36,6 +37,7 @@
         </div>
         {% endif %}
       </div>
+      <span class="box-card-chevron" aria-hidden="true">›</span>
     </a>
   </li>
   {% endfor %}
