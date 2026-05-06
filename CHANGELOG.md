@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.12.1...v0.13.0) (2026-05-06)
+
+
+### Features
+
+* floorplan game-UI — pan + zoom + boxes-as-tiles + tap preview ([54130fc](https://github.com/Brennan-VanderLaan/stash/commit/54130fc385b78de9248254f772bc4ab6437c8da7))
+* room color picker in the edit modal ([b2e2066](https://github.com/Brennan-VanderLaan/stash/commit/b2e2066fdba916ecd54fa69ada338132555903bb))
+* search results open in a modal instead of navigating away ([352f1a2](https://github.com/Brennan-VanderLaan/stash/commit/352f1a29eaa9a63c0050da4cde1725f66094aed4))
+
 ## [0.12.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.12.0...v0.12.1) (2026-05-06)
 
 
