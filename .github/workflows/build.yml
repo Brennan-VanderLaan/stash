@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # enrich-release edits the GitHub release body
   packages: write
 
 env:
@@ -54,3 +54,19 @@ jobs:
             GIT_SHA=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  enrich-release:
+    # Wraps the release-please-generated release body with container-image
+    # pull commands and a deploy snippet, so each GitHub release page tells
+    # the full story: what changed, what was built, how to roll it out.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update release notes with image + deploy info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          GIT_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/enrich_release.py
