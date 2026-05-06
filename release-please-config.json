@@ -8,7 +8,7 @@
       "package-name": "stash",
       "extra-files": [
         {
-          "type": "generic",
+          "type": "version-txt",
           "path": "VERSION"
         }
       ],
