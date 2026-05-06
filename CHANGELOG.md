@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.0...v0.9.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* stop OOM-killing the container on first thumb load ([4ae35df](https://github.com/Brennan-VanderLaan/stash/commit/4ae35dfe922263dc668524f893caa0e121c83607))
+
 ## [0.9.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.8.0...v0.9.0) (2026-05-06)
 
 
