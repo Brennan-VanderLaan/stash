@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.5.0...v0.6.0) (2026-05-06)
+
+
+### Features
+
+* lighter, more readable maintenance page + changelog styling ([ce55147](https://github.com/Brennan-VanderLaan/stash/commit/ce55147d9eff935b6546212309f311a976968d54))
+
+
+### Bug Fixes
+
+* pin DOCKER_API_VERSION on watchtower so the daemon stops rejecting it ([c50d495](https://github.com/Brennan-VanderLaan/stash/commit/c50d49529b5d1e35cbc342c4e76b5eaee7112854))
+
 ## [0.5.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.4.0...v0.5.0) (2026-05-06)
 
 
