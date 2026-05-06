@@ -2,13 +2,15 @@
 {% block title %}Maintenance · Stash{% endblock %}
 {% block content %}
 
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Version</div>
-  <dl class="stat-row">
-    <div><dt>Running</dt><dd>{{ version }}{% if git_sha %} <span class="text-muted">({{ git_sha }})</span>{% endif %}</dd></div>
-  </dl>
+<div class="card maintenance-card">
+  <div class="card-title">Version</div>
+  <div class="version-display">
+    <span class="version-label">Running</span>
+    <span class="version-value">{{ version }}</span>
+    {% if git_sha %}<span class="version-sha">{{ git_sha }}</span>{% endif %}
+  </div>
   {% if update_status == "triggered" %}
-  <p class="text-sm text-muted">Update check started. If a new image is available, the app will restart shortly — refresh in ~30s.</p>
+  <div class="notice">Update check started. If a new image is available, the app will restart shortly — refresh in ~30s.</div>
   {% elif update_status == "disabled" %}
   <p class="text-sm text-muted">Updates are not configured (no <code>WATCHTOWER_URL</code> set).</p>
   {% endif %}
@@ -22,10 +24,10 @@
 </div>
 
 {% if changelog_html %}
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Changelog</div>
+<div class="card maintenance-card">
+  <div class="card-title">Changelog</div>
   <details>
-    <summary class="text-sm text-muted" style="cursor:pointer;">Show release notes</summary>
+    <summary class="disclosure">Show release notes</summary>
     <div class="changelog">
       {{ changelog_html | safe }}
     </div>
@@ -33,34 +35,34 @@
 </div>
 {% endif %}
 
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Backup</div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+<div class="card maintenance-card">
+  <div class="card-title">Backup</div>
+  <p class="text-sm text-muted">
     Downloads a zip containing <code>stash.db</code> and every referenced photo in
     <code>uploads/</code>. Unzip into the app directory to restore.
   </p>
   <a href="/maintenance/export" class="btn btn-primary btn-block" download>Download backup</a>
 </div>
 
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Restore</div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+<div class="card maintenance-card">
+  <div class="card-title">Restore</div>
+  <p class="text-sm text-muted">
     Upload a SQLite <code>.db</code> file or a backup <code>.zip</code> to replace the
     running database. The current DB is saved to
     <code>stash.db.bak-&lt;timestamp&gt;</code> first. Max 50&nbsp;MB.
   </p>
   {% if imported %}
-  <p class="text-sm">Import successful — {{ box_count }} box{{ '' if box_count == 1 else 'es' }}, {{ item_count }} item{{ '' if item_count == 1 else 's' }} loaded.</p>
+  <div class="notice">Import successful — {{ box_count }} box{{ '' if box_count == 1 else 'es' }}, {{ item_count }} item{{ '' if item_count == 1 else 's' }} loaded.</div>
   {% endif %}
   <form method="post" action="/maintenance/import" enctype="multipart/form-data"
         onsubmit="return confirm('This will REPLACE your current database. A backup file will be created alongside it. Proceed?');">
-    <input type="file" name="file" accept=".db,.sqlite,.zip" required style="margin-bottom:0.5rem;">
+    <input type="file" name="file" accept=".db,.sqlite,.zip" required>
     <button type="submit" class="btn btn-danger btn-block">Import &amp; restore</button>
   </form>
 </div>
 
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Cleanup</div>
+<div class="card maintenance-card">
+  <div class="card-title">Cleanup</div>
   <dl class="stat-row">
     <div><dt>Items</dt><dd>{{ item_count }}</dd></div>
     <div><dt>Boxes</dt><dd>{{ box_count }}</dd></div>

@@ -664,3 +664,171 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .stat-row dt { font-size: 0.75rem; color: var(--muted); }
 .stat-row dd { font-size: 1.2rem; font-weight: 600; margin: 0; }
+
+/* === Maintenance page polish === */
+.maintenance-card .card-title { margin-bottom: 0.5rem; }
+.maintenance-card p { margin-bottom: 0.75rem; }
+.maintenance-card code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+.maintenance-card input[type="file"] { margin-bottom: 0.5rem; }
+.notice {
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-left: 2px solid var(--accent);
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+}
+
+/* === Disclosure toggle (used by changelog summary) === */
+.disclosure {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+.disclosure::-webkit-details-marker { display: none; }
+.disclosure::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+}
+details[open] > .disclosure::before { transform: rotate(90deg); }
+.disclosure:hover { color: var(--accent); }
+
+/* === Changelog (release notes) === */
+.changelog {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+/* The card title already says "Changelog"; suppress the duplicate h1 from the
+   rendered markdown source. */
+.changelog > h1 { display: none; }
+
+.changelog h2 {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+  margin: 1.25rem 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.changelog h2:first-of-type { margin-top: 0; }
+.changelog h2 a {
+  color: var(--accent);
+  text-decoration: none;
+  background: var(--accent-dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 100px;
+  letter-spacing: 0.02em;
+}
+.changelog h2 a:hover { background: var(--accent); color: #0a1810; }
+
+.changelog h3 {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 0.85rem 0 0.4rem;
+}
+
+.changelog ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.changelog li {
+  position: relative;
+  padding-left: 1rem;
+  color: var(--text);
+}
+.changelog li::before {
+  content: "";
+  position: absolute;
+  left: 0.25rem;
+  top: 0.6em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+.changelog strong { color: var(--accent); font-weight: 600; }
+
+/* All inline links inside list items are commit hashes. Render them as a
+   subtle monospace pill so they don't compete with the message text. */
+.changelog li a {
+  color: var(--muted);
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0.02rem 0.4rem;
+  border-radius: 4px;
+  margin-left: 0.15rem;
+  vertical-align: 1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.changelog li a:hover { color: var(--accent); border-color: var(--accent); }
+.changelog p { color: var(--muted); margin-top: 0.5rem; font-size: 0.8rem; }
+
+/* === Version display === */
+.version-display {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.version-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.version-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+.version-sha {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  margin-left: auto;
+}
