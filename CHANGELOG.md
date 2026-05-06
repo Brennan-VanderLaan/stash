@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.4.0...v0.5.0) (2026-05-06)
+
+
+### Features
+
+* import a .db file or backup zip from the maintenance page ([f065ac1](https://github.com/Brennan-VanderLaan/stash/commit/f065ac1a938cac18d2256f11f63972da29223ecd))
+
+
+### Bug Fixes
+
+* allow PING + VERSION on docker-socket-proxy so watchtower can update ([9ca66f2](https://github.com/Brennan-VanderLaan/stash/commit/9ca66f23788a25d1448f9cec7be1bf067bf0ed7c))
+
 ## [0.4.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.3.0...v0.4.0) (2026-05-06)
 
 
