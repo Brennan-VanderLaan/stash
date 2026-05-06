@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.7.0...v0.8.0) (2026-05-06)
+
+
+### Features
+
+* labels page overhaul + multi-page printing + Nano Banana 2 art ([b4ca9f1](https://github.com/Brennan-VanderLaan/stash/commit/b4ca9f17e141f9b289289df79406f2c2455b762e))
+* pencil + watercolor style for label art, clearer regen button ([6783808](https://github.com/Brennan-VanderLaan/stash/commit/67838080fe8199f23e496af17140c3ca52d273df))
+
+
+### Bug Fixes
+
+* make Caddy's per-path body caps mutually exclusive ([a280518](https://github.com/Brennan-VanderLaan/stash/commit/a2805183fde829c4909fb4d15187f97dad378c3f))
+* simpler Caddyfile body-size scoping for /maintenance/import ([b9a2157](https://github.com/Brennan-VanderLaan/stash/commit/b9a21577452e2883cc467081c2cb926fe3545934))
+
 ## [0.7.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.6.0...v0.7.0) (2026-05-06)
 
 
