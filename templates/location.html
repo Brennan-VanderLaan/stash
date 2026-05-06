@@ -103,11 +103,28 @@
           <div class="room-rect-boxes">
             {% for b in r['boxes'] %}
             <button type="button" class="room-box-tile" data-box-id="{{ b.id }}"
+                    style="--tile-color: {{ b.color or r.color or '#4ade80' }};"
                     title="{{ b.name }} · {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}">
-              <span class="room-box-tile-name">{{ b.name }}</span>
-              {% if b.item_count %}
-              <span class="room-box-tile-count">{{ b.item_count }}</span>
-              {% endif %}
+              <span class="room-box-tile-head">
+                <span class="room-box-tile-name">{{ b.name }}</span>
+                {% if b.item_count %}
+                <span class="room-box-tile-count">{{ b.item_count }}</span>
+                {% endif %}
+              </span>
+              {# Detail rows revealed at higher zoom tiers — server emits
+                 them all and CSS hides at low zoom. #}
+              <span class="room-box-tile-detail">
+                {% if b.last_audited_at %}
+                <span class="room-box-tile-meta">
+                  ✓ {{ b.last_audited_at[:10] }}
+                </span>
+                {% endif %}
+                {% if b.created_at %}
+                <span class="room-box-tile-meta">
+                  + {{ b.created_at[:10] }}
+                </span>
+                {% endif %}
+              </span>
             </button>
             {% endfor %}
           </div>
@@ -268,6 +285,13 @@
     const cy = anchorClientY !== undefined ? anchorClientY - vRect.top  : vRect.height / 2;
     zoom = newZoom;
     stage.style.setProperty('--zoom', zoom);
+    // Drive a "level of detail" tier from the zoom so the box tiles can
+    // reveal more info (count, audit dates, etc) as the user zooms in.
+    stage.dataset.zoomTier = (
+      zoom < 1.5 ? 0 :
+      zoom < 2.5 ? 1 :
+      zoom < 3.5 ? 2 : 3
+    );
     if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
     // Adjust scroll so the anchored pixel stays under the cursor.
     const factor = newZoom / oldZoom;
@@ -282,13 +306,52 @@
     viewport.scrollTo({ left: 0, top: 0 });
   }
 
-  // Wheel: Ctrl/⌘+wheel zooms (matches the trackpad pinch convention);
-  // plain wheel scrolls the viewport.
+  // Wheel = zoom anchored on cursor (Google Maps / Figma style).
+  // No modifier required, since pan happens via click+drag below.
   viewport.addEventListener('wheel', (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
-    setZoom(zoom * (e.deltaY < 0 ? 1.12 : 0.9), e.clientX, e.clientY);
+    const factor = Math.exp(-e.deltaY * 0.0015);  // smooth, momentum-aware
+    setZoom(zoom * factor, e.clientX, e.clientY);
   }, { passive: false });
+
+  // ── Click + drag pan (view mode only) ─────────────────────────────
+  // Edit mode keeps its draw/move/resize pointer handlers on .stage.
+  // For view mode we own the stage — pointerdown anywhere except a
+  // tile starts a pan; the viewport's scroll position follows the
+  // pointer so the dragged pixel stays under the cursor.
+  if (!isEdit) {
+    let pan = null;
+    stage.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      // Tiles handle their own click; don't hijack with pan
+      if (e.target.closest('.room-box-tile')) return;
+      pan = {
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startScrollLeft: viewport.scrollLeft,
+        startScrollTop: viewport.scrollTop,
+        moved: false,
+      };
+      stage.setPointerCapture(e.pointerId);
+      stage.classList.add('panning');
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!pan) return;
+      const dx = e.clientX - pan.startClientX;
+      const dy = e.clientY - pan.startClientY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) pan.moved = true;
+      viewport.scrollLeft = pan.startScrollLeft - dx;
+      viewport.scrollTop = pan.startScrollTop - dy;
+    });
+    function endPan(e) {
+      if (!pan) return;
+      try { stage.releasePointerCapture(e.pointerId); } catch (_) {}
+      stage.classList.remove('panning');
+      pan = null;
+    }
+    stage.addEventListener('pointerup', endPan);
+    stage.addEventListener('pointercancel', endPan);
+  }
 
   // Pinch via Pointer Events. Tracks 2 simultaneous pointers on the
   // viewport; their distance ratio drives zoom, midpoint anchors it.
@@ -594,9 +657,13 @@
     return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   }
 
-  // View-mode click on a rect → jump to its boxes page
+  // View-mode click on a rect → jump to its boxes page. Tile clicks are
+  // handled separately above (modal preview), so skip them here — without
+  // this guard the rect handler navigates away on top of the modal,
+  // producing a "flash and gone" effect.
   if (!isEdit) {
     overlay.addEventListener('click', (e) => {
+      if (e.target.closest('.room-box-tile')) return;
       const rect = e.target.closest('.room-rect');
       if (!rect || rect === draft) return;
       window.location.href = `/rooms/${rect.dataset.roomId}/boxes`;

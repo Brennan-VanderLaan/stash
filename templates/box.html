@@ -59,9 +59,37 @@
       <input type="text" name="location" value="{{ box.location or '' }}" list="known-locations">
     </label>
     <label>Notes<textarea name="notes" rows="2">{{ box.notes or '' }}</textarea></label>
+    <div>
+      <span class="text-sm text-muted">Color
+        <span class="help-text">— defaults to the room color</span>
+      </span>
+      <div class="room-color-swatches">
+        <button type="button" class="room-swatch room-swatch-inherit
+                {% if not box.color %}active{% endif %}"
+                data-color-value="" title="Inherit room color">⤺</button>
+        {% for c in color_palette %}
+        <button type="button" class="room-swatch
+                {% if box.color == c %}active{% endif %}"
+                data-color-value="{{ c }}"
+                style="--swatch-color: {{ c }};" aria-label="Color {{ c }}"></button>
+        {% endfor %}
+      </div>
+      <input type="hidden" name="color" value="{{ box.color or '' }}" id="box-color-input">
+    </div>
     <button type="submit" class="btn btn-primary btn-block">Save</button>
   </form>
 </details>
+<script>
+(function() {
+  const input = document.getElementById('box-color-input');
+  if (!input) return;
+  const swatches = input.parentElement.querySelectorAll('.room-swatch');
+  swatches.forEach(s => s.addEventListener('click', () => {
+    input.value = s.dataset.colorValue;
+    swatches.forEach(b => b.classList.toggle('active', b === s));
+  }));
+})();
+</script>
 
 {# --- Add Item --- #}
 <details class="card">

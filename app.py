@@ -217,6 +217,9 @@ def migrate_db():
             "INTEGER REFERENCES floors(id) ON DELETE CASCADE",
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rooms_floor ON rooms(floor_id)")
+        # Per-box color override. Falls back to the room color when null,
+        # so boxes can choose to break out from their room's hue.
+        _add_column_if_missing(conn, "boxes", "color", "TEXT")
         # Backfill source_photo for items created before this column existed
         conn.execute(
             "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
@@ -687,6 +690,7 @@ def box_detail(request: Request, box_id: int):
             "locations": locations,
             "rooms": rooms,
             "all_tags": [r["name"] for r in all_tags],
+            "color_palette": _ROOM_COLORS,
         },
     )
 
@@ -698,10 +702,19 @@ def edit_box(
     location: str = Form(""),
     notes: str = Form(""),
     room_id: str = Form(""),
+    color: str = Form(""),
 ):
     if not name.strip():
         raise HTTPException(400, "Name required")
     rid = _coerce_room_id(room_id)
+    # "" / "inherit" wipes the override and falls back to the room color.
+    color_val: str | None
+    if color.strip() == "" or color.strip() == "inherit":
+        color_val = None
+    elif color.strip() in _ROOM_COLORS:
+        color_val = color.strip()
+    else:
+        color_val = None  # silently reject off-palette
     with db() as conn:
         if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
             raise HTTPException(404)
@@ -712,8 +725,8 @@ def edit_box(
             else:
                 rid = None
         conn.execute(
-            "UPDATE boxes SET name = ?, location = ?, notes = ?, room_id = ? WHERE id = ?",
-            (name.strip(), location.strip(), notes.strip(), rid, box_id),
+            "UPDATE boxes SET name = ?, location = ?, notes = ?, room_id = ?, color = ? WHERE id = ?",
+            (name.strip(), location.strip(), notes.strip(), rid, color_val, box_id),
         )
         conn.commit()
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
@@ -1919,7 +1932,8 @@ def location_detail(
             # Pull every box on this floor in one shot, then bucket by room
             # so each room rect can render its boxes as tiles inside it.
             box_rows = conn.execute(
-                "SELECT b.id, b.name, b.room_id, "
+                "SELECT b.id, b.name, b.room_id, b.color, "
+                "       b.created_at, b.last_audited_at, "
                 "       (SELECT COUNT(*) FROM items WHERE box_id = b.id) AS item_count "
                 "FROM boxes b "
                 "JOIN rooms r ON r.id = b.room_id "

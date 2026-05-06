@@ -1582,21 +1582,22 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   overflow: hidden;
 }
 .room-box-tile {
-  background: var(--room-color, var(--accent));
+  /* Tile color falls back through: explicit box override → room color
+     → global accent. The CSS variables stack so any level can win. */
+  background: var(--tile-color, var(--room-color, var(--accent)));
   color: #0a1810;
   border: none;
   border-radius: 4px;
-  padding: 0.2rem 0.4rem;
+  padding: 0.25rem 0.45rem;
   font: inherit;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.25rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
   text-align: left;
-  white-space: nowrap;
   overflow: hidden;
   min-width: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
@@ -1608,11 +1609,19 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   filter: brightness(1.08);
 }
 .room-box-tile:active { transform: translateY(0); }
+.room-box-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
+  min-width: 0;
+}
 .room-box-tile-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .room-box-tile-count {
   flex-shrink: 0;
@@ -1622,6 +1631,44 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-size: 0.65rem;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
+/* Detail rows — hidden at the lowest zoom tier, revealed as the user
+   zooms in. Tier 0 ≈ 1x, tier 1 ≈ 1.5x, tier 2 ≈ 2.5x, tier 3 ≈ 3.5x+. */
+.room-box-tile-detail {
+  display: none;
+  flex-direction: column;
+  font-size: 0.6rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+.room-box-tile-meta {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.6rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-zoom-tier="1"] .room-box-tile-name,
+[data-zoom-tier="2"] .room-box-tile-name,
+[data-zoom-tier="3"] .room-box-tile-name {
+  /* Name can wrap to fully fit at higher zooms */
+  white-space: normal;
+  text-overflow: clip;
+  overflow: visible;
+}
+[data-zoom-tier="2"] .room-box-tile-detail,
+[data-zoom-tier="3"] .room-box-tile-detail {
+  display: flex;
+}
+[data-zoom-tier="3"] .room-box-tile {
+  /* Tier 3 is "I really want to see everything" — bigger type */
+  font-size: 0.78rem;
+  padding: 0.4rem 0.55rem;
+}
+
+/* Pan cursor — view-mode stage is grabbable when not over a tile. */
+.floorplan-stage[data-edit="0"] { cursor: grab; }
+.floorplan-stage[data-edit="0"].panning { cursor: grabbing; }
+.floorplan-stage[data-edit="0"] .room-box-tile { cursor: pointer; }
 
 /* Box preview modal — same shape as the search item modal. */
 .floorplan-box-preview {
@@ -1754,6 +1801,16 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* "Inherit" pseudo-swatch — for boxes that fall back to the room color. */
+.room-swatch-inherit {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.room-swatch-inherit:hover { color: var(--text); }
 
 /* === Empty State === */
 .empty {

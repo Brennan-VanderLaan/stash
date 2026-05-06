@@ -472,6 +472,70 @@ def test_location_detail_renders_room_overlays(client):
     assert page.count('class="room-rect"') >= 2
 
 
+def test_box_color_override_persists_and_falls_back(client):
+    """Boxes can override the room color via /boxes/{id}/edit. Empty value
+    clears the override (falls back to room color). Off-palette values are
+    silently rejected to NULL."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+
+    # Set a palette color
+    client.post("/boxes/1/edit", data={
+        "name": "Tools", "room_id": "1", "color": "#fbbf24",
+    })
+    with client.app_module.db() as conn:
+        c = conn.execute("SELECT color FROM boxes WHERE id = 1").fetchone()[0]
+    assert c == "#fbbf24"
+
+    # Clear it back to inherit
+    client.post("/boxes/1/edit", data={
+        "name": "Tools", "room_id": "1", "color": "",
+    })
+    with client.app_module.db() as conn:
+        c = conn.execute("SELECT color FROM boxes WHERE id = 1").fetchone()[0]
+    assert c is None
+
+    # Off-palette gets nulled
+    client.post("/boxes/1/edit", data={
+        "name": "Tools", "room_id": "1", "color": "#abc123",
+    })
+    with client.app_module.db() as conn:
+        c = conn.execute("SELECT color FROM boxes WHERE id = 1").fetchone()[0]
+    assert c is None
+
+
+def test_floorplan_tile_uses_box_color_when_set(client):
+    """When a box has its own color, the floorplan tile uses it instead
+    of the room color. Tile inline style sets --tile-color."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+    client.post("/boxes/1/edit", data={
+        "name": "Tools", "room_id": "1", "color": "#f87171",
+    })
+    page = client.get(f"/locations/{loc_id}").text
+    # The room color is the auto-assigned palette entry (room 1 → #4ade80);
+    # the box override should win on the tile.
+    assert "--tile-color: #f87171" in page
+
+
+def test_floorplan_tiles_emit_audit_and_created_dates(client):
+    """Higher zoom tiers reveal box dates. The data has to be in the HTML
+    even at base zoom — CSS hides them until zoom-tier ≥ 2."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+    # Trigger an audit so last_audited_at is non-null
+    client.post(f"/boxes/1/audit", data={"found": "1"})  # no items, but stamps the box
+
+    page = client.get(f"/locations/{loc_id}").text
+    assert 'class="room-box-tile-detail"' in page
+    # Created date is always present
+    import re
+    assert re.search(r'class="room-box-tile-meta">\s*\+ \d{4}-\d{2}-\d{2}', page)
+
+
 def test_floorplan_view_mode_renders_box_tiles_inside_rooms(client):
     """View-mode floorplan now shows each room's boxes as tappable tiles
     inside the room rectangle. Edit mode hides them so the user can drag
