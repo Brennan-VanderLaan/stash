@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.10.0...v0.11.0) (2026-05-06)
+
+
+### Features
+
+* faceted search redesign + link color + room view parity ([2b7d535](https://github.com/Brennan-VanderLaan/stash/commit/2b7d535d0bc1f2802cb6d6c2442f8d8e7f91e3c8))
+
 ## [0.10.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.2...v0.10.0) (2026-05-06)
 
 
