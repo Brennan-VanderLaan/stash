@@ -10,6 +10,26 @@
 		max_size 50MB
 	}
 
+	# Security headers applied to every response. Layered defenses:
+	#   - HSTS forces HTTPS for the next year (preload-eligible).
+	#   - nosniff stops browsers from rendering uploaded bytes as anything
+	#     other than the declared Content-Type — closes the residual upload
+	#     XSS path even if a fallback served odd bytes.
+	#   - frame-ancestors 'none' blocks clickjacking (modern X-Frame-Options).
+	#   - Permissions-Policy locks down camera/mic/geo/FLoC at the platform
+	#     level — the app doesn't need any of these.
+	#   - Referrer-Policy avoids leaking the path (which can carry IDs)
+	#     to third-party assets.
+	#   - -Server hides "Caddy" from response headers.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		-Server
+	}
+
 	reverse_proxy oauth2-proxy:4180 {
 		header_up X-Real-IP {remote_host}
 	}
