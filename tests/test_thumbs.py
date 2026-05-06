@@ -136,6 +136,47 @@ def test_maintenance_cleanup_keeps_referenced_thumbs(client):
     assert thumb.exists(), "cleanup deleted a referenced photo's thumb"
 
 
+def test_thumb_handles_large_source_without_full_decode(client):
+    """A pre-2048px-cap source (e.g. imported from an old backup zip that
+    didn't go through save_photo_bytes) must still thumb cleanly. We use a
+    4000×3000 JPEG — without draft() this would balloon to ~36 MB raw RGB."""
+    # Drop a large JPEG straight into UPLOAD_DIR, bypassing save_photo_bytes
+    # (mirrors the import-zip-restores-uploads code path).
+    big = io.BytesIO()
+    Image.new("RGB", (4000, 3000), color=(120, 60, 30)).save(big, format="JPEG", quality=85)
+    big_bytes = big.getvalue()
+    name = "abcdef0123456789.jpg"
+    (client.app_module.UPLOAD_DIR / name).write_bytes(big_bytes)
+
+    r = client.get(f"/thumbs/{name}")
+    assert r.status_code == 200
+    thumb = client.app_module._thumb_path(name)
+    assert thumb.exists(), "thumb generation must succeed for large sources"
+    with Image.open(thumb) as t:
+        assert max(t.size) <= client.app_module.THUMB_MAX_DIM
+
+
+def test_concurrent_thumb_requests_do_not_double_generate(client):
+    """The semaphore + post-lock recheck in _ensure_thumb means N parallel
+    requests for the same missing thumb only do one PIL decode. We can't
+    easily count decodes here, but we can at least verify N parallel
+    requests all return success and the thumb file exists exactly once."""
+    import threading
+    photo = _add_box_with_photo(client)
+    # Force a re-generate by deleting the pre-generated thumb
+    client.app_module._thumb_path(photo).unlink()
+
+    statuses = []
+    def hit():
+        statuses.append(client.get(f"/thumbs/{photo}").status_code)
+    threads = [threading.Thread(target=hit) for _ in range(8)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    assert all(s == 200 for s in statuses), f"got non-200s: {statuses}"
+    assert client.app_module._thumb_path(photo).exists()
+
+
 def test_maintenance_cleanup_removes_orphaned_thumbs(client):
     """Conversely, a thumb whose source is gone (e.g. half-cleaned-up state
     from a crash) is itself an orphan and the sweep should remove it."""

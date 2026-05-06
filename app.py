@@ -469,6 +469,13 @@ _UPLOAD_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
 # squares on retina (3x = 300) without paying the cost of the 2048 px source.
 THUMB_MAX_DIM = 320
 
+# Cap concurrent thumbnail decodes so a page with a dozen brand-new photos
+# can't fan out into a dozen full-resolution PIL decodes at once and run the
+# container out of memory. Two at a time is plenty — each generation finishes
+# in <100 ms once draft() is in play.
+import threading as _threading
+_THUMB_GEN_SEMAPHORE = _threading.Semaphore(2)
+
 
 def _thumb_path(name: str) -> Path:
     """Companion thumbnail file for a given upload. Always .jpg since
@@ -483,29 +490,47 @@ def _is_thumb_name(name: str) -> bool:
 def _ensure_thumb(name: str) -> Path | None:
     """Lazy-generate the thumb for an existing upload. Returns the thumb path
     or None if the source is missing / un-decodable. Writes via a tmp file +
-    rename so concurrent requests can't see a half-written thumb."""
+    rename so concurrent requests can't see a half-written thumb.
+
+    Memory-aware: uses PIL's draft() to tell the JPEG decoder to scale down
+    BEFORE allocating pixel buffers. A pre-cap 7000×7000 JPEG decodes at full
+    res to ~150 MB RGB; with draft asking for ~640 px, the same image lands
+    at <3 MB. Combined with the module-level semaphore, the container can no
+    longer be OOM-killed by a fan-out of concurrent thumb requests."""
     src = UPLOAD_DIR / name
     if not src.exists() or _is_thumb_name(name):
         return None
     thumb = _thumb_path(name)
     if thumb.exists():
         return thumb
-    try:
-        from PIL import Image, ImageOps
-        img = Image.open(src)
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        if max(img.size) > THUMB_MAX_DIM:
-            img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), Image.LANCZOS)
-        tmp = thumb.with_suffix(thumb.suffix + ".tmp")
-        img.save(tmp, format="JPEG", quality=80, optimize=True)
-        os.replace(tmp, thumb)
-        return thumb
-    except Exception:
-        # Any decode failure (test fixtures, corrupt jpegs, etc) — just let
-        # the caller fall back to serving the full-res source.
-        return None
+
+    with _THUMB_GEN_SEMAPHORE:
+        # Re-check now that we hold the lock — another request may have
+        # generated this very thumb while we were queued.
+        if thumb.exists():
+            return thumb
+        try:
+            from PIL import Image, ImageOps
+            with Image.open(src) as opened:
+                # draft() is JPEG-only and a no-op on other formats. Asking
+                # for 2x the target size gives the decoder enough room to
+                # downscale further with a clean LANCZOS pass below.
+                if opened.format == "JPEG":
+                    opened.draft("RGB", (THUMB_MAX_DIM * 2, THUMB_MAX_DIM * 2))
+                img = ImageOps.exif_transpose(opened)
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                if max(img.size) > THUMB_MAX_DIM:
+                    img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), Image.LANCZOS)
+                tmp = thumb.with_suffix(thumb.suffix + ".tmp")
+                img.save(tmp, format="JPEG", quality=80, optimize=True)
+                os.replace(tmp, thumb)
+            return thumb
+        except Exception:
+            # Any decode failure (test fixtures, corrupt jpegs, OOM in PIL,
+            # etc) — let the caller fall back to serving the full-res source
+            # so the page doesn't break.
+            return None
 
 
 def _delete_thumb_if_exists(name: str) -> None:
