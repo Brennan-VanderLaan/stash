@@ -58,7 +58,10 @@
     </div>
     <div class="label-toolbar-actions">
       <button type="button" class="btn btn-secondary btn-sm" id="toggle-all">Toggle all</button>
-      <a href="/labels/sheet.svg" class="btn btn-secondary btn-sm" id="download-svg" download>SVG</a>
+      <a href="/labels/sheet.svg" class="btn btn-secondary btn-sm" id="download-svg" download
+         title="Single SVG with every sheet stacked — for Inkscape, Cricut as Cut Image, etc.">SVG</a>
+      <a href="/labels/sheet.pdf" class="btn btn-secondary btn-sm" id="download-pdf" download
+         title="Multi-page vector PDF — one Avery sheet per page, prints sharp, also opens in Cricut Design Space.">PDF</a>
       <button type="submit" class="btn btn-primary" id="print-button" formaction="/labels/print" formtarget="_blank">
         Print labels
       </button>
@@ -105,6 +108,7 @@
   const pagesSEl = document.getElementById('label-pages-s');
   const printButton = document.getElementById('print-button');
   const svgLink = document.getElementById('download-svg');
+  const pdfLink = document.getElementById('download-pdf');
   const toggleAll = document.getElementById('toggle-all');
   const modal = document.getElementById('label-preview-modal');
 
@@ -122,6 +126,7 @@
     printButton.disabled = n === 0;
     const params = ids.map(id => 'box_ids=' + encodeURIComponent(id)).join('&');
     svgLink.href = '/labels/sheet.svg' + (params ? '?' + params : '');
+    if (pdfLink) pdfLink.href = '/labels/sheet.pdf' + (params ? '?' + params : '');
   }
   checkboxes.forEach(cb => cb.addEventListener('change', refreshSummary));
   toggleAll.addEventListener('click', () => {

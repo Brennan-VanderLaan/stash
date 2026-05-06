@@ -9,3 +9,7 @@ qrcode[pil]
 google-genai
 Pillow
 markdown
+# Cricut/print-friendly label exports go through cairosvg → vector PDF and
+# pypdf to merge per-sheet PDFs into one multi-page download.
+cairosvg
+pypdf

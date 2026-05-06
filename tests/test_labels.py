@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_single_label_svg_downloads(client):
     client.post("/boxes", data={
         "name": "Kitchen #1", "location": "Garage shelf B",
@@ -100,6 +103,53 @@ def test_sheet_uses_notes_not_location(client):
     svg = client.get("/labels/sheet.svg").text
     assert "drill bits and tape" in svg
     assert "shed" not in svg
+
+
+def _require_cairo_runtime():
+    """cairosvg's `import` itself raises OSError when libcairo isn't on the
+    box (e.g. Windows dev). pytest.importorskip only catches ImportError,
+    so we have to do this manually. The Linux container has libcairo2
+    installed via apt — these tests skip locally and run there."""
+    try:
+        import cairosvg  # noqa: F401
+        import pypdf     # noqa: F401
+    except (ImportError, OSError) as e:
+        pytest.skip(f"cairosvg/libcairo unavailable: {e}")
+    try:
+        cairosvg.svg2pdf(
+            bytestring=b'<svg xmlns="http://www.w3.org/2000/svg" width="1mm" height="1mm"></svg>',
+        )
+    except OSError as e:
+        pytest.skip(f"libcairo not loadable: {e}")
+
+
+def test_sheet_pdf_endpoint_returns_pdf(client):
+    """Cricut-ready PDF export — multi-page vector PDF, one Avery sheet per page."""
+    _require_cairo_runtime()
+    for i in range(7):  # 7 boxes → 2 sheets (4 + 3)
+        client.post("/boxes", data={"name": f"Box {i:02d}"})
+    r = client.get("/labels/sheet.pdf")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:5] == b"%PDF-"
+    # Verify the PDF actually has 2 pages (matches sheet count)
+    import io
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(r.content))
+    assert len(reader.pages) == 2
+
+
+def test_sheet_pdf_with_selection(client):
+    _require_cairo_runtime()
+    client.post("/boxes", data={"name": "Alpha"})
+    client.post("/boxes", data={"name": "Bravo"})
+    r = client.get("/labels/sheet.pdf?box_ids=1")
+    assert r.status_code == 200
+    # Single selected box → single sheet
+    import io
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(r.content))
+    assert len(reader.pages) == 1
 
 
 def test_label_escapes_special_chars(client):

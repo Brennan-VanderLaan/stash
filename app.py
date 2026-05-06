@@ -1558,6 +1558,32 @@ def labels_sheet(request: Request):
     )
 
 
+@app.get("/labels/sheet.pdf")
+def labels_sheet_pdf(request: Request):
+    """Multi-page vector PDF — fits Avery label sheets directly and is the
+    Cricut/print-ready artifact. Each sheet is its own page."""
+    box_ids_raw = request.query_params.getlist("box_ids")
+    with db() as conn:
+        boxes = _selected_boxes(conn, box_ids_raw)
+    try:
+        pdf_bytes = labels.render_sheet_pdf(
+            [dict(b) for b in boxes], PUBLIC_URL, uploads_dir=UPLOAD_DIR,
+        )
+    except ImportError:
+        # cairosvg + pypdf aren't installed in this environment (e.g. local
+        # dev without the deps yet). Fall back to a clear error rather than
+        # a 500.
+        raise HTTPException(
+            501, "PDF export requires cairosvg + pypdf — install them or "
+                 "use the SVG / Print buttons.",
+        )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="stash-labels.pdf"'},
+    )
+
+
 @app.get("/labels/print", response_class=HTMLResponse)
 def labels_print(request: Request):
     """Browser-printable preview of all selected labels, paginated via CSS so

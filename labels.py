@@ -256,5 +256,46 @@ def render_single_sheet_svg(
 </svg>"""
 
 
+def render_sheet_pdf(
+    boxes: list[dict],
+    public_url: str = "",
+    uploads_dir: Path | None = None,
+) -> bytes:
+    """Render the same per-sheet layout as the print page, but as a real
+    multi-page vector PDF. cairosvg renders each sheet's SVG to a vector
+    PDF page, then pypdf merges them into one downloadable file.
+
+    Why PDF: Cricut Design Space chokes on our SVGs (text, embedded
+    base64 art) and re-importing PNG-per-label is the user's documented
+    pain point. A printable PDF is the universal "open and print"
+    artifact — fits Avery sheets directly and prints sharp because the
+    QR + text are still vectors, not rasterized."""
+    import io as _io
+    import cairosvg
+    from pypdf import PdfWriter, PdfReader
+
+    if not boxes:
+        # Render an empty sheet rather than crashing on an empty selection
+        # so the user gets a friendly print-ready blank.
+        boxes = []
+
+    pages = page_count(len(boxes))
+    writer = PdfWriter()
+    for page_idx in range(pages):
+        chunk = boxes[page_idx * LABELS_PER_PAGE:(page_idx + 1) * LABELS_PER_PAGE]
+        sheet_svg = render_single_sheet_svg(chunk, public_url, uploads_dir)
+        # Wrap to ensure the XML declaration is present — cairosvg prefers it.
+        if not sheet_svg.lstrip().startswith("<?xml"):
+            sheet_svg = '<?xml version="1.0" encoding="UTF-8"?>\n' + sheet_svg
+        pdf_bytes = cairosvg.svg2pdf(bytestring=sheet_svg.encode("utf-8"))
+        reader = PdfReader(_io.BytesIO(pdf_bytes))
+        for page in reader.pages:
+            writer.add_page(page)
+
+    out = _io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 def _escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
