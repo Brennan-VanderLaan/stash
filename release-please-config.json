@@ -6,12 +6,6 @@
   "packages": {
     ".": {
       "package-name": "stash",
-      "extra-files": [
-        {
-          "type": "version-txt",
-          "path": "VERSION"
-        }
-      ],
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },

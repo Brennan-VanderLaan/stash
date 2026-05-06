@@ -20,14 +20,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 (ROOT / "static").mkdir(exist_ok=True)
 (ROOT / "templates").mkdir(exist_ok=True)
 
-def _read_version() -> str:
-    if v := os.environ.get("STASH_VERSION"):
-        return v
-    vf = ROOT / "VERSION"
-    return vf.read_text().strip() if vf.exists() else "dev"
-
-
-VERSION = _read_version()
+VERSION = os.environ.get("STASH_VERSION", "dev")
 GIT_SHA = os.environ.get("STASH_GIT_SHA", "")
 WATCHTOWER_URL = os.environ.get("WATCHTOWER_URL", "").rstrip("/")
 WATCHTOWER_TOKEN = os.environ.get("WATCHTOWER_TOKEN", "")

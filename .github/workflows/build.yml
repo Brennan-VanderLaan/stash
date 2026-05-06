@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read VERSION
+      - name: Read version from release-please manifest
         id: version
-        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(jq -r '."."' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
