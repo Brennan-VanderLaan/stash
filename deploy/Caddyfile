@@ -29,12 +29,15 @@
 	#   - /maintenance/import takes whole-database backups. Cap at 2 GB.
 	#   - Everything else stays at 50 MB so a hostile photo upload can't fill
 	#     disk before the in-app size guard rejects it.
-	# Caddy picks the matched request_body before the unmatched one.
+	# Both request_body directives wrap the body reader, so an unmatched 50 MB
+	# rule would clamp the import path back down to 50 MB even with the 2 GB
+	# rule above it. The `not` matcher makes the two mutually exclusive.
 	@import path /maintenance/import
+	@notimport not path /maintenance/import
 	request_body @import {
 		max_size 2GB
 	}
-	request_body {
+	request_body @notimport {
 		max_size 50MB
 	}
 
