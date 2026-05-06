@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.6.0...v0.7.0) (2026-05-06)
+
+
+### Features
+
+* live status + auto-reload on the update flow ([897fe1c](https://github.com/Brennan-VanderLaan/stash/commit/897fe1c8329749e0d929803c3a6e67a53e96548c))
+
+
+### Bug Fixes
+
+* allow multi-GB backup imports end-to-end ([410b605](https://github.com/Brennan-VanderLaan/stash/commit/410b605f46ea1b8fa215d2e5d5a8bb6195fcb7f9))
+
 ## [0.6.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.5.0...v0.6.0) (2026-05-06)
 
 
