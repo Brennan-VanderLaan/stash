@@ -297,6 +297,16 @@ def test_import_rejects_uploads_above_import_limit(client, monkeypatch):
     assert r.status_code == 413
 
 
+def test_version_endpoint_returns_running_version(client):
+    """The maintenance page polls this to detect a successful watchtower update."""
+    r = client.get("/maintenance/version")
+    assert r.status_code == 200
+    payload = r.json()
+    assert "version" in payload
+    assert "git_sha" in payload
+    assert payload["version"] == client.app_module.VERSION
+
+
 def test_import_zip_skips_path_traversal_entries(client):
     """A malicious zip with `uploads/../evil` must not write outside UPLOAD_DIR."""
     # Build a minimal valid backup zip

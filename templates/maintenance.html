@@ -6,21 +6,95 @@
   <div class="card-title">Version</div>
   <div class="version-display">
     <span class="version-label">Running</span>
-    <span class="version-value">{{ version }}</span>
-    {% if git_sha %}<span class="version-sha">{{ git_sha }}</span>{% endif %}
+    <span class="version-value" id="version-value">{{ version }}</span>
+    {% if git_sha %}<span class="version-sha" id="version-sha">{{ git_sha }}</span>{% endif %}
   </div>
-  {% if update_status == "triggered" %}
-  <div class="notice">Update check started. If a new image is available, the app will restart shortly — refresh in ~30s.</div>
-  {% elif update_status == "disabled" %}
+  {% if not update_enabled %}
   <p class="text-sm text-muted">Updates are not configured (no <code>WATCHTOWER_URL</code> set).</p>
+  {% elif update_status == "triggered" %}
+  {# Fallback notice for users without JS — JS path replaces this entirely. #}
+  <noscript>
+    <div class="notice">Update check started. The app will restart shortly if a new image is available — refresh in ~30s.</div>
+  </noscript>
   {% endif %}
-  <form method="post" action="/maintenance/update"
-        onsubmit="return confirm('Check for updates and restart if a new image is available?');">
-    <button type="submit" class="btn btn-primary btn-block"
+  <div id="update-status" class="notice" hidden></div>
+  <form method="post" action="/maintenance/update" id="update-form">
+    <button type="submit" class="btn btn-primary btn-block" id="update-button"
             {% if not update_enabled %}disabled{% endif %}>
       Check for updates
     </button>
   </form>
+  {% if update_enabled %}
+  <script>
+  (function() {
+    const form = document.getElementById('update-form');
+    const button = document.getElementById('update-button');
+    const status = document.getElementById('update-status');
+    const initialVersion = {{ version | tojson }};
+    const POLL_INTERVAL_MS = 2500;
+    const TIMEOUT_MS = 180000;  // 3 min — generous; image pulls + restart can be slow
+
+    function setStatus(text, kind) {
+      status.hidden = false;
+      status.textContent = text;
+      status.className = 'notice' + (kind ? ' notice-' + kind : '');
+    }
+
+    async function pollVersion() {
+      const r = await fetch('/maintenance/version', { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }
+
+    async function watchForUpdate(startedAt) {
+      try {
+        const data = await pollVersion();
+        if (data.version !== initialVersion) {
+          setStatus('Updated to ' + data.version + '. Reloading…', 'success');
+          setTimeout(() => location.reload(), 1200);
+          return;
+        }
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          setStatus('No new version detected — already up to date.', null);
+          button.disabled = false;
+          return;
+        }
+        setStatus('Checking for updates…');
+      } catch (err) {
+        // Container is likely restarting. Keep polling, just reflect it.
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          setStatus('Update appears stuck. Refresh manually to check.', 'danger');
+          button.disabled = false;
+          return;
+        }
+        setStatus('Restarting…');
+      }
+      setTimeout(() => watchForUpdate(startedAt), POLL_INTERVAL_MS);
+    }
+
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      if (!confirm('Check for updates and restart if a new image is available?')) return;
+      button.disabled = true;
+      setStatus('Triggering update…');
+      try {
+        const resp = await fetch('/maintenance/update', { method: 'POST' });
+        if (!resp.ok && resp.status !== 200) {
+          setStatus('Failed to start update (HTTP ' + resp.status + ').', 'danger');
+          button.disabled = false;
+          return;
+        }
+      } catch (err) {
+        setStatus('Could not reach the server to start the update.', 'danger');
+        button.disabled = false;
+        return;
+      }
+      setStatus('Checking for updates…');
+      setTimeout(() => watchForUpdate(Date.now()), POLL_INTERVAL_MS);
+    });
+  })();
+  </script>
+  {% endif %}
 </div>
 
 {% if changelog_html %}

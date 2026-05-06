@@ -678,12 +678,40 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .maintenance-card input[type="file"] { margin-bottom: 0.5rem; }
 .notice {
   font-size: 0.8rem;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  background: var(--panel-2);
+  border-left: 2px solid var(--border);
   padding: 0.5rem 0.7rem;
   border-radius: var(--radius-sm);
   margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.notice::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+  animation: notice-pulse 1.4s ease-in-out infinite;
+}
+.notice-success, .notice-danger { animation: none; }
+.notice-success::before, .notice-danger::before { animation: none; }
+.notice-success {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-left-color: var(--accent);
+}
+.notice-danger {
+  color: var(--danger);
+  background: var(--danger-dim);
+  border-left-color: var(--danger);
+}
+@keyframes notice-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 /* === Disclosure toggle (used by changelog summary) === */

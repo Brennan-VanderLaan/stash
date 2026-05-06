@@ -1077,6 +1077,17 @@ def maintenance_update(background: BackgroundTasks):
     return RedirectResponse("/maintenance?update=triggered", status_code=303)
 
 
+@app.get("/maintenance/version")
+def maintenance_version():
+    """Lightweight probe for client-side polling. The maintenance page snapshots
+    the version on load and watches this endpoint for a change, which signals
+    that watchtower has finished restarting the container with a new image."""
+    return {
+        "version": VERSION,
+        "git_sha": GIT_SHA[:7] if GIT_SHA else "",
+    }
+
+
 @app.post("/maintenance/cleanup")
 def maintenance_cleanup():
     refs = _referenced_uploads()
