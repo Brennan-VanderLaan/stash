@@ -5,11 +5,6 @@
 {$DOMAIN} {
 	encode zstd gzip
 
-	# Photos can be a few MB; let oauth2-proxy + stash handle large ingest uploads.
-	request_body {
-		max_size 50MB
-	}
-
 	# Security headers applied to every response. Layered defenses:
 	#   - HSTS forces HTTPS for the next year (preload-eligible).
 	#   - nosniff stops browsers from rendering uploaded bytes as anything
@@ -30,7 +25,34 @@
 		-Server
 	}
 
-	reverse_proxy oauth2-proxy:4180 {
-		header_up X-Real-IP {remote_host}
+	# Backup restore needs to accept multi-GB zips (db + every photo). Scoped
+	# to just the import endpoint so the photo-upload paths keep their tighter
+	# 50 MB cap as a defense-in-depth ceiling on hostile uploads.
+	@import {
+		method POST
+		path /maintenance/import
+	}
+	handle @import {
+		request_body {
+			max_size 2GB
+		}
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+			# Long uploads + DB swap can run for minutes on slow links.
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+		}
+	}
+
+	# Photos can be a few MB; let oauth2-proxy + stash handle large ingest uploads.
+	handle {
+		request_body {
+			max_size 50MB
+		}
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+		}
 	}
 }

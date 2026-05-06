@@ -264,6 +264,39 @@ def test_import_rejects_invalid_sqlite_with_correct_header(client):
     assert r.status_code == 400
 
 
+def test_import_zip_larger_than_photo_upload_limit(client):
+    """Backups can exceed MAX_UPLOAD_BYTES (the photo cap) — only MAX_IMPORT_BYTES
+    should bound them. Confirms the streaming path doesn't reuse the wrong limit."""
+    client.post("/boxes", data={"name": "Box"})
+    db_bytes = client.app_module.DB_PATH.read_bytes()
+
+    # Pad the zip with an uncompressible blob bigger than the per-photo cap so we
+    # exercise the streaming path. ZIP_STORED means the bytes hit disk uncompressed.
+    padding_size = client.app_module.MAX_UPLOAD_BYTES + 1024 * 1024
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("stash.db", db_bytes)
+        zf.writestr("padding.bin", b"\x00" * padding_size)
+
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("backup.zip", io.BytesIO(buf.getvalue()), "application/zip")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, f"unexpected: {r.status_code} {r.text[:300]}"
+
+
+def test_import_rejects_uploads_above_import_limit(client, monkeypatch):
+    """A file beyond MAX_IMPORT_BYTES must still 413, not crash mid-stream."""
+    monkeypatch.setattr(client.app_module, "MAX_IMPORT_BYTES", 4096)
+    payload = b"SQLite format 3\x00" + b"x" * 8192
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("big.db", io.BytesIO(payload), "application/octet-stream")},
+    )
+    assert r.status_code == 413
+
+
 def test_import_zip_skips_path_traversal_entries(client):
     """A malicious zip with `uploads/../evil` must not write outside UPLOAD_DIR."""
     # Build a minimal valid backup zip

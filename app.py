@@ -1120,6 +1120,11 @@ def maintenance_export():
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _ZIP_MAGIC = b"PK\x03\x04"
 
+# Backup restores carry every referenced photo; a 2GB ceiling keeps DoS-on-disk
+# bounded while comfortably covering realistic stashes. Caddy is configured to
+# permit the same on /maintenance/import.
+MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def _validate_sqlite_file(path: Path) -> None:
     """Raise HTTPException unless `path` is a SQLite DB with a `boxes` table."""
@@ -1152,38 +1157,40 @@ def _backup_current_db() -> Path | None:
     return backup
 
 
-def _replace_db_from_bytes(db_bytes: bytes) -> None:
-    """Validate, back up, then copy the uploaded DB into the live location.
+def _replace_db_from_path(src_db: Path) -> None:
+    """Validate the SQLite file at `src_db` and copy it into the live DB location.
 
     Uses SQLite's online backup API rather than `os.replace` — on Windows the
     live DB file is held open by any active connection, which makes a rename
     fail with `PermissionError`. `Connection.backup()` swaps page contents
     through the SQLite library and is safe even with concurrent readers."""
-    if not db_bytes.startswith(_SQLITE_MAGIC):
+    with open(src_db, "rb") as f:
+        header = f.read(len(_SQLITE_MAGIC))
+    if not header.startswith(_SQLITE_MAGIC):
         raise HTTPException(400, "File is not a SQLite database")
-    tmp = DB_PATH.with_name(f"{DB_PATH.name}.import-tmp")
-    tmp.write_bytes(db_bytes)
+    _validate_sqlite_file(src_db)
+    _backup_current_db()
+    src = sqlite3.connect(src_db)
+    dst = sqlite3.connect(DB_PATH)
     try:
-        _validate_sqlite_file(tmp)
-        _backup_current_db()
-        src = sqlite3.connect(tmp)
-        dst = sqlite3.connect(DB_PATH)
-        try:
-            src.backup(dst)
-        finally:
-            src.close()
-            dst.close()
+        src.backup(dst)
     finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+        src.close()
+        dst.close()
     migrate_db()
+
+
+def _extract_db_member_to_path(zf, member: str, dst: Path) -> None:
+    """Stream a zip member to disk in 1MB chunks (no full decompress in memory)."""
+    import shutil
+    with zf.open(member) as src, open(dst, "wb") as out:
+        shutil.copyfileobj(src, out, length=1024 * 1024)
 
 
 def _restore_uploads_from_zip(zf) -> int:
     """Extract `uploads/<name>` entries into UPLOAD_DIR. Returns count restored.
     Skips entries with hostile names (path traversal, suspicious chars)."""
+    import shutil
     upload_root = UPLOAD_DIR.resolve()
     count = 0
     for name in zf.namelist():
@@ -1195,9 +1202,26 @@ def _restore_uploads_from_zip(zf) -> int:
         target = (UPLOAD_DIR / base).resolve()
         if not target.is_relative_to(upload_root):
             continue
-        target.write_bytes(zf.read(name))
+        with zf.open(name) as src, open(target, "wb") as out:
+            shutil.copyfileobj(src, out, length=1024 * 1024)
         count += 1
     return count
+
+
+async def _spool_upload_to_disk(file: UploadFile, dst: Path, max_bytes: int) -> int:
+    """Stream `file` to `dst` in chunks. Aborts with 413 if it exceeds `max_bytes`."""
+    size = 0
+    chunk_size = 1024 * 1024
+    with open(dst, "wb") as out:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise HTTPException(413, "Upload too large")
+            out.write(chunk)
+    return size
 
 
 @app.post("/maintenance/import")
@@ -1205,31 +1229,47 @@ async def maintenance_import(file: UploadFile = File(...)):
     """Replace the live DB (and optionally uploads/) from a `.db` or backup `.zip`.
 
     The current DB is copied to `stash.db.bak-<timestamp>` before replacement so
-    a botched import can be reverted by hand. Caddy caps request bodies at 50MB
-    upstream — match that here so we fail with a clean 413 rather than mid-write."""
+    a botched import can be reverted by hand. Streams the upload to disk rather
+    than buffering — backup zips can be multi-GB on photo-heavy stashes."""
     if not file or not file.filename:
         raise HTTPException(400, "File required")
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "Upload too large")
-    if not data:
-        raise HTTPException(400, "File is empty")
 
-    if data.startswith(_ZIP_MAGIC):
-        import io as _io
-        import zipfile
+    spool = DB_PATH.with_name(f"{DB_PATH.name}.import-upload")
+    try:
+        size = await _spool_upload_to_disk(file, spool, MAX_IMPORT_BYTES)
+        if size == 0:
+            raise HTTPException(400, "File is empty")
+
+        with open(spool, "rb") as f:
+            header = f.read(max(len(_SQLITE_MAGIC), len(_ZIP_MAGIC)))
+
+        if header.startswith(_ZIP_MAGIC):
+            import zipfile
+            try:
+                zf = zipfile.ZipFile(spool)
+            except zipfile.BadZipFile:
+                raise HTTPException(400, "File is not a valid zip archive")
+            with zf:
+                if "stash.db" not in zf.namelist():
+                    raise HTTPException(400, "Zip is missing stash.db — not a stash backup")
+                db_tmp = DB_PATH.with_name(f"{DB_PATH.name}.zipdb-tmp")
+                try:
+                    _extract_db_member_to_path(zf, "stash.db", db_tmp)
+                    _replace_db_from_path(db_tmp)
+                finally:
+                    try:
+                        db_tmp.unlink()
+                    except FileNotFoundError:
+                        pass
+                _restore_uploads_from_zip(zf)
+        elif header.startswith(_SQLITE_MAGIC):
+            _replace_db_from_path(spool)
+        else:
+            raise HTTPException(400, "File must be a SQLite .db or a stash backup .zip")
+    finally:
         try:
-            zf = zipfile.ZipFile(_io.BytesIO(data))
-        except zipfile.BadZipFile:
-            raise HTTPException(400, "File is not a valid zip archive")
-        with zf:
-            if "stash.db" not in zf.namelist():
-                raise HTTPException(400, "Zip is missing stash.db — not a stash backup")
-            _replace_db_from_bytes(zf.read("stash.db"))
-            _restore_uploads_from_zip(zf)
-    elif data.startswith(_SQLITE_MAGIC):
-        _replace_db_from_bytes(data)
-    else:
-        raise HTTPException(400, "File must be a SQLite .db or a stash backup .zip")
+            spool.unlink()
+        except FileNotFoundError:
+            pass
 
     return RedirectResponse("/maintenance?imported=1", status_code=303)

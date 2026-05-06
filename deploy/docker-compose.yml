@@ -56,6 +56,10 @@ services:
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       # Skip the "click to sign in" interstitial — go straight to Google.
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Default upstream timeout is 30s, which kills multi-hundred-MB backup
+      # restores mid-stream with "context canceled". Bump generously — the
+      # only long upload path is /maintenance/import, gated by Caddy's 2GB cap.
+      OAUTH2_PROXY_UPSTREAM_TIMEOUT: 30m
     volumes:
       - ./emails.txt:/etc/oauth2-proxy/emails.txt:ro
     depends_on:
