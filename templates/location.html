@@ -85,29 +85,50 @@
 {% elif current_floor %}
 
 <div class="card floorplan-card">
-  <div id="floorplan-stage" class="floorplan-stage" data-edit="{{ '1' if edit_mode else '0' }}"
-       data-floor-id="{{ current_floor.id }}">
-    <img id="floorplan-image" src="/uploads/{{ current_floor.floorplan }}"
-         alt="Floorplan of {{ current_floor.name }}" draggable="false">
-    <div id="floorplan-overlay" class="floorplan-overlay">
-      {% for r in rooms %}
-      <div class="room-rect" id="room-{{ r.id }}" data-room-id="{{ r.id }}" data-name="{{ r.name }}"
-           data-color="{{ r.color or '#4ade80' }}"
-           style="--room-color: {{ r.color or '#4ade80' }};
-                  left: {{ (r.x * 100) }}%; top: {{ (r.y * 100) }}%;
-                  width: {{ (r.w * 100) }}%; height: {{ (r.h * 100) }}%;">
-        <span class="room-rect-label">{{ r.name }}</span>
-        <span class="room-rect-count" data-box-count>{{ r.box_count }}</span>
-        {% if edit_mode %}
-        <span class="room-handle handle-nw" data-handle="nw"></span>
-        <span class="room-handle handle-ne" data-handle="ne"></span>
-        <span class="room-handle handle-sw" data-handle="sw"></span>
-        <span class="room-handle handle-se" data-handle="se"></span>
-        {% endif %}
+  <div id="floorplan-viewport" class="floorplan-viewport">
+    <div id="floorplan-stage" class="floorplan-stage" data-edit="{{ '1' if edit_mode else '0' }}"
+         data-floor-id="{{ current_floor.id }}" style="--zoom: 1;">
+      <img id="floorplan-image" src="/uploads/{{ current_floor.floorplan }}"
+           alt="Floorplan of {{ current_floor.name }}" draggable="false">
+      <div id="floorplan-overlay" class="floorplan-overlay">
+        {% for r in rooms %}
+        <div class="room-rect" id="room-{{ r.id }}" data-room-id="{{ r.id }}" data-name="{{ r.name }}"
+             data-color="{{ r.color or '#4ade80' }}"
+             style="--room-color: {{ r.color or '#4ade80' }};
+                    left: {{ (r.x * 100) }}%; top: {{ (r.y * 100) }}%;
+                    width: {{ (r.w * 100) }}%; height: {{ (r.h * 100) }}%;">
+          <span class="room-rect-label">{{ r.name }}</span>
+          <span class="room-rect-count" data-box-count>{{ r.box_count }}</span>
+          {% if not edit_mode and r['boxes'] %}
+          <div class="room-rect-boxes">
+            {% for b in r['boxes'] %}
+            <button type="button" class="room-box-tile" data-box-id="{{ b.id }}"
+                    title="{{ b.name }} · {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}">
+              <span class="room-box-tile-name">{{ b.name }}</span>
+              {% if b.item_count %}
+              <span class="room-box-tile-count">{{ b.item_count }}</span>
+              {% endif %}
+            </button>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if edit_mode %}
+          <span class="room-handle handle-nw" data-handle="nw"></span>
+          <span class="room-handle handle-ne" data-handle="ne"></span>
+          <span class="room-handle handle-sw" data-handle="sw"></span>
+          <span class="room-handle handle-se" data-handle="se"></span>
+          {% endif %}
+        </div>
+        {% endfor %}
+        <div id="floorplan-draft" class="room-rect room-rect-draft" hidden></div>
       </div>
-      {% endfor %}
-      <div id="floorplan-draft" class="room-rect room-rect-draft" hidden></div>
     </div>
+  </div>
+  <div class="floorplan-controls" role="toolbar" aria-label="Floorplan zoom controls">
+    <button type="button" class="floorplan-control" data-zoom="-1" aria-label="Zoom out">−</button>
+    <span class="floorplan-zoom-label" data-zoom-label>100%</span>
+    <button type="button" class="floorplan-control" data-zoom="+1" aria-label="Zoom in">+</button>
+    <button type="button" class="floorplan-control" data-zoom-fit aria-label="Fit to screen">⤢</button>
   </div>
   {% if edit_mode %}
   <p class="text-sm text-muted mt-1">
@@ -134,6 +155,17 @@
 </div>
 
 {# Per-room popover (a single dialog reused) — opens on rect click in edit mode #}
+{# Tap a box tile in view mode → open a small preview modal. Body fetched
+   lazily so the page doesn't carry every box's HTML up front. #}
+<dialog id="floorplan-box-dialog" class="item-dialog">
+  <form method="dialog" class="item-dialog-close-form">
+    <button type="submit" class="item-dialog-close" aria-label="Close">×</button>
+  </form>
+  <div id="floorplan-box-body">
+    <div class="empty">Loading…</div>
+  </div>
+</dialog>
+
 <dialog id="room-edit-dialog" class="room-edit-dialog">
   <button type="button" class="label-preview-close" data-close-room aria-label="Close">×</button>
   <div class="room-edit-body">
@@ -205,13 +237,131 @@
 {% if current_floor and current_floor.floorplan %}
 <script>
 (function() {
+  const viewport = document.getElementById('floorplan-viewport');
   const stage = document.getElementById('floorplan-stage');
   const overlay = document.getElementById('floorplan-overlay');
   const draft = document.getElementById('floorplan-draft');
   const dialog = document.getElementById('room-edit-dialog');
+  const boxDialog = document.getElementById('floorplan-box-dialog');
+  const boxBody = document.getElementById('floorplan-box-body');
   const isEdit = stage.dataset.edit === '1';
   const floorId = Number(stage.dataset.floorId);
   const DRAG_THRESHOLD_PX = 4;
+
+  // ── Zoom + pan ────────────────────────────────────────────────────
+  // The stage's width is driven by --zoom. Setting that >1 makes the
+  // stage wider than the viewport, so native overflow:auto handles
+  // pan via touch-scroll / scrollbars. No transform math needed.
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 5;
+  let zoom = 1;
+  const zoomLabel = document.querySelector('[data-zoom-label]');
+  const stagePadding = () => stage.getBoundingClientRect();
+
+  function setZoom(newZoom, anchorClientX, anchorClientY) {
+    newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newZoom));
+    if (Math.abs(newZoom - zoom) < 0.001) return;
+    const oldZoom = zoom;
+    // Anchor point in viewport coords, capture before resize
+    const vRect = viewport.getBoundingClientRect();
+    const cx = anchorClientX !== undefined ? anchorClientX - vRect.left : vRect.width / 2;
+    const cy = anchorClientY !== undefined ? anchorClientY - vRect.top  : vRect.height / 2;
+    zoom = newZoom;
+    stage.style.setProperty('--zoom', zoom);
+    if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    // Adjust scroll so the anchored pixel stays under the cursor.
+    const factor = newZoom / oldZoom;
+    viewport.scrollLeft = (viewport.scrollLeft + cx) * factor - cx;
+    viewport.scrollTop  = (viewport.scrollTop  + cy) * factor - cy;
+  }
+
+  function zoomIn(anchor) { setZoom(zoom * 1.25, anchor && anchor.clientX, anchor && anchor.clientY); }
+  function zoomOut(anchor) { setZoom(zoom / 1.25, anchor && anchor.clientX, anchor && anchor.clientY); }
+  function zoomFit() {
+    setZoom(1);
+    viewport.scrollTo({ left: 0, top: 0 });
+  }
+
+  // Wheel: Ctrl/⌘+wheel zooms (matches the trackpad pinch convention);
+  // plain wheel scrolls the viewport.
+  viewport.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    setZoom(zoom * (e.deltaY < 0 ? 1.12 : 0.9), e.clientX, e.clientY);
+  }, { passive: false });
+
+  // Pinch via Pointer Events. Tracks 2 simultaneous pointers on the
+  // viewport; their distance ratio drives zoom, midpoint anchors it.
+  const activePointers = new Map();
+  let pinchState = null;
+
+  function pointerDistance(p1, p2) {
+    const dx = p1.clientX - p2.clientX;
+    const dy = p1.clientY - p2.clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  viewport.addEventListener('pointerdown', (e) => {
+    activePointers.set(e.pointerId, e);
+    if (activePointers.size === 2) {
+      const [p1, p2] = [...activePointers.values()];
+      pinchState = {
+        d0: pointerDistance(p1, p2) || 1,
+        z0: zoom,
+        midX: (p1.clientX + p2.clientX) / 2,
+        midY: (p1.clientY + p2.clientY) / 2,
+      };
+    }
+  });
+  viewport.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, e);
+    if (pinchState && activePointers.size === 2) {
+      const [p1, p2] = [...activePointers.values()];
+      const d = pointerDistance(p1, p2);
+      setZoom(pinchState.z0 * (d / pinchState.d0), pinchState.midX, pinchState.midY);
+    }
+  });
+  function clearPointer(e) {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchState = null;
+  }
+  viewport.addEventListener('pointerup', clearPointer);
+  viewport.addEventListener('pointercancel', clearPointer);
+  viewport.addEventListener('lostpointercapture', clearPointer);
+
+  // Toolbar buttons
+  document.querySelectorAll('[data-zoom]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.dataset.zoom === '+1' ? zoomIn() : zoomOut();
+    });
+  });
+  document.querySelector('[data-zoom-fit]').addEventListener('click', zoomFit);
+
+  // ── Box tile click → preview modal (view mode only) ───────────────
+  if (!isEdit && boxDialog) {
+    overlay.addEventListener('click', async (e) => {
+      const tile = e.target.closest('.room-box-tile');
+      if (!tile) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const boxId = tile.dataset.boxId;
+      boxBody.innerHTML = '<div class="empty">Loading…</div>';
+      boxDialog.showModal();
+      try {
+        const r = await fetch(`/boxes/${boxId}/preview`, {
+          headers: { 'Accept': 'text/html' },
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        boxBody.innerHTML = await r.text();
+      } catch (err) {
+        boxBody.innerHTML = `<div class="empty">Couldn't load: ${(err.message || err)}</div>`;
+      }
+    });
+    boxDialog.addEventListener('click', (e) => {
+      if (e.target === boxDialog) boxDialog.close();
+    });
+  }
 
   function stageRect() { return stage.getBoundingClientRect(); }
   function fracPos(e) {

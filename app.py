@@ -855,6 +855,36 @@ def remove_item_tag(item_id: int, tag_id: int):
     return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
+@app.get("/boxes/{box_id}/preview", response_class=HTMLResponse)
+def box_preview(request: Request, box_id: int):
+    """Compact box summary for the floorplan tile-click modal — name,
+    location, item count, a few thumbs, and a link to open the box."""
+    with db() as conn:
+        box = conn.execute(
+            "SELECT b.*, r.name AS room_name, r.color AS room_color, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM boxes b "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            "WHERE b.id = ?",
+            (box_id,),
+        ).fetchone()
+        if not box:
+            raise HTTPException(404)
+        items = conn.execute(
+            "SELECT id, name, photo FROM items "
+            "WHERE box_id = ? ORDER BY created_at DESC LIMIT 12",
+            (box_id,),
+        ).fetchall()
+        item_count = conn.execute(
+            "SELECT COUNT(*) FROM items WHERE box_id = ?", (box_id,),
+        ).fetchone()[0]
+    return templates.TemplateResponse(
+        request, "_floorplan_box_preview.html",
+        {"box": box, "items": items, "item_count": item_count},
+    )
+
+
 @app.get("/items/{item_id}/preview", response_class=HTMLResponse)
 def item_preview(request: Request, item_id: int):
     """HTML fragment rendering an item's detail card. Used by the search
@@ -1886,6 +1916,22 @@ def location_detail(
                 "FROM rooms r WHERE r.floor_id = ? ORDER BY r.name",
                 (current_floor["id"],),
             ).fetchall()]
+            # Pull every box on this floor in one shot, then bucket by room
+            # so each room rect can render its boxes as tiles inside it.
+            box_rows = conn.execute(
+                "SELECT b.id, b.name, b.room_id, "
+                "       (SELECT COUNT(*) FROM items WHERE box_id = b.id) AS item_count "
+                "FROM boxes b "
+                "JOIN rooms r ON r.id = b.room_id "
+                "WHERE r.floor_id = ? "
+                "ORDER BY b.name",
+                (current_floor["id"],),
+            ).fetchall()
+            boxes_by_room: dict[int, list] = {}
+            for b in box_rows:
+                boxes_by_room.setdefault(b["room_id"], []).append(dict(b))
+            for r in rooms:
+                r["boxes"] = boxes_by_room.get(r["id"], [])
 
         # Rooms with no floor (e.g. from the legacy text-location migration)
         # surface separately so the user can clean them up.

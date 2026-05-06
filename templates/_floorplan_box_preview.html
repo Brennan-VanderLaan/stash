@@ -1,0 +1,45 @@
+{# Box preview shown when a tile is tapped on the floorplan. Compact —
+   thumbnails, name, room chip, count, "Open" link. Does NOT carry edit
+   actions (those live on the box detail page). #}
+<div class="floorplan-box-preview"
+     style="--room-color: {{ box.room_color or '#4ade80' }};">
+  <div class="floorplan-box-preview-head">
+    <h2 class="floorplan-box-preview-name">{{ box.name }}</h2>
+    {% if box.room_name %}
+    <span class="room-chip">{{ box.room_name }}</span>
+    {% endif %}
+  </div>
+  {% if box.notes %}<p class="text-sm text-muted">{{ box.notes }}</p>{% endif %}
+
+  <div class="floorplan-box-preview-meta">
+    <span class="text-sm text-muted">
+      {{ item_count }} item{{ '' if item_count == 1 else 's' }}
+      {% if box.location_name %} · in {{ box.location_name }}{% endif %}
+    </span>
+  </div>
+
+  {% if items %}
+  <div class="floorplan-box-preview-thumbs">
+    {% for it in items %}
+    <a href="/boxes/{{ box.id }}#item-{{ it.id }}" class="floorplan-box-preview-thumb"
+       title="{{ it.name }}">
+      {% if it.photo %}
+      <img src="/thumbs/{{ it.photo }}" alt="{{ it.name }}" loading="lazy">
+      {% else %}
+      <span class="floorplan-box-preview-thumb-fallback">📦</span>
+      {% endif %}
+    </a>
+    {% endfor %}
+    {% if item_count > items | length %}
+    <span class="floorplan-box-preview-thumb floorplan-box-preview-more">
+      +{{ item_count - items | length }}
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="btn-row">
+    <a href="/boxes/{{ box.id }}" class="btn btn-primary">Open box →</a>
+    <a href="/boxes/{{ box.id }}/label.svg" class="btn btn-secondary" download>Label</a>
+  </div>
+</div>

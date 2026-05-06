@@ -472,6 +472,52 @@ def test_location_detail_renders_room_overlays(client):
     assert page.count('class="room-rect"') >= 2
 
 
+def test_floorplan_view_mode_renders_box_tiles_inside_rooms(client):
+    """View-mode floorplan now shows each room's boxes as tappable tiles
+    inside the room rectangle. Edit mode hides them so the user can drag
+    rooms without tiles getting in the way."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.4, "h": 0.4})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+    client.post("/boxes", data={"name": "Camping gear", "room_id": "1"})
+
+    view = client.get(f"/locations/{loc_id}").text
+    assert 'class="room-box-tile"' in view
+    assert ">Tools<" in view or "Tools</span>" in view
+    assert "Camping gear" in view
+
+    edit = client.get(f"/locations/{loc_id}?edit=1").text
+    assert 'class="room-box-tile"' not in edit, \
+        "tiles should be suppressed in edit mode so the user can move rooms freely"
+
+
+def test_box_preview_endpoint_returns_compact_card(client):
+    """Floorplan tile click hits this endpoint and stuffs the result into a
+    modal. Returns a small partial with thumbnails + an "Open box" link."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+    r = client.get("/boxes/1/preview")
+    assert r.status_code == 200
+    body = r.text
+    assert "Tools" in body
+    assert 'href="/boxes/1"' in body
+    # Label download is a sibling action
+    assert "/boxes/1/label.svg" in body
+
+
+def test_floorplan_viewport_carries_zoom_controls(client):
+    """The new pan/zoom UX requires the viewport wrapper + the toolbar
+    of +/−/fit buttons + the zoom label."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    page = client.get(f"/locations/{loc_id}").text
+    assert 'class="floorplan-viewport"' in page
+    assert 'data-zoom="+1"' in page
+    assert 'data-zoom="-1"' in page
+    assert 'data-zoom-fit' in page
+    assert 'data-zoom-label' in page
+
+
 def test_edit_mode_renders_resize_handles(client):
     loc_id, floor_id = _setup_location_with_floor(client)
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Kitchen", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
