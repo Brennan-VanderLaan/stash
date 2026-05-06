@@ -855,6 +855,31 @@ def remove_item_tag(item_id: int, tag_id: int):
     return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
+@app.get("/items/{item_id}/preview", response_class=HTMLResponse)
+def item_preview(request: Request, item_id: int):
+    """HTML fragment rendering an item's detail card. Used by the search
+    page to open a result in a modal instead of navigating away — the same
+    actions (re-tag, move, replace photo, delete) work in place."""
+    with db() as conn:
+        item = conn.execute(
+            "SELECT i.*, b.name AS box_name, b.id AS box_id "
+            "FROM items i JOIN boxes b ON b.id = i.box_id "
+            "WHERE i.id = ?",
+            (item_id,),
+        ).fetchone()
+        if not item:
+            raise HTTPException(404)
+        tags = get_item_tags(conn, item_id)
+        other_boxes = conn.execute(
+            "SELECT id, name, location FROM boxes WHERE id != ? ORDER BY name",
+            (item["box_id"],),
+        ).fetchall()
+    return templates.TemplateResponse(
+        request, "_search_item_modal.html",
+        {"it": item, "tags": tags, "other_boxes": other_boxes},
+    )
+
+
 @app.get("/items/{item_id}/recrop", response_class=HTMLResponse)
 def recrop_item(request: Request, item_id: int):
     with db() as conn:

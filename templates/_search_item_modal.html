@@ -1,0 +1,9 @@
+{# Search-result modal body. Reuses _item_detail.html for the actual content
+   and adds a small "Go to box" header so users can break out into the box
+   page when they want to. #}
+<div class="search-item-modal-header">
+  <a href="/boxes/{{ it.box_id }}#item-{{ it.id }}" class="btn btn-secondary btn-sm">
+    Go to {{ it.box_name }} →
+  </a>
+</div>
+{% include "_item_detail.html" %}

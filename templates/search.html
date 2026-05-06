@@ -174,6 +174,23 @@
 </div>
 {% endif %}
 
+{# Tag autocomplete shared with the item detail partial — needs to be in
+   scope when the modal renders the "add tag" input. #}
+<datalist id="tag-suggestions">
+  {% for t in all_tags %}<option value="{{ t }}">{% endfor %}
+</datalist>
+
+{# Item modal — opened on result click. Body is fetched lazily so the page
+   carries no per-item HTML up front. #}
+<dialog id="search-item-dialog" class="item-dialog">
+  <form method="dialog" class="item-dialog-close-form">
+    <button type="submit" class="item-dialog-close" aria-label="Close">×</button>
+  </form>
+  <div id="search-item-body">
+    <div class="empty">Loading…</div>
+  </div>
+</dialog>
+
 <script>
 (function() {
   const form = document.getElementById('search-form');
@@ -444,16 +461,33 @@
   });
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
 
-  // Click a result → jump to its box with a #item-N anchor so the
-  // existing box-page modal pops it open. Saves us from duplicating the
-  // edit / move / recrop / delete affordances here.
-  resultsEl.addEventListener('click', (e) => {
+  // Click a result → fetch the item detail partial and show it in a
+  // modal. Keeps the user on the search page so they can keep browsing
+  // — the modal carries a "Go to box" link for users who want to leave.
+  const itemDialog = document.getElementById('search-item-dialog');
+  const itemBody = document.getElementById('search-item-body');
+
+  resultsEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('.search-result');
     if (!btn) return;
-    const boxId = btn.dataset.boxId;
     const itemId = btn.dataset.itemId;
-    if (!boxId || !itemId) return;
-    window.location.href = `/boxes/${boxId}#item-${itemId}`;
+    if (!itemId) return;
+    itemBody.innerHTML = '<div class="empty">Loading…</div>';
+    itemDialog.showModal();
+    try {
+      const r = await fetch(`/items/${itemId}/preview`, {
+        headers: { 'Accept': 'text/html' },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      itemBody.innerHTML = await r.text();
+    } catch (err) {
+      itemBody.innerHTML = `<div class="empty">Couldn't load: ${escapeHtml(err.message || err)}</div>`;
+    }
+  });
+
+  // Backdrop click closes the dialog so it feels like a real modal.
+  itemDialog.addEventListener('click', (e) => {
+    if (e.target === itemDialog) itemDialog.close();
   });
 
   // / focuses search; Esc clears

@@ -197,6 +197,30 @@ def test_search_active_filter_chips_render(client):
     assert 'data-clear-filter="has_photo"' in page
 
 
+def test_item_preview_endpoint_returns_modal_partial(client):
+    """The search-result modal is built lazily by fetching this endpoint
+    when an item is clicked. It returns the same _item_detail partial used
+    on the box page, wrapped with a "Go to box" header so users can break
+    out into the real page if they want."""
+    _seed(client)
+    r = client.get("/items/1/preview")
+    assert r.status_code == 200
+    body = r.text
+    # The wrapper header points at the box detail with the item anchor
+    assert "Go to" in body
+    assert 'href="/boxes/1#item-1"' in body
+    # And the embedded detail partial brings its actions
+    assert "Tags" in body
+    assert "/items/1/tags" in body  # add-tag form
+    assert "/items/1/move" in body  # move form
+    assert "/items/1/delete" in body  # delete
+
+
+def test_item_preview_404_for_unknown(client):
+    r = client.get("/items/999/preview")
+    assert r.status_code == 404
+
+
 def test_room_dropdown_uses_optgroups_not_per_option_labels(client):
     """Regression for the screenshot bug where '6 Edgehill Rd' appeared
     above every single room option because Jinja {% set %} doesn't persist

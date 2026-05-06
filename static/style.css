@@ -571,6 +571,14 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .item-dialog-close:hover { background: rgba(0, 0, 0, 0.8); }
 
+/* Header strip inside the search-result modal — gives users a clear way
+   to break out into the actual box page when they want to. */
+.search-item-modal-header {
+  padding: 0.75rem 0.9rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
 /* Scrollable content region inside the dialog */
 .item-detail {
   display: flex;
