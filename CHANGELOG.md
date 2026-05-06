@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.11.0...v0.12.0) (2026-05-06)
+
+
+### Features
+
+* Cricut-ready multi-page PDF export for labels ([53619e4](https://github.com/Brennan-VanderLaan/stash/commit/53619e44eeb88cf846af8543e6ad74c45c8b761d))
+
+
+### Bug Fixes
+
+* ingest mid-upload reload, dropdown popup contrast ([4090e0f](https://github.com/Brennan-VanderLaan/stash/commit/4090e0f3ed2d2d0cc14bc24bcd101a62ef04400a))
+
 ## [0.11.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.10.0...v0.11.0) (2026-05-06)
 
 
