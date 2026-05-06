@@ -23,12 +23,39 @@
 <details class="card">
   <summary style="cursor:pointer;list-style:none;">
     <div class="card-title" style="font-size:1.1rem;">{{ box.name }}</div>
-    {% if box.location %}<div class="text-sm text-muted">{{ box.location }}</div>{% endif %}
+    {% if box.room_name %}
+      <div class="text-sm" style="margin-top:0.2rem;">
+        <a href="/locations/{{ box.location_id }}#room-{{ box.room_id }}"
+           class="room-chip" style="--room-color: {{ box.room_color or '#4ade80' }}; text-decoration:none;">
+          📍 {{ box.room_name }}
+        </a>
+        {% if box.location_name %}<span class="text-muted">in {{ box.location_name }}</span>{% endif %}
+      </div>
+    {% elif box.location %}
+      <div class="text-sm text-muted">{{ box.location }}</div>
+    {% endif %}
     {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
   </summary>
   <form method="post" action="/boxes/{{ box.id }}/edit" style="margin-top:0.75rem;">
     <label>Name<input type="text" name="name" value="{{ box.name }}" required></label>
-    <label>Location
+    {% if rooms %}
+    <label>Room
+      <select name="room_id">
+        <option value="">— none —</option>
+        {% set current_loc = none %}
+        {% for r in rooms %}
+          {% if r.location_id != current_loc %}
+            {% if not loop.first %}</optgroup>{% endif %}
+            <optgroup label="{{ r.location_name }}">
+            {% set current_loc = r.location_id %}
+          {% endif %}
+          <option value="{{ r.id }}" {% if r.id == box.room_id %}selected{% endif %}>{{ r.name }}</option>
+          {% if loop.last %}</optgroup>{% endif %}
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <label>Location {% if rooms %}<span class="help-text">(free text — used only when no room is picked)</span>{% endif %}
       <input type="text" name="location" value="{{ box.location or '' }}" list="known-locations">
     </label>
     <label>Notes<textarea name="notes" rows="2">{{ box.notes or '' }}</textarea></label>

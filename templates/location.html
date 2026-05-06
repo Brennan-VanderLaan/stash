@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}{{ location.name }} · Stash{% endblock %}
+{% block header_left %}
+<a href="/locations" class="header-back">← Where</a>
+<h1><a href="/">📦 Stash</a></h1>
+{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">{{ location.name }}</span>
+    <div style="display:flex; gap:0.4rem;">
+      {% if location.floorplan %}
+      <a href="/locations/{{ location.id }}{% if not edit_mode %}?edit=1{% endif %}"
+         class="btn btn-secondary btn-sm">{% if edit_mode %}Done editing{% else %}Edit rooms{% endif %}</a>
+      {% endif %}
+    </div>
+  </div>
+  <details>
+    <summary class="text-sm text-muted" style="cursor:pointer;">Rename or delete this location</summary>
+    <form method="post" action="/locations/{{ location.id }}" style="margin-top:0.5rem;">
+      <label>Name<input type="text" name="name" value="{{ location.name }}" required></label>
+      <button type="submit" class="btn btn-secondary btn-block">Rename</button>
+    </form>
+    <form method="post" action="/locations/{{ location.id }}/delete" style="margin-top:0.5rem;">
+      <label>
+        Type <code>{{ location.name }}</code> to delete this location and all its rooms
+        <input type="text" name="confirm" placeholder="{{ location.name }}" autocomplete="off">
+      </label>
+      <button type="submit" class="btn btn-danger btn-block">Delete location</button>
+    </form>
+  </details>
+</div>
+
+{% if not location.floorplan %}
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Upload a floorplan</div>
+  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+    A clean overhead view of the space — a real floorplan, a hand-drawn sketch, even a satellite screenshot.
+    You'll draw rectangles over it to mark where each room is.
+  </p>
+  <form method="post" action="/locations/{{ location.id }}/floorplan" enctype="multipart/form-data">
+    <label>Floorplan image<input type="file" name="image" accept="image/*" required></label>
+    <button type="submit" class="btn btn-primary btn-block">Upload floorplan</button>
+  </form>
+</div>
+{% else %}
+
+<div class="card floorplan-card">
+  <div id="floorplan-stage" class="floorplan-stage" data-edit="{{ '1' if edit_mode else '0' }}"
+       data-location-id="{{ location.id }}">
+    <img id="floorplan-image" src="/uploads/{{ location.floorplan }}" alt="Floorplan of {{ location.name }}"
+         draggable="false">
+    <div id="floorplan-overlay" class="floorplan-overlay">
+      {% for r in rooms %}
+      <div class="room-rect" data-room-id="{{ r.id }}" data-name="{{ r.name }}"
+           data-color="{{ r.color or '#4ade80' }}"
+           style="--room-color: {{ r.color or '#4ade80' }};
+                  left: {{ (r.x * 100) }}%; top: {{ (r.y * 100) }}%;
+                  width: {{ (r.w * 100) }}%; height: {{ (r.h * 100) }}%;">
+        <span class="room-rect-label">{{ r.name }}</span>
+        <span class="room-rect-count" data-box-count>{{ r.box_count }}</span>
+      </div>
+      {% endfor %}
+      <div id="floorplan-draft" class="room-rect room-rect-draft" hidden></div>
+    </div>
+  </div>
+  {% if edit_mode %}
+  <p class="text-sm text-muted" style="margin-top:0.5rem;">
+    Click and drag on the floorplan to draw a new room. Click an existing room to rename or delete it.
+  </p>
+  <form method="post" action="/locations/{{ location.id }}/floorplan" enctype="multipart/form-data"
+        style="margin-top:0.5rem;">
+    <details>
+      <summary class="text-sm text-muted" style="cursor:pointer;">Replace floorplan image</summary>
+      <label style="margin-top:0.5rem;">New floorplan<input type="file" name="image" accept="image/*" required></label>
+      <button type="submit" class="btn btn-secondary btn-block">Replace</button>
+    </details>
+  </form>
+  {% endif %}
+</div>
+
+{# Per-room popover (a single dialog reused) — opens on rect click in edit mode #}
+<dialog id="room-edit-dialog" class="room-edit-dialog">
+  <button type="button" class="label-preview-close" data-close-room aria-label="Close">×</button>
+  <div class="room-edit-body">
+    <h2 class="room-edit-title" data-room-title></h2>
+    <label>Name<input type="text" data-room-name></label>
+    <div class="btn-row">
+      <button type="button" class="btn btn-primary" data-room-save>Save</button>
+      <button type="button" class="btn btn-secondary" data-room-view-boxes>View boxes</button>
+      <button type="button" class="btn btn-danger" data-room-delete>Delete</button>
+    </div>
+  </div>
+</dialog>
+
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.5rem;">Rooms ({{ rooms | length }})</div>
+  {% if rooms %}
+  <ul class="box-list">
+    {% for r in rooms %}
+    <li>
+      <a href="/rooms/{{ r.id }}/boxes" class="box-card">
+        <div>
+          <div class="box-name room-chip" style="--room-color: {{ r.color or '#4ade80' }};">{{ r.name }}</div>
+          <div class="box-meta">{{ r.box_count }} box{{ '' if r.box_count == 1 else 'es' }}</div>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty">No rooms yet. {% if edit_mode %}Drag on the floorplan to draw one.{% else %}Click <strong>Edit rooms</strong> to start mapping.{% endif %}</div>
+  {% endif %}
+</div>
+
+{% endif %}
+
+{% if location.floorplan %}
+<script>
+(function() {
+  const stage = document.getElementById('floorplan-stage');
+  const overlay = document.getElementById('floorplan-overlay');
+  const draft = document.getElementById('floorplan-draft');
+  const dialog = document.getElementById('room-edit-dialog');
+  const isEdit = stage.dataset.edit === '1';
+  const locationId = Number(stage.dataset.locationId);
+
+  // ── Drag-to-draw new rooms ─────────────────────────────────────────
+  // Coordinates are stored as fractions of the stage (image) dimensions
+  // so rooms remain correct if the image is later re-uploaded at a
+  // different resolution.
+  let drag = null;
+
+  function stageRect() { return stage.getBoundingClientRect(); }
+  function fracPos(e) {
+    const r = stageRect();
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
+    };
+  }
+
+  if (isEdit) {
+    stage.addEventListener('pointerdown', (e) => {
+      // Don't start a draft when clicking on an existing rectangle —
+      // that's a click for editing.
+      if (e.target.closest('.room-rect') && !e.target.closest('.room-rect-draft')) return;
+      e.preventDefault();
+      const start = fracPos(e);
+      drag = { startX: start.x, startY: start.y, lastX: start.x, lastY: start.y };
+      stage.setPointerCapture(e.pointerId);
+      placeDraft(drag);
+      draft.hidden = false;
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const cur = fracPos(e);
+      drag.lastX = cur.x;
+      drag.lastY = cur.y;
+      placeDraft(drag);
+    });
+    stage.addEventListener('pointerup', async (e) => {
+      if (!drag) return;
+      stage.releasePointerCapture(e.pointerId);
+      const rect = normalizedRect(drag);
+      drag = null;
+      draft.hidden = true;
+      if (rect.w < 0.01 || rect.h < 0.01) return;  // tap, not a drag
+      const name = prompt('Name this room:');
+      if (!name || !name.trim()) return;
+      try {
+        const body = new URLSearchParams({
+          name: name.trim(),
+          x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+        });
+        const r = await fetch(`/locations/${locationId}/rooms`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          body,
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        appendRoomElement({ id: data.id, name: data.name, color: data.color, ...rect });
+      } catch (err) {
+        alert('Could not create room: ' + err.message);
+      }
+    });
+  }
+
+  function placeDraft(d) {
+    const r = normalizedRect(d);
+    draft.style.left = (r.x * 100) + '%';
+    draft.style.top = (r.y * 100) + '%';
+    draft.style.width = (r.w * 100) + '%';
+    draft.style.height = (r.h * 100) + '%';
+  }
+  function normalizedRect(d) {
+    const x = Math.min(d.startX, d.lastX);
+    const y = Math.min(d.startY, d.lastY);
+    const w = Math.abs(d.lastX - d.startX);
+    const h = Math.abs(d.lastY - d.startY);
+    return { x, y, w, h };
+  }
+  function appendRoomElement({ id, name, color, x, y, w, h }) {
+    const el = document.createElement('div');
+    el.className = 'room-rect';
+    el.dataset.roomId = id;
+    el.dataset.name = name;
+    el.dataset.color = color;
+    el.style.setProperty('--room-color', color || '#4ade80');
+    el.style.left = (x * 100) + '%';
+    el.style.top = (y * 100) + '%';
+    el.style.width = (w * 100) + '%';
+    el.style.height = (h * 100) + '%';
+    el.innerHTML = `<span class="room-rect-label">${escapeHtml(name)}</span><span class="room-rect-count" data-box-count>0</span>`;
+    overlay.appendChild(el);
+  }
+  function escapeHtml(s) {
+    return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  // ── Click an existing rectangle to edit it ──────────────────────────
+  overlay.addEventListener('click', (e) => {
+    const rect = e.target.closest('.room-rect');
+    if (!rect || rect === draft) return;
+    if (isEdit) {
+      openRoomDialog(rect);
+    } else {
+      // View mode: jump to the boxes-in-room page
+      window.location.href = `/rooms/${rect.dataset.roomId}/boxes`;
+    }
+  });
+
+  function openRoomDialog(rect) {
+    const id = rect.dataset.roomId;
+    dialog.dataset.roomId = id;
+    dialog.querySelector('[data-room-title]').textContent = rect.dataset.name;
+    const nameInput = dialog.querySelector('[data-room-name]');
+    nameInput.value = rect.dataset.name;
+    dialog.showModal();
+    nameInput.focus();
+    nameInput.select();
+  }
+
+  dialog.querySelector('[data-close-room]').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+
+  dialog.querySelector('[data-room-save]').addEventListener('click', async () => {
+    const id = dialog.dataset.roomId;
+    const rect = overlay.querySelector(`.room-rect[data-room-id="${id}"]`);
+    const newName = dialog.querySelector('[data-room-name]').value.trim();
+    if (!rect || !newName) return;
+    // Read current geometry off the rect — the user only edits name in the dialog
+    const x = parseFloat(rect.style.left) / 100;
+    const y = parseFloat(rect.style.top) / 100;
+    const w = parseFloat(rect.style.width) / 100;
+    const h = parseFloat(rect.style.height) / 100;
+    try {
+      const r = await fetch(`/rooms/${id}`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({ name: newName, x, y, w, h }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      rect.dataset.name = newName;
+      rect.querySelector('.room-rect-label').textContent = newName;
+      dialog.close();
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+    }
+  });
+
+  dialog.querySelector('[data-room-delete]').addEventListener('click', async () => {
+    const id = dialog.dataset.roomId;
+    const rect = overlay.querySelector(`.room-rect[data-room-id="${id}"]`);
+    if (!rect) return;
+    if (!confirm(`Delete room "${rect.dataset.name}"? Any boxes in it will become unassigned.`)) return;
+    try {
+      const r = await fetch(`/rooms/${id}/delete`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      rect.remove();
+      dialog.close();
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
+  });
+
+  dialog.querySelector('[data-room-view-boxes]').addEventListener('click', () => {
+    window.location.href = `/rooms/${dialog.dataset.roomId}/boxes`;
+  });
+})();
+</script>
+{% endif %}
+
+{% endblock %}

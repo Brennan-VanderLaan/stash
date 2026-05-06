@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Where · Stash{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-title" style="margin-bottom:0.25rem;">Locations</div>
+  <p class="text-sm text-muted">
+    A location is a place — a house, a storage unit, an office. Upload a floorplan
+    and draw rooms on it to map exactly where each box lives.
+  </p>
+</div>
+
+<details class="card" {% if not locations %}open{% endif %}>
+  <summary class="card-title" style="cursor:pointer;list-style:none;">+ New location</summary>
+  <form method="post" action="/locations" style="margin-top:0.75rem;">
+    <label>Name<input type="text" name="name" required placeholder="e.g. Main house"></label>
+    <button type="submit" class="btn btn-primary btn-block">Create location</button>
+  </form>
+</details>
+
+{% if locations %}
+<ul class="box-list">
+  {% for loc in locations %}
+  <li>
+    <a href="/locations/{{ loc.id }}" class="box-card">
+      <div style="flex:1;">
+        <div class="box-name">{{ loc.name }}</div>
+        <div class="box-meta">
+          {{ loc.room_count }} room{{ '' if loc.room_count == 1 else 's' }}
+          · {{ loc.box_count }} box{{ '' if loc.box_count == 1 else 'es' }}
+          {% if not loc.floorplan %}<span class="text-muted"> · no floorplan</span>{% endif %}
+        </div>
+      </div>
+      {% if loc.floorplan %}
+      <img src="/uploads/{{ loc.floorplan }}" alt=""
+           style="width:64px;height:64px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);">
+      {% endif %}
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty">No locations yet. Create one above to start mapping where stuff lives.</div>
+{% endif %}
+
+{% endblock %}

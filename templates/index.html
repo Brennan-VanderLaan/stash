@@ -19,7 +19,10 @@
         <div class="box-name">{{ b.name }}</div>
         <div class="box-meta">
           {{ b.item_count }} item{{ '' if b.item_count == 1 else 's' }}
-          {% if b.location %} · {{ b.location }}{% endif %}
+          {% if b.room_name %}
+            · <span class="room-chip" style="--room-color: {{ b.room_color or '#4ade80' }};">{{ b.room_name }}</span>
+            {% if b.location_name %}<span class="text-muted"> in {{ b.location_name }}</span>{% endif %}
+          {% elif b.location %} · {{ b.location }}{% endif %}
         </div>
         {% set box_thumbs = thumbs.get(b.id, []) %}
         {% if box_thumbs %}

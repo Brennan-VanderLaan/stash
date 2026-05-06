@@ -826,6 +826,127 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .label-preview-close:hover { background: rgba(0, 0, 0, 0.85); }
 
+/* === Locations + floorplan === */
+
+/* Inline chip used wherever a room name shows up — index list, box detail,
+   floorplan room list, etc. The --room-color custom prop gates accent color
+   per room so the same chip pattern colors itself based on the assigned hue. */
+.room-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 100px;
+  background: color-mix(in srgb, var(--room-color, var(--accent)) 18%, transparent);
+  color: var(--room-color, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--room-color, var(--accent)) 35%, transparent);
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.floorplan-card {
+  padding: 0.5rem;
+}
+.floorplan-stage {
+  position: relative;
+  border-radius: var(--radius);
+  background: #0c1810;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;  /* let pointer events drive panning instead of scroll */
+}
+.floorplan-stage[data-edit="1"] { cursor: crosshair; }
+.floorplan-stage img {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+.floorplan-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.room-rect {
+  position: absolute;
+  border: 2px solid var(--room-color, var(--accent));
+  background: color-mix(in srgb, var(--room-color, var(--accent)) 15%, transparent);
+  border-radius: 6px;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.25rem 0.4rem;
+  min-width: 24px;
+  min-height: 24px;
+  overflow: hidden;
+}
+.floorplan-stage[data-edit="0"] .room-rect:hover {
+  background: color-mix(in srgb, var(--room-color, var(--accent)) 28%, transparent);
+}
+.floorplan-stage[data-edit="1"] .room-rect:hover {
+  background: color-mix(in srgb, var(--room-color, var(--accent)) 30%, transparent);
+}
+.room-rect-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  flex: 1;
+  min-width: 0;
+}
+.room-rect-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #0a1810;
+  background: var(--room-color, var(--accent));
+  padding: 0.05rem 0.4rem;
+  border-radius: 100px;
+  margin-left: 0.4rem;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.room-rect-draft {
+  border-style: dashed;
+  background: rgba(74, 222, 128, 0.15);
+  pointer-events: none;
+}
+
+/* Room edit dialog — reuses some of the label-preview styles for consistency */
+.room-edit-dialog {
+  width: min(420px, 92vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+}
+.room-edit-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+}
+.room-edit-body {
+  padding: 1.25rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.room-edit-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--accent);
+}
+
 /* === Empty State === */
 .empty {
   color: var(--muted);

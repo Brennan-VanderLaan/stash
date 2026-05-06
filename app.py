@@ -94,6 +94,26 @@ def db():
 def init_db():
     with db() as conn:
         conn.executescript("""
+        CREATE TABLE IF NOT EXISTS locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            floorplan TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            -- Bounding box on the floorplan as fractions 0..1 of image dims so
+            -- coordinates survive re-uploading at a different resolution.
+            x REAL NOT NULL DEFAULT 0,
+            y REAL NOT NULL DEFAULT 0,
+            w REAL NOT NULL DEFAULT 0,
+            h REAL NOT NULL DEFAULT 0,
+            color TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_rooms_location ON rooms(location_id);
         CREATE TABLE IF NOT EXISTS boxes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -172,11 +192,49 @@ def migrate_db():
         _add_column_if_missing(conn, "items", "source_photo", "TEXT")
         # Generated label background art (Nano Banana 2). Filename in UPLOAD_DIR.
         _add_column_if_missing(conn, "boxes", "background_art", "TEXT")
+        # Floorplan-driven room association. boxes.location stays as a free-text
+        # fallback for now, but room_id is the source of truth going forward.
+        _add_column_if_missing(
+            conn, "boxes", "room_id",
+            "INTEGER REFERENCES rooms(id) ON DELETE SET NULL",
+        )
         # Backfill source_photo for items created before this column existed
         conn.execute(
             "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
         )
+        _migrate_legacy_locations(conn)
         conn.commit()
+
+
+def _migrate_legacy_locations(conn) -> None:
+    """One-shot conversion of free-text `boxes.location` strings into a default
+    Location + Rooms structure. Idempotent — only runs if no locations exist yet,
+    so re-running on an already-migrated DB is a no-op."""
+    has_any_location = conn.execute("SELECT 1 FROM locations LIMIT 1").fetchone()
+    if has_any_location:
+        return
+    legacy = [
+        r["location"].strip() for r in conn.execute(
+            "SELECT DISTINCT location FROM boxes "
+            "WHERE location IS NOT NULL AND TRIM(location) != ''"
+        ).fetchall()
+    ]
+    if not legacy:
+        return
+    cur = conn.execute(
+        "INSERT INTO locations (name) VALUES (?)", ("Default location",),
+    )
+    location_id = cur.lastrowid
+    for room_name in legacy:
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, name, x, y, w, h) VALUES (?, ?, 0, 0, 0, 0)",
+            (location_id, room_name),
+        )
+        room_id = cur.lastrowid
+        conn.execute(
+            "UPDATE boxes SET room_id = ? WHERE TRIM(location) = ?",
+            (room_id, room_name),
+        )
 
 
 init_db()
@@ -358,8 +416,14 @@ def serve_upload(name: str):
 def index(request: Request):
     with db() as conn:
         boxes = conn.execute(
-            "SELECT b.*, COUNT(i.id) AS item_count FROM boxes b "
-            "LEFT JOIN items i ON i.box_id = b.id GROUP BY b.id ORDER BY b.created_at DESC"
+            "SELECT b.*, COUNT(i.id) AS item_count, "
+            "       r.name AS room_name, r.color AS room_color, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM boxes b "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            "LEFT JOIN items i ON i.box_id = b.id "
+            "GROUP BY b.id ORDER BY b.created_at DESC"
         ).fetchall()
         # Up to 5 most-recent item photos per box, for the preview strip
         thumb_rows = conn.execute(
@@ -376,12 +440,36 @@ def index(request: Request):
     )
 
 
+def _coerce_room_id(value: str) -> int | None:
+    """Form posts the room id as a string — empty/none means clear the link."""
+    if not value or value in ("none", "0"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @app.post("/boxes")
-def create_box(name: str = Form(...), location: str = Form(""), notes: str = Form("")):
+def create_box(
+    name: str = Form(...),
+    location: str = Form(""),
+    notes: str = Form(""),
+    room_id: str = Form(""),
+):
+    rid = _coerce_room_id(room_id)
     with db() as conn:
+        # If a room is picked, denormalize its name into boxes.location so the
+        # plain text shows up everywhere that doesn't JOIN to rooms.
+        if rid is not None:
+            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
+            if row:
+                location = row["name"]
+            else:
+                rid = None
         conn.execute(
-            "INSERT INTO boxes (name, location, notes) VALUES (?, ?, ?)",
-            (name.strip(), location.strip(), notes.strip()),
+            "INSERT INTO boxes (name, location, notes, room_id) VALUES (?, ?, ?, ?)",
+            (name.strip(), location.strip(), notes.strip(), rid),
         )
         conn.commit()
     return RedirectResponse("/", status_code=303)
@@ -399,7 +487,15 @@ def _known_locations(conn) -> list[str]:
 @app.get("/boxes/{box_id}", response_class=HTMLResponse)
 def box_detail(request: Request, box_id: int):
     with db() as conn:
-        box = conn.execute("SELECT * FROM boxes WHERE id = ?", (box_id,)).fetchone()
+        box = conn.execute(
+            "SELECT b.*, r.name AS room_name, r.color AS room_color, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM boxes b "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            "WHERE b.id = ?",
+            (box_id,),
+        ).fetchone()
         if not box:
             raise HTTPException(404)
         items_raw = conn.execute(
@@ -414,6 +510,7 @@ def box_detail(request: Request, box_id: int):
             "SELECT id, name, location FROM boxes WHERE id != ? ORDER BY name", (box_id,)
         ).fetchall()
         locations = _known_locations(conn)
+        rooms = _rooms_for_picker(conn)
         all_tags = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
     return templates.TemplateResponse(
         request, "box.html",
@@ -422,6 +519,7 @@ def box_detail(request: Request, box_id: int):
             "items_with_tags": items_with_tags,
             "other_boxes": other_boxes,
             "locations": locations,
+            "rooms": rooms,
             "all_tags": [r["name"] for r in all_tags],
         },
     )
@@ -433,15 +531,23 @@ def edit_box(
     name: str = Form(...),
     location: str = Form(""),
     notes: str = Form(""),
+    room_id: str = Form(""),
 ):
     if not name.strip():
         raise HTTPException(400, "Name required")
+    rid = _coerce_room_id(room_id)
     with db() as conn:
         if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
             raise HTTPException(404)
+        if rid is not None:
+            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
+            if row:
+                location = row["name"]
+            else:
+                rid = None
         conn.execute(
-            "UPDATE boxes SET name = ?, location = ?, notes = ? WHERE id = ?",
-            (name.strip(), location.strip(), notes.strip(), box_id),
+            "UPDATE boxes SET name = ?, location = ?, notes = ?, room_id = ? WHERE id = ?",
+            (name.strip(), location.strip(), notes.strip(), rid, box_id),
         )
         conn.commit()
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
@@ -1189,6 +1295,257 @@ def delete_box(box_id: int, confirm: str = Form(...)):
         except FileNotFoundError:
             pass
     return RedirectResponse("/", status_code=303)
+
+
+# ── Locations + rooms (where stuff actually lives) ─────────────────────────
+
+# A small fixed palette so distinct rooms get visually separable colors on the
+# floorplan. Cycled by index when assigning a fresh room.
+_ROOM_COLORS = [
+    "#4ade80", "#60a5fa", "#fbbf24", "#f87171",
+    "#a78bfa", "#34d399", "#fb923c", "#22d3ee",
+    "#f472b6", "#facc15", "#94a3b8", "#fde047",
+]
+
+
+def _next_room_color(conn, location_id: int) -> str:
+    """Pick the next unused color in the palette for a location, cycling if all
+    are taken. Keeps rooms inside a single floorplan visually distinct."""
+    used = {
+        r["color"] for r in conn.execute(
+            "SELECT color FROM rooms WHERE location_id = ? AND color IS NOT NULL",
+            (location_id,),
+        ).fetchall()
+    }
+    for c in _ROOM_COLORS:
+        if c not in used:
+            return c
+    n = conn.execute(
+        "SELECT COUNT(*) FROM rooms WHERE location_id = ?", (location_id,),
+    ).fetchone()[0]
+    return _ROOM_COLORS[n % len(_ROOM_COLORS)]
+
+
+def _locations_with_room_counts(conn) -> list[dict]:
+    rows = conn.execute(
+        "SELECT l.*, "
+        "       (SELECT COUNT(*) FROM rooms WHERE location_id = l.id) AS room_count, "
+        "       (SELECT COUNT(*) FROM boxes b "
+        "         JOIN rooms r ON r.id = b.room_id "
+        "         WHERE r.location_id = l.id) AS box_count "
+        "FROM locations l ORDER BY l.created_at"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _rooms_for_picker(conn) -> list[dict]:
+    """Flat list suitable for an optgroup'd select: room id, room name, location name."""
+    rows = conn.execute(
+        "SELECT r.id, r.name, l.id AS location_id, l.name AS location_name "
+        "FROM rooms r JOIN locations l ON l.id = r.location_id "
+        "ORDER BY l.name, r.name"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/locations", response_class=HTMLResponse)
+def locations_index(request: Request):
+    with db() as conn:
+        locs = _locations_with_room_counts(conn)
+    return templates.TemplateResponse(
+        request, "locations.html", {"locations": locs},
+    )
+
+
+@app.post("/locations")
+def create_location(name: str = Form(...)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    with db() as conn:
+        cur = conn.execute("INSERT INTO locations (name) VALUES (?)", (name,))
+        conn.commit()
+    return RedirectResponse(f"/locations/{cur.lastrowid}", status_code=303)
+
+
+@app.get("/locations/{location_id}", response_class=HTMLResponse)
+def location_detail(request: Request, location_id: int, edit: str = ""):
+    with db() as conn:
+        loc = conn.execute(
+            "SELECT * FROM locations WHERE id = ?", (location_id,),
+        ).fetchone()
+        if not loc:
+            raise HTTPException(404)
+        rooms = [dict(r) for r in conn.execute(
+            "SELECT r.*, "
+            "       (SELECT COUNT(*) FROM boxes WHERE room_id = r.id) AS box_count "
+            "FROM rooms r WHERE r.location_id = ? ORDER BY r.name",
+            (location_id,),
+        ).fetchall()]
+    return templates.TemplateResponse(
+        request, "location.html",
+        {
+            "location": loc,
+            "rooms": rooms,
+            "edit_mode": edit == "1",
+        },
+    )
+
+
+@app.post("/locations/{location_id}")
+def edit_location(location_id: int, name: str = Form(...)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
+            raise HTTPException(404)
+        conn.execute("UPDATE locations SET name = ? WHERE id = ?", (name, location_id))
+        conn.commit()
+    return RedirectResponse(f"/locations/{location_id}", status_code=303)
+
+
+@app.post("/locations/{location_id}/delete")
+def delete_location(location_id: int, confirm: str = Form(...)):
+    with db() as conn:
+        loc = conn.execute(
+            "SELECT name, floorplan FROM locations WHERE id = ?", (location_id,),
+        ).fetchone()
+        if not loc:
+            raise HTTPException(404)
+        if confirm.strip() != loc["name"]:
+            raise HTTPException(400, "Type the location name to confirm deletion")
+        conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+        conn.commit()
+        if loc["floorplan"]:
+            _delete_upload_if_orphan(conn, loc["floorplan"])
+    return RedirectResponse("/locations", status_code=303)
+
+
+@app.post("/locations/{location_id}/floorplan")
+async def upload_floorplan(location_id: int, image: UploadFile = File(...)):
+    if not image or not image.filename:
+        raise HTTPException(400, "Image required")
+    with db() as conn:
+        loc = conn.execute(
+            "SELECT floorplan FROM locations WHERE id = ?", (location_id,),
+        ).fetchone()
+        if not loc:
+            raise HTTPException(404)
+    new_name = save_photo_bytes(await image.read(), image.filename)
+    with db() as conn:
+        old = loc["floorplan"]
+        conn.execute(
+            "UPDATE locations SET floorplan = ? WHERE id = ?",
+            (new_name, location_id),
+        )
+        conn.commit()
+        if old and old != new_name:
+            _delete_upload_if_orphan(conn, old)
+    return RedirectResponse(f"/locations/{location_id}?edit=1", status_code=303)
+
+
+@app.post("/locations/{location_id}/rooms")
+def create_room(
+    request: Request,
+    location_id: int,
+    name: str = Form(...),
+    x: float = Form(0), y: float = Form(0),
+    w: float = Form(0), h: float = Form(0),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
+            raise HTTPException(404)
+        color = _next_room_color(conn, location_id)
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, name, x, y, w, h, color) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (location_id, name, _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), color),
+        )
+        conn.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "id": cur.lastrowid, "color": color, "name": name}
+    return RedirectResponse(f"/locations/{location_id}?edit=1", status_code=303)
+
+
+@app.post("/rooms/{room_id}")
+def edit_room(
+    request: Request,
+    room_id: int,
+    name: str = Form(...),
+    x: float = Form(0), y: float = Form(0),
+    w: float = Form(0), h: float = Form(0),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT location_id FROM rooms WHERE id = ?", (room_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404)
+        conn.execute(
+            "UPDATE rooms SET name = ?, x = ?, y = ?, w = ?, h = ? WHERE id = ?",
+            (name, _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), room_id),
+        )
+        conn.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True}
+    return RedirectResponse(f"/locations/{row['location_id']}?edit=1", status_code=303)
+
+
+@app.post("/rooms/{room_id}/delete")
+def delete_room(request: Request, room_id: int):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT location_id FROM rooms WHERE id = ?", (room_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404)
+        conn.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
+        conn.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True}
+    return RedirectResponse(f"/locations/{row['location_id']}?edit=1", status_code=303)
+
+
+def _clamp01(v: float) -> float:
+    """Floorplan coordinates are stored as fractions of the image; clamp so a
+    drag that overshoots the canvas doesn't end up with negative or >1 values."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, f))
+
+
+@app.get("/rooms/{room_id}/boxes", response_class=HTMLResponse)
+def room_boxes(request: Request, room_id: int):
+    """Boxes assigned to a single room — used as the click-through target from
+    the floorplan view."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT r.*, l.name AS location_name, l.id AS location_id "
+            "FROM rooms r JOIN locations l ON l.id = r.location_id "
+            "WHERE r.id = ?",
+            (room_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404)
+        boxes = conn.execute(
+            "SELECT b.*, COUNT(i.id) AS item_count FROM boxes b "
+            "LEFT JOIN items i ON i.box_id = b.id "
+            "WHERE b.room_id = ? GROUP BY b.id ORDER BY b.name",
+            (room_id,),
+        ).fetchall()
+    return templates.TemplateResponse(
+        request, "room_boxes.html",
+        {"room": dict(row), "boxes": boxes},
+    )
 
 
 def _referenced_uploads() -> set[str]:
