@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.8.0...v0.9.0) (2026-05-06)
+
+
+### Features
+
+* locations, rooms, and an interactive floorplan editor ([1b02349](https://github.com/Brennan-VanderLaan/stash/commit/1b02349692279705d0bc7985d4a4f52d24bac0b6))
+* modal preview, parallel-safe AJAX art, item-context, brighter print ([1660051](https://github.com/Brennan-VanderLaan/stash/commit/1660051e2b1aacf212f47d0b333b14524496be35))
+* multi-floor locations + drag-to-move/resize rooms ([b07871b](https://github.com/Brennan-VanderLaan/stash/commit/b07871b961003f223dd0f09b0ea165e75a911d48))
+* serve downscaled thumbs from /thumbs/{name} for grid + list views ([6a3dc7b](https://github.com/Brennan-VanderLaan/stash/commit/6a3dc7b4791ad4b474df2bbb5c7ee262e7a559d7))
+
+
+### Bug Fixes
+
+* actually take advantage of docker layer cache on every commit ([f09ca7d](https://github.com/Brennan-VanderLaan/stash/commit/f09ca7d2b62b0ad170e78178dfd1d6a6da4e0c27))
+* lowercase image name for GHCR cache refs ([fbacf3b](https://github.com/Brennan-VanderLaan/stash/commit/fbacf3b8cf768083640a13b7ee764c1f7815e870))
+
 ## [0.8.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.7.0...v0.8.0) (2026-05-06)
 
 
