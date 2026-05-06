@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.1...v0.9.2) (2026-05-06)
+
+
+### Bug Fixes
+
+* sort queue UX, mobile nav, new-box room picker, grouped box dropdown ([cbe4f99](https://github.com/Brennan-VanderLaan/stash/commit/cbe4f99add025606b9b7914c6638638fb08961df))
+
 ## [0.9.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.9.0...v0.9.1) (2026-05-06)
 
 
