@@ -1,11 +1,16 @@
 FROM python:3.12-slim
 
+ARG VERSION=dev
+ARG GIT_SHA=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     STASH_DB=/data/stash.db \
-    STASH_UPLOADS=/data/uploads
+    STASH_UPLOADS=/data/uploads \
+    STASH_VERSION=${VERSION} \
+    STASH_GIT_SHA=${GIT_SHA}
 
 WORKDIR /app
 
@@ -19,6 +24,7 @@ RUN pip install -r requirements.txt
 COPY app.py labels.py vision.py ./
 COPY templates/ ./templates/
 COPY static/ ./static/
+COPY CHANGELOG.md ./
 
 RUN useradd --system --uid 1000 --home /app stash \
     && mkdir -p /data/uploads \
