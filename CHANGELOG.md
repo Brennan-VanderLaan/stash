@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.2.0...v0.3.0) (2026-05-06)
+
+
+### Features
+
+* **deploy:** add HTTPS security headers at the caddy edge ([3427fc2](https://github.com/Brennan-VanderLaan/stash/commit/3427fc2fc677b309f89b1ce89072d73736f7486b))
+* **deploy:** explicit cookie + session hardening on oauth2-proxy ([1dfae8f](https://github.com/Brennan-VanderLaan/stash/commit/1dfae8fb1ffbabe82412b905fb2cc6333b959c98))
+* **deploy:** isolate watchtower from /var/run/docker.sock via tecnativa proxy ([a7acae6](https://github.com/Brennan-VanderLaan/stash/commit/a7acae69c46fd124109fad87078cc7002d97780f))
+* **deploy:** segment compose networks so stash is unreachable except via oauth2-proxy ([a7bc475](https://github.com/Brennan-VanderLaan/stash/commit/a7bc475b8ce41f075cbada2776b99b90b99cedc8))
+
+
+### Bug Fixes
+
+* harden upload pipeline against XSS, traversal, and decompression bombs ([a553547](https://github.com/Brennan-VanderLaan/stash/commit/a55354782b581c21ba193c69ae5c534918c6bbb0))
+* make release-please manifest the single source of truth for version ([b5782a4](https://github.com/Brennan-VanderLaan/stash/commit/b5782a4accf3197c8f2e3df180fedf5d56a88c3c))
+* sync VERSION on release-please bumps ([65113d3](https://github.com/Brennan-VanderLaan/stash/commit/65113d3984989ffbfbc71f5b4ff31f7a117f8e0f))
+
 ## [0.2.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.1.0...v0.2.0) (2026-05-06)
 
 
