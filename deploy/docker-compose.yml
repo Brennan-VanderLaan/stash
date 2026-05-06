@@ -14,6 +14,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks:
+      - frontend
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 
@@ -21,6 +23,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest
     container_name: oauth2-proxy
     restart: unless-stopped
+    networks:
+      - frontend
+      - backend
     environment:
       OAUTH2_PROXY_PROVIDER: google
       OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID}
@@ -60,6 +65,8 @@ services:
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN}
     volumes:
       - stash-data:/data
+    networks:
+      - backend
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 
@@ -67,6 +74,8 @@ services:
     image: containrrr/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
+    networks:
+      - backend
     environment:
       # Only act on containers explicitly opted-in via the label above.
       WATCHTOWER_LABEL_ENABLE: "true"
@@ -86,3 +95,12 @@ volumes:
   stash-data:
   caddy-data:
   caddy-config:
+
+networks:
+  # Public-facing leg: only caddy + oauth2-proxy live here. Caddy is the
+  # only container with published ports.
+  frontend:
+  # Private leg: stash and watchtower are unreachable from the internet
+  # AND from any future container that doesn't explicitly join `backend`.
+  # oauth2-proxy bridges the two networks — it's the only path in.
+  backend:
