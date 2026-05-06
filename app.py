@@ -170,6 +170,8 @@ def migrate_db():
         _add_column_if_missing(conn, "pending_items", "bbox_x_max", "INTEGER")
         # Source photo preserved on items for crop undo / re-crop
         _add_column_if_missing(conn, "items", "source_photo", "TEXT")
+        # Generated label background art (Nano Banana 2). Filename in UPLOAD_DIR.
+        _add_column_if_missing(conn, "boxes", "background_art", "TEXT")
         # Backfill source_photo for items created before this column existed
         conn.execute(
             "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
@@ -317,8 +319,9 @@ def _photo_still_referenced(conn, photo_name: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM items WHERE photo = ? OR source_photo = ? "
         "UNION SELECT 1 FROM pending_items WHERE photo = ? "
-        "UNION SELECT 1 FROM ingest_jobs WHERE photo = ? LIMIT 1",
-        (photo_name, photo_name, photo_name, photo_name),
+        "UNION SELECT 1 FROM ingest_jobs WHERE photo = ? "
+        "UNION SELECT 1 FROM boxes WHERE background_art = ? LIMIT 1",
+        (photo_name, photo_name, photo_name, photo_name, photo_name),
     ).fetchone() is not None
 
 
@@ -967,13 +970,25 @@ def tags_autocomplete(q: str = ""):
     return [r["name"] for r in rows]
 
 
+def _box_art_path(box_row) -> Path | None:
+    """Resolve a box's background art file (or None). Tolerates missing files."""
+    art = box_row["background_art"] if "background_art" in box_row.keys() else None
+    if not art:
+        return None
+    p = UPLOAD_DIR / art
+    return p if p.exists() else None
+
+
 @app.get("/boxes/{box_id}/label.svg")
 def box_label_svg(box_id: int):
     with db() as conn:
         box = conn.execute("SELECT * FROM boxes WHERE id = ?", (box_id,)).fetchone()
         if not box:
             raise HTTPException(404)
-    svg = labels.render_label_svg(box["id"], box["name"], box["notes"] or "", PUBLIC_URL)
+    svg = labels.render_label_svg(
+        box["id"], box["name"], box["notes"] or "", PUBLIC_URL,
+        background_art=_box_art_path(box),
+    )
     return Response(
         content=svg,
         media_type="image/svg+xml",
@@ -981,33 +996,124 @@ def box_label_svg(box_id: int):
     )
 
 
+def _selected_boxes(conn, box_ids_raw: list[str]) -> list:
+    """Return rows for the selected boxes, or all boxes if no selection given.
+    Ordering matches the labels page (alpha) so printed sheets are predictable."""
+    if box_ids_raw:
+        placeholders = ",".join("?" * len(box_ids_raw))
+        return conn.execute(
+            f"SELECT id, name, notes, background_art FROM boxes "
+            f"WHERE id IN ({placeholders}) ORDER BY name",
+            [int(b) for b in box_ids_raw],
+        ).fetchall()
+    return conn.execute(
+        "SELECT id, name, notes, background_art FROM boxes ORDER BY name"
+    ).fetchall()
+
+
 @app.get("/labels", response_class=HTMLResponse)
 def labels_page(request: Request):
     with db() as conn:
         boxes = conn.execute("SELECT * FROM boxes ORDER BY name").fetchall()
-    return templates.TemplateResponse(request, "labels.html", {"boxes": boxes})
+    return templates.TemplateResponse(
+        request, "labels.html",
+        {
+            "boxes": boxes,
+            "labels_per_page": labels.LABELS_PER_PAGE,
+            "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
+        },
+    )
 
 
 @app.get("/labels/sheet.svg")
 def labels_sheet(request: Request):
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        if box_ids_raw:
-            placeholders = ",".join("?" * len(box_ids_raw))
-            boxes = conn.execute(
-                f"SELECT id, name, notes FROM boxes WHERE id IN ({placeholders}) ORDER BY name",
-                [int(b) for b in box_ids_raw],
-            ).fetchall()
-        else:
-            boxes = conn.execute(
-                "SELECT id, name, notes FROM boxes ORDER BY name"
-            ).fetchall()
-    svg = labels.render_sheet_svg([dict(b) for b in boxes], PUBLIC_URL)
+        boxes = _selected_boxes(conn, box_ids_raw)
+    svg = labels.render_sheet_svg(
+        [dict(b) for b in boxes], PUBLIC_URL, uploads_dir=UPLOAD_DIR,
+    )
     return Response(
         content=svg,
         media_type="image/svg+xml",
         headers={"Content-Disposition": 'attachment; filename="stash-labels.svg"'},
     )
+
+
+@app.get("/labels/print", response_class=HTMLResponse)
+def labels_print(request: Request):
+    """Browser-printable preview of all selected labels, paginated via CSS so
+    Cmd/Ctrl+P produces real multi-page output. Single-sheet SVGs get wrapped
+    in page-break-after divs — no PDF library needed for clean printing."""
+    box_ids_raw = request.query_params.getlist("box_ids")
+    with db() as conn:
+        boxes = [dict(b) for b in _selected_boxes(conn, box_ids_raw)]
+    pages = []
+    for chunk_start in range(0, max(len(boxes), 1), labels.LABELS_PER_PAGE):
+        chunk = boxes[chunk_start:chunk_start + labels.LABELS_PER_PAGE]
+        pages.append(labels.render_single_sheet_svg(
+            chunk, PUBLIC_URL, uploads_dir=UPLOAD_DIR,
+        ))
+    return templates.TemplateResponse(
+        request, "labels_print.html",
+        {"sheet_svgs": pages, "label_count": len(boxes)},
+    )
+
+
+@app.post("/boxes/{box_id}/generate-art")
+def generate_box_art(box_id: int, next_url: str = Form("/labels")):
+    """Synchronously generate label background art via Nano Banana 2.
+
+    Synchronous because it's user-triggered (one box at a time from the
+    labels page) and the model takes ~10-20s — short enough to wait. The
+    old image, if any, is cleaned up only after the new one writes
+    successfully so a failed generation doesn't strand the box without art."""
+    with db() as conn:
+        box = conn.execute(
+            "SELECT id, name, notes, background_art FROM boxes WHERE id = ?",
+            (box_id,),
+        ).fetchone()
+        if not box:
+            raise HTTPException(404)
+    try:
+        image_bytes = vision.generate_label_art(box["name"], box["notes"] or "")
+    except Exception as e:
+        raise HTTPException(502, f"Art generation failed: {e}")
+
+    new_name = f"art-{secrets.token_hex(8)}.jpg"
+    (UPLOAD_DIR / new_name).write_bytes(image_bytes)
+
+    with db() as conn:
+        old = box["background_art"]
+        conn.execute(
+            "UPDATE boxes SET background_art = ? WHERE id = ?",
+            (new_name, box_id),
+        )
+        conn.commit()
+        if old and old != new_name:
+            _delete_upload_if_orphan(conn, old)
+
+    # Only redirect to whitelisted internal targets — never honor an absolute
+    # URL or one that escapes the app, even with the form coming from us.
+    target = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/labels"
+    return RedirectResponse(target, status_code=303)
+
+
+@app.post("/boxes/{box_id}/clear-art")
+def clear_box_art(box_id: int, next_url: str = Form("/labels")):
+    """Drop the generated background art for a box."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT background_art FROM boxes WHERE id = ?", (box_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404)
+        conn.execute("UPDATE boxes SET background_art = NULL WHERE id = ?", (box_id,))
+        conn.commit()
+        if row["background_art"]:
+            _delete_upload_if_orphan(conn, row["background_art"])
+    target = next_url if next_url.startswith("/") and not next_url.startswith("//") else "/labels"
+    return RedirectResponse(target, status_code=303)
 
 
 @app.post("/boxes/{box_id}/delete")
@@ -1040,6 +1146,7 @@ def _referenced_uploads() -> set[str]:
             "SELECT source_photo FROM items WHERE source_photo IS NOT NULL",
             "SELECT photo FROM pending_items WHERE photo IS NOT NULL",
             "SELECT photo FROM ingest_jobs WHERE photo IS NOT NULL",
+            "SELECT background_art FROM boxes WHERE background_art IS NOT NULL",
         ):
             refs.update(r[0] for r in conn.execute(sql).fetchall())
     return refs

@@ -571,26 +571,161 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 
 /* === Labels === */
-.label-item {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: 0.5rem;
-  cursor: pointer;
+.label-grid-card {
+  padding: 0.5rem;
 }
-.label-preview {
+.label-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: 1fr;
   gap: 0.5rem;
 }
-.label-preview img {
-  width: 100%;
+@media (min-width: 640px) {
+  .label-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+}
+
+/* Each card is a clickable label wrapping the checkbox. The checkbox itself
+   is hidden visually but stays accessible to keyboards + screen readers. */
+.label-card {
+  position: relative;
+  display: block;
   border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s, transform 0.1s, box-shadow 0.15s;
+}
+.label-card > input[type="checkbox"] {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.label-card:has(> input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim) inset;
+}
+.label-card:has(> input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.label-card:hover { border-color: var(--accent); }
+.label-card:active { transform: scale(0.99); }
+
+.label-card-inner {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.6rem 0.7rem;
+}
+
+.label-card-thumb {
+  position: relative;
+  width: 88px;
+  aspect-ratio: 8 / 2.5;
   border-radius: var(--radius-sm);
   background: white;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.label-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.label-card-meta { min-width: 0; }
+.label-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.label-card-notes,
+.label-card-location {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.1rem;
+}
+.label-card-location { color: var(--accent); opacity: 0.75; }
+
+/* Selected indicator — small check chip in the corner */
+.label-card::after {
+  content: "✓";
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0a1810;
+  font-size: 0.7rem;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+  z-index: 2;
+}
+.label-card:has(> input:checked)::after { opacity: 1; }
+
+.label-card-actions {
+  display: flex;
+  gap: 0.15rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+.label-card-actions .label-action {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0.3rem;
+  font-size: 0.95rem;
+}
+.art-icon { font-size: 1rem; line-height: 1; }
+.btn.art-busy {
+  pointer-events: none;
+  opacity: 0.6;
+}
+.btn.art-busy .art-icon { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Sticky footer toolbar with selected count + actions */
+.label-toolbar {
+  position: sticky;
+  bottom: calc(64px + var(--safe-bottom));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.85rem;
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+  z-index: 50;
+}
+@media (min-width: 640px) {
+  .label-toolbar { bottom: 1rem; }
+}
+.label-toolbar-summary {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.label-toolbar-summary strong { color: var(--accent); font-size: 1rem; }
+.label-toolbar-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 /* === Empty State === */

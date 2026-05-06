@@ -1,6 +1,7 @@
 """Vision pipeline: Gemini for item detection + bounding boxes, Claude for box matching."""
 
 import base64
+import io
 import json
 import os
 from typing import Optional
@@ -10,6 +11,9 @@ from google import genai
 
 CLAUDE_MODEL = "claude-opus-4-6"
 GEMINI_MODEL = "gemini-2.5-flash"
+# Nano Banana 2 — Gemini 3 Pro Image. Override via STASH_NANO_BANANA_MODEL if
+# Google ships the GA name under a different ID later.
+NANO_BANANA_MODEL = os.environ.get("STASH_NANO_BANANA_MODEL", "gemini-3-pro-image-preview")
 
 _anthropic_client: Optional[anthropic.Anthropic] = None
 _gemini_client: Optional[genai.Client] = None
@@ -87,6 +91,73 @@ def detect_items(image_bytes: bytes, media_type: str = "image/jpeg") -> list[Det
             bbox=bbox,
         ))
     return items
+
+
+def generate_label_art(name: str, description: str = "") -> bytes:
+    """Generate playful background art for a printed label using Nano Banana 2.
+
+    The result is downscaled and JPEG-encoded so it fits cleanly in a label
+    SVG (embedded as a base64 data URI). Returns the raw image bytes.
+
+    The prompt steers the model toward simple, faded-friendly illustrations
+    because the art is composited at low opacity behind label text — busy
+    images muddy the readability of the box name."""
+    prompt = (
+        "Create a playful, hand-drawn cartoon illustration for the BACKGROUND of a "
+        "storage-box label. It will be composited at ~18% opacity behind the box name "
+        "and a QR code, so the image must read clearly even when faded.\n\n"
+        f"Box name: {name}\n"
+        f"Likely contents: {description or '(unspecified — surprise me with something fun based on the name)'}\n\n"
+        "Style requirements:\n"
+        "- Flat, simple, cute illustration. Cheerful and a little goofy.\n"
+        "- Light or white background. Bold but not dark colors.\n"
+        "- NO TEXT, NO LETTERS, NO NUMBERS in the image — text overlays from the label use the same area.\n"
+        "- Wide aspect ratio (around 16:9).\n"
+        "- Compose the subject so it remains recognizable when the right ~30% of the image is partially obscured by typography.\n"
+        "- One clear focal idea — not a busy collage."
+    )
+    response = get_gemini().models.generate_content(
+        model=NANO_BANANA_MODEL,
+        contents=prompt,
+    )
+
+    image_bytes = _extract_image_bytes(response)
+    if image_bytes is None:
+        raise RuntimeError("Nano Banana 2 returned no image data")
+
+    # Downscale + JPEG so the embedded data URI doesn't bloat the label SVG.
+    from PIL import Image
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail((1024, 1024), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=82, optimize=True)
+    return out.getvalue()
+
+
+def _extract_image_bytes(response) -> bytes | None:
+    """Pull image bytes out of a genai response across SDK versions.
+
+    Newer SDKs expose `part.as_image()` returning a PIL Image. Older ones
+    surface raw bytes via `part.inline_data.data`. Try both."""
+    candidates = getattr(response, "candidates", None) or []
+    for cand in candidates:
+        content = getattr(cand, "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            inline = getattr(part, "inline_data", None)
+            if inline is not None:
+                data = getattr(inline, "data", None)
+                if isinstance(data, (bytes, bytearray)):
+                    return bytes(data)
+                if isinstance(data, str):
+                    # SDKs that hand you back base64
+                    try:
+                        return base64.b64decode(data)
+                    except Exception:
+                        pass
+    return None
 
 
 def suggest_box(item_name: str, item_description: str, boxes: list[dict]) -> BoxMatch:

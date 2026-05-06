@@ -5,43 +5,135 @@
 <div class="card">
   <div class="card-title" style="margin-bottom:0.25rem;">Print labels</div>
   <p class="text-sm text-muted">
-    Each label has the box name, location, and a QR code. Downloads as SVG for printing or Cricut.
+    Select boxes, then print or download. Each label has a QR code that resolves to the live box page when scanned.
+    {% if art_enabled %}Generate a fun illustrated background for any box with Nano Banana 2.{% endif %}
   </p>
 </div>
 
 {% if boxes %}
-<form action="/labels/sheet.svg" method="get" class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Select boxes</div>
-  {% for b in boxes %}
-  <label class="label-item" for="lb-{{ b.id }}">
-    <input type="checkbox" id="lb-{{ b.id }}" name="box_ids" value="{{ b.id }}" checked>
-    <div style="flex:1;">
-      <div class="item-name">{{ b.name }}</div>
-      {% if b.location %}<div class="text-sm text-muted">{{ b.location }}</div>{% endif %}
+<form id="labels-form" action="/labels/print" method="get">
+  <div class="card label-grid-card">
+    <div class="label-grid">
+      {% for b in boxes %}
+      <label class="label-card" data-box-id="{{ b.id }}">
+        <input type="checkbox" name="box_ids" value="{{ b.id }}" checked>
+        <div class="label-card-inner">
+          <div class="label-card-thumb">
+            <img src="/boxes/{{ b.id }}/label.svg" alt="" loading="lazy">
+          </div>
+          <div class="label-card-meta">
+            <div class="label-card-name">{{ b.name }}</div>
+            {% if b.notes %}<div class="label-card-notes">{{ b.notes }}</div>{% endif %}
+            {% if b.location %}<div class="label-card-location">{{ b.location }}</div>{% endif %}
+          </div>
+          <div class="label-card-actions">
+            {% if art_enabled %}
+              {% if b.background_art %}
+              <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
+                      class="btn btn-ghost btn-sm label-action" title="Regenerate art"
+                      data-art-button data-art-state="regen"
+                      onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
+                <span class="art-icon">🎨</span>
+              </button>
+              <button type="submit" formaction="/boxes/{{ b.id }}/clear-art" formmethod="post"
+                      class="btn btn-ghost btn-sm label-action" title="Clear art"
+                      onclick="window.__labelsArtClick=1;">
+                <span class="art-icon">✕</span>
+              </button>
+              {% else %}
+              <button type="submit" formaction="/boxes/{{ b.id }}/generate-art" formmethod="post"
+                      class="btn btn-ghost btn-sm label-action" title="Generate art"
+                      data-art-button data-art-state="new"
+                      onclick="this.dataset.busy='1'; window.__labelsArtClick=1;">
+                <span class="art-icon">🎨</span>
+              </button>
+              {% endif %}
+            {% endif %}
+            <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm label-action"
+               onclick="event.stopPropagation();" title="Download single label">↓</a>
+          </div>
+        </div>
+      </label>
+      {% endfor %}
     </div>
-    <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm"
-       onclick="event.stopPropagation();" title="Download single label">↓</a>
-  </label>
-  {% endfor %}
-  <div class="btn-row mt-1">
-    <button type="submit" class="btn btn-primary">Download sheet</button>
-    <button type="button" class="btn btn-secondary"
-      onclick="document.querySelectorAll('input[name=box_ids]').forEach(c=>c.checked=!c.checked)">
-      Toggle all
-    </button>
+  </div>
+
+  <div class="label-toolbar" id="label-toolbar">
+    <div class="label-toolbar-summary">
+      <strong id="label-count">{{ boxes | length }}</strong> selected ·
+      <span id="label-pages">{{ ((boxes | length + labels_per_page - 1) // labels_per_page) }}</span> page<span id="label-pages-s">s</span>
+    </div>
+    <div class="label-toolbar-actions">
+      <button type="button" class="btn btn-secondary btn-sm" id="toggle-all">Toggle all</button>
+      <a href="/labels/sheet.svg" class="btn btn-secondary btn-sm" id="download-svg" download>SVG</a>
+      <button type="submit" class="btn btn-primary" id="print-button" formaction="/labels/print" formtarget="_blank">
+        Print labels
+      </button>
+    </div>
   </div>
 </form>
 
-<div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Preview</div>
-  <div class="label-preview">
-    {% for b in boxes %}
-    <img src="/boxes/{{ b.id }}/label.svg" alt="{{ b.name }}">
-    {% endfor %}
-  </div>
-</div>
+<script>
+(function() {
+  const form = document.getElementById('labels-form');
+  const checkboxes = form.querySelectorAll('input[name="box_ids"]');
+  const labelsPerPage = {{ labels_per_page }};
+  const countEl = document.getElementById('label-count');
+  const pagesEl = document.getElementById('label-pages');
+  const pagesSEl = document.getElementById('label-pages-s');
+  const printButton = document.getElementById('print-button');
+  const svgLink = document.getElementById('download-svg');
+  const toggleAll = document.getElementById('toggle-all');
+
+  function selectedIds() {
+    return Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+  }
+
+  function refresh() {
+    const ids = selectedIds();
+    const n = ids.length;
+    countEl.textContent = n;
+    const pages = Math.max(1, Math.ceil(n / labelsPerPage));
+    pagesEl.textContent = pages;
+    pagesSEl.textContent = pages === 1 ? '' : 's';
+    printButton.disabled = n === 0;
+    // Build the SVG download URL with the same selection so it matches what
+    // the print button will generate.
+    const params = ids.map(id => 'box_ids=' + encodeURIComponent(id)).join('&');
+    svgLink.href = '/labels/sheet.svg' + (params ? '?' + params : '');
+  }
+
+  checkboxes.forEach(cb => cb.addEventListener('change', refresh));
+  toggleAll.addEventListener('click', () => {
+    const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked);
+    checkboxes.forEach(cb => { cb.checked = anyUnchecked; });
+    refresh();
+  });
+
+  // Stop the per-card art / download buttons from toggling the surrounding
+  // label (which would untoggle the checkbox on every click).
+  form.querySelectorAll('.label-action').forEach(el => {
+    el.addEventListener('click', (e) => e.stopPropagation());
+  });
+
+  // While the per-card art generator is running (synchronous server call),
+  // give the user a clear signal so they don't think it stalled.
+  form.addEventListener('submit', (e) => {
+    if (window.__labelsArtClick) {
+      window.__labelsArtClick = 0;
+      const busyBtn = form.querySelector('button[data-art-button][data-busy]');
+      if (busyBtn) {
+        busyBtn.classList.add('art-busy');
+        busyBtn.querySelector('.art-icon').textContent = '⏳';
+      }
+    }
+  });
+
+  refresh();
+})();
+</script>
 {% else %}
-<div class="card empty">No boxes to label.</div>
+<div class="card empty">No boxes to label yet — create one from the home page.</div>
 {% endif %}
 
 {% endblock %}

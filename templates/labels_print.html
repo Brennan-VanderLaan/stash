@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Print labels · Stash</title>
+<style>
+  /* Page-break-driven multi-page printing. The browser's print engine
+     paginates each .sheet onto its own physical page. No PDF library
+     needed — and the user can tweak the print preview before committing. */
+  @page { size: letter; margin: 0; }
+  html, body { margin: 0; padding: 0; }
+
+  .sheet {
+    width: 215.9mm;
+    height: 279.4mm;
+    page-break-after: always;
+    break-after: page;
+    overflow: hidden;
+    position: relative;
+  }
+  .sheet:last-child { page-break-after: auto; break-after: auto; }
+  .sheet > svg { width: 100%; height: 100%; display: block; }
+
+  /* On screen: a dark backdrop with white sheets stacked, plus a sticky
+     print hint so users without a print shortcut know what to do. */
+  @media screen {
+    body {
+      background: #0f1f14;
+      color: #e6f4ea;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 1.5rem;
+    }
+    .sheet {
+      background: white;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      margin: 0 auto 1.5rem;
+      border-radius: 4px;
+    }
+    .toolbar {
+      position: sticky;
+      top: 1rem;
+      max-width: 215.9mm;
+      margin: 0 auto 1.5rem;
+      background: #16331f;
+      border: 1px solid #2a5a3a;
+      border-radius: 12px;
+      padding: 0.75rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      z-index: 10;
+    }
+    .toolbar .summary { color: #9bbfa6; font-size: 0.85rem; }
+    .toolbar .summary strong { color: #4ade80; }
+    .toolbar button, .toolbar a {
+      background: #4ade80;
+      color: #0a1810;
+      border: none;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      font-family: inherit;
+    }
+    .toolbar a.secondary {
+      background: transparent;
+      color: #9bbfa6;
+      border: 1px solid #2a5a3a;
+    }
+    .toolbar a.secondary:hover { color: #4ade80; border-color: #4ade80; }
+  }
+  @media print {
+    .toolbar { display: none; }
+  }
+
+  .empty {
+    max-width: 215.9mm;
+    margin: 4rem auto;
+    padding: 2rem;
+    text-align: center;
+    background: #16331f;
+    border: 1px solid #2a5a3a;
+    border-radius: 12px;
+    color: #9bbfa6;
+  }
+</style>
+</head>
+<body>
+{% if label_count == 0 %}
+  <div class="empty">No boxes selected to print.</div>
+{% else %}
+  <div class="toolbar">
+    <span class="summary"><strong>{{ label_count }}</strong> label{{ '' if label_count == 1 else 's' }} across <strong>{{ sheet_svgs | length }}</strong> page{{ '' if sheet_svgs | length == 1 else 's' }}</span>
+    <div style="display:flex; gap:0.5rem;">
+      <a href="/labels" class="secondary">← Back</a>
+      <button onclick="window.print()">Print →</button>
+    </div>
+  </div>
+  {% for svg in sheet_svgs %}
+  <div class="sheet">{{ svg | safe }}</div>
+  {% endfor %}
+{% endif %}
+</body>
+</html>
