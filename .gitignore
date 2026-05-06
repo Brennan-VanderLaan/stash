@@ -1,5 +1,7 @@
 venv/
 .env
+deploy/.env
+deploy/emails.txt
 __pycache__/
 *.pyc
 stash.db

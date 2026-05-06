@@ -1,0 +1,16 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Photos can be a few MB; let oauth2-proxy + stash handle large ingest uploads.
+	request_body {
+		max_size 50MB
+	}
+
+	reverse_proxy oauth2-proxy:4180 {
+		header_up X-Real-IP {remote_host}
+	}
+}

@@ -1,0 +1,4 @@
+# One Google email address per line. Anyone listed here can sign in;
+# anyone else gets a polite "not authorized" page from oauth2-proxy.
+you@gmail.com
+your-partner@gmail.com
