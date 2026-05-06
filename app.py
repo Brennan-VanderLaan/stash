@@ -594,13 +594,15 @@ def index(request: Request):
             "SELECT box_id, photo FROM items "
             "WHERE photo IS NOT NULL ORDER BY box_id, created_at DESC"
         ).fetchall()
+        rooms = _rooms_for_picker(conn)
     thumbs: dict[int, list[str]] = {}
     for r in thumb_rows:
         lst = thumbs.setdefault(r["box_id"], [])
         if len(lst) < 5:
             lst.append(r["photo"])
     return templates.TemplateResponse(
-        request, "index.html", {"boxes": boxes, "thumbs": thumbs},
+        request, "index.html",
+        {"boxes": boxes, "thumbs": thumbs, "rooms": rooms},
     )
 
 
@@ -1047,9 +1049,38 @@ def queue(request: Request):
             "ORDER BY p.created_at ASC"
         ).fetchall()
         boxes = conn.execute(
-            "SELECT id, name, location FROM boxes ORDER BY name"
+            "SELECT b.id, b.name, b.location, "
+            "       r.name AS room_name, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM boxes b "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            # Sort so optgroup ordering is stable: location first, then room,
+            # then box name within each room.
+            "ORDER BY l.name IS NULL, l.name, r.name, b.name"
         ).fetchall()
         all_tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()]
+
+    # Group boxes for the <optgroup>'d picker: "Location · Room", or just
+    # "Room" if no location, or "Unassigned" for boxes with neither.
+    boxes_grouped: list[tuple[str, list]] = []
+    current_label = object()
+    current_group: list = []
+    for b in boxes:
+        if b["location_name"] and b["room_name"]:
+            label = f"{b['location_name']} · {b['room_name']}"
+        elif b["room_name"]:
+            label = b["room_name"]
+        elif b["location"]:  # legacy free-text fallback
+            label = b["location"]
+        else:
+            label = "Unassigned"
+        if label != current_label:
+            current_group = []
+            boxes_grouped.append((label, current_group))
+            current_label = label
+        current_group.append(b)
+
     import hashlib
     payload = "|".join(
         f"{r['id']}:{r['name']}:{r['description']}:{r['suggested_box_id']}:"
@@ -1059,7 +1090,13 @@ def queue(request: Request):
     fingerprint = hashlib.sha1(payload.encode()).hexdigest()
     return templates.TemplateResponse(
         request, "queue.html",
-        {"pending": pending, "boxes": boxes, "fingerprint": fingerprint, "all_tags": all_tags},
+        {
+            "pending": pending,
+            "boxes": boxes,
+            "boxes_grouped": boxes_grouped,
+            "fingerprint": fingerprint,
+            "all_tags": all_tags,
+        },
     )
 
 

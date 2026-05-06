@@ -467,6 +467,51 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   max-height: 250px;
   object-fit: contain;
 }
+
+/* The overlay is positioned relative to the rendered image, not the
+   letterboxed .sort-photo container — wrap them both in an inline-block
+   frame that hugs the image's actual size. */
+.sort-photo-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+.sort-photo-frame img {
+  display: block;
+  max-width: 100%;
+  max-height: 250px;
+}
+
+/* Bounding-box overlay drawn on top of the sort-queue photo. The AI returns
+   bbox in 0-1000 normalized coords; the template converts to percent and
+   stashes the four edges in CSS custom properties so positioning is pure
+   CSS — no JS measurement, no resize observers. */
+.sort-bbox-overlay {
+  position: absolute;
+  left: var(--bbox-x0);
+  top: var(--bbox-y0);
+  width: calc(var(--bbox-x1) - var(--bbox-x0));
+  height: calc(var(--bbox-y1) - var(--bbox-y0));
+  border: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  /* The shadow darkens the rest of the photo so the focus is unmistakable. */
+}
+.sort-bbox-label {
+  position: absolute;
+  top: -1.5rem;
+  left: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(0, 0, 0, 0.75);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
 .sort-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
 
 .suggestion {

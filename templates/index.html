@@ -4,8 +4,28 @@
   <summary class="card-title" style="cursor:pointer;list-style:none;">+ New box</summary>
   <form method="post" action="/boxes" style="margin-top:0.75rem;">
     <label>Name<input type="text" name="name" required placeholder="e.g. Kitchen #1"></label>
-    <label>Location<input type="text" name="location" placeholder="e.g. Garage shelf B"></label>
-    <label>Notes<textarea name="notes" rows="2"></textarea></label>
+    {% if rooms %}
+    <label>Room
+      <select name="room_id">
+        <option value="">— none —</option>
+        {% set current_loc = none %}
+        {% for r in rooms %}
+          {% if r.location_id != current_loc %}
+            {% if not loop.first %}</optgroup>{% endif %}
+            <optgroup label="{{ r.location_name }}">
+            {% set current_loc = r.location_id %}
+          {% endif %}
+          <option value="{{ r.id }}">{{ r.name }}</option>
+          {% if loop.last %}</optgroup>{% endif %}
+        {% endfor %}
+      </select>
+    </label>
+    {% else %}
+    <p class="help-text">
+      <a href="/locations" style="color:var(--accent);">Add a location</a> to start placing boxes on a floorplan.
+    </p>
+    {% endif %}
+    <label>Notes<textarea name="notes" rows="2" placeholder="What's inside?"></textarea></label>
     <button type="submit" class="btn btn-primary btn-block">Create box</button>
   </form>
 </details>

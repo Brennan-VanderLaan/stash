@@ -27,10 +27,24 @@
 {% for p in pending %}
 <form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card" id="card-{{ p.id }}">
 
-  {# Photo + crop #}
+  {# Photo + crop. The bbox overlay shows what the VLM actually detected so
+     the user can name the right item — without it they were sorting against
+     the whole photo and the post-accept crop was a surprise. #}
   {% if p.photo %}
   <div class="sort-photo">
-    <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
+    <div class="sort-photo-frame">
+      <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
+      {% if p.bbox_y_min is not none and p.bbox_x_min is not none
+            and p.bbox_y_max is not none and p.bbox_x_max is not none %}
+      <div class="sort-bbox-overlay" id="bbox-overlay-{{ p.id }}"
+           style="--bbox-x0: {{ p.bbox_x_min / 10 }}%;
+                  --bbox-y0: {{ p.bbox_y_min / 10 }}%;
+                  --bbox-x1: {{ p.bbox_x_max / 10 }}%;
+                  --bbox-y1: {{ p.bbox_y_max / 10 }}%;">
+        <span class="sort-bbox-label">AI detected</span>
+      </div>
+      {% endif %}
+    </div>
   </div>
   <div class="crop-toolbar">
     <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
@@ -77,10 +91,14 @@
 
     <select name="box_id" required>
       <option value="">— pick a box —</option>
-      {% for b in boxes %}
-      <option value="{{ b.id }}" {% if p.suggested_box_id == b.id %}selected{% endif %}>
-        {{ b.name }}{% if b.location %} ({{ b.location }}){% endif %}
-      </option>
+      {% for label, group in boxes_grouped %}
+      <optgroup label="{{ label }}">
+        {% for b in group %}
+        <option value="{{ b.id }}" {% if p.suggested_box_id == b.id %}selected{% endif %}>
+          {{ b.name }}
+        </option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
 
@@ -103,6 +121,10 @@ const croppers = {};
 function toggleCrop(id) {
   if (croppers[id]) { finalizeCrop(id); return; }
   const img = document.getElementById('crop-img-' + id);
+  // The static bbox overlay would just clutter the cropper widget — hide
+  // while the user is actively dragging a new crop.
+  const overlay = document.getElementById('bbox-overlay-' + id);
+  if (overlay) overlay.hidden = true;
   const cy0 = document.getElementById('cy0-' + id).value;
   const cx0 = document.getElementById('cx0-' + id).value;
   const cy1 = document.getElementById('cy1-' + id).value;
@@ -143,6 +165,12 @@ function finalizeCrop(id) {
   document.getElementById('crop-btn-' + id).textContent = 'Adjust crop';
   document.getElementById('reset-btn-' + id).style.display = 'none';
   document.getElementById('clear-btn-' + id).style.display = 'none';
+  // Restore the overlay so the user keeps seeing the AI's detected region
+  // until they accept (unless they cleared the crop).
+  const overlay = document.getElementById('bbox-overlay-' + id);
+  if (overlay && document.getElementById('skip-crop-' + id).value !== '1') {
+    overlay.hidden = false;
+  }
 }
 
 function resetCrop(id) { if (croppers[id]) croppers[id].reset(); }
