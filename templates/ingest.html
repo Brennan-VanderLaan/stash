@@ -1,66 +1,77 @@
 {% extends "base.html" %}
 {% block title %}Ingest · Stash{% endblock %}
-{% block head_extra %}
-{% set has_active = jobs|selectattr('status', 'in', ['pending', 'processing'])|list %}
-{% if has_active %}<meta http-equiv="refresh" content="3">{% endif %}
-{% endblock %}
 {% block content %}
 
 <div class="card">
   <div class="card-title">Ingest a pile</div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+  <p class="text-sm text-muted mb-2">
     Snap a photo — Claude spots every item and queues them for sorting.
   </p>
   <div class="btn-row">
-    <form method="post" action="/ingest" enctype="multipart/form-data" style="flex:1;">
-      <label class="btn btn-primary btn-block" style="margin:0;">
+    <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
+      <label class="btn btn-primary btn-block">
         Take photo
-        <input type="file" name="photos" accept="image/*" capture="environment"
-               hidden onchange="this.form.submit()">
+        <input type="file" name="photos" accept="image/*" capture="environment" hidden data-auto-submit>
       </label>
     </form>
-    <form method="post" action="/ingest" enctype="multipart/form-data" style="flex:1;">
-      <label class="btn btn-secondary btn-block" style="margin:0;">
+    <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
+      <label class="btn btn-secondary btn-block">
         Select from gallery
-        <input type="file" name="photos" accept="image/*" multiple
-               hidden onchange="this.form.submit()">
+        <input type="file" name="photos" accept="image/*" multiple hidden data-auto-submit>
       </label>
     </form>
   </div>
 </div>
 
-{% if jobs %}
-<div class="card">
-  <div class="card-title">Processing</div>
-  {% for j in jobs %}
-  <div class="ingest-item">
-    {% if j.photo %}<img src="/thumbs/{{ j.photo }}" alt="" class="ingest-thumb" loading="lazy">{% endif %}
-    <div style="flex:1;">
-      <span class="badge badge-{{ j.status }}">{{ j.status }}</span>
-      {% if j.status == 'done' %}
-        <span class="text-sm text-muted">{{ j.item_count }} item{{ '' if j.item_count == 1 else 's' }} →
-          <a href="/queue" style="color:var(--accent);">sort</a></span>
-      {% elif j.status == 'failed' %}
-        <span class="text-sm text-danger">{{ j.error }}</span>
-      {% elif j.status == 'processing' %}
-        <span class="text-sm text-muted">Looking…</span>
-      {% else %}
-        <span class="text-sm text-muted">Queued</span>
-      {% endif %}
-    </div>
-    {% if j.status == 'failed' %}
-    <form method="post" action="/ingest/{{ j.id }}/retry">
-      <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
-    </form>
-    {% endif %}
-    {% if j.status in ['failed', 'done'] %}
-    <form method="post" action="/ingest/{{ j.id }}/dismiss">
-      <button type="submit" class="btn btn-ghost btn-icon" title="Dismiss">×</button>
-    </form>
-    {% endif %}
-  </div>
-  {% endfor %}
+<div id="ingest-jobs">
+  {% include "_ingest_jobs.html" %}
 </div>
-{% endif %}
+
+<script>
+(function() {
+  // ── Auto-submit file pickers without nuking the page ─────────────
+  // The forms set hidden=true on inputs and used onchange="this.form.submit()"
+  // before. With the JS poller below we don't need the meta-refresh that
+  // was eating in-progress selections.
+  let uploading = false;
+  document.querySelectorAll('[data-auto-submit]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.files && input.files.length > 0) {
+        uploading = true;
+        input.form.submit();
+      }
+    });
+  });
+
+  // ── Poll for job-state changes, swap section in place ────────────
+  // Fingerprint comes from the server-rendered initial state; we hit the
+  // lightweight /ingest/state endpoint and only fetch the HTML fragment
+  // when something actually changed. This means an idle page makes ~0
+  // bytes/sec of network noise instead of a full page reload every 3 s.
+  const jobsEl = document.getElementById('ingest-jobs');
+  let fingerprint = {{ fingerprint | tojson }};
+
+  async function tick() {
+    if (uploading) return;  // never disturb an in-flight POST
+    try {
+      const r = await fetch('/ingest/state', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.fingerprint !== fingerprint) {
+        const html = await fetch('/ingest/jobs', { cache: 'no-store' });
+        if (html.ok) {
+          jobsEl.innerHTML = await html.text();
+          fingerprint = data.fingerprint;
+        }
+      }
+    } catch (e) {
+      // Network blip — try again next tick.
+    }
+  }
+  // Poll every 2.5 s while there's anything in flight; fall back to a slower
+  // 8 s "is anyone home" beat once everything settles.
+  let interval = setInterval(tick, 2500);
+})();
+</script>
 
 {% endblock %}

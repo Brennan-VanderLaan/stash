@@ -979,14 +979,54 @@ def process_ingest_job(job_id: int, photo_name: str) -> None:
             conn.commit()
 
 
+def _ingest_jobs(conn):
+    return conn.execute(
+        "SELECT * FROM ingest_jobs WHERE status != 'done' "
+        "ORDER BY created_at DESC LIMIT 50"
+    ).fetchall()
+
+
+def _ingest_fingerprint(jobs) -> str:
+    import hashlib
+    payload = "|".join(
+        f"{j['id']}:{j['status']}:{j['item_count']}:{j['error']}" for j in jobs
+    )
+    return hashlib.sha1(payload.encode()).hexdigest()
+
+
 @app.get("/ingest", response_class=HTMLResponse)
 def ingest_form(request: Request):
     with db() as conn:
-        jobs = conn.execute(
-            "SELECT * FROM ingest_jobs WHERE status != 'done' "
-            "ORDER BY created_at DESC LIMIT 50"
-        ).fetchall()
-    return templates.TemplateResponse(request, "ingest.html", {"jobs": jobs})
+        jobs = _ingest_jobs(conn)
+    return templates.TemplateResponse(
+        request, "ingest.html",
+        {"jobs": jobs, "fingerprint": _ingest_fingerprint(jobs)},
+    )
+
+
+@app.get("/ingest/state")
+def ingest_state():
+    """Lightweight poll target so the ingest page can update its job list
+    without a full meta-refresh — that one was nuking in-progress file
+    picker selections and cancelling uploads mid-stream."""
+    with db() as conn:
+        jobs = _ingest_jobs(conn)
+    has_active = any(j["status"] in ("pending", "processing") for j in jobs)
+    return {
+        "fingerprint": _ingest_fingerprint(jobs),
+        "has_active": has_active,
+    }
+
+
+@app.get("/ingest/jobs", response_class=HTMLResponse)
+def ingest_jobs_fragment(request: Request):
+    """HTML fragment of just the jobs list — the ingest page swaps this in
+    when its fingerprint changes."""
+    with db() as conn:
+        jobs = _ingest_jobs(conn)
+    return templates.TemplateResponse(
+        request, "_ingest_jobs.html", {"jobs": jobs},
+    )
 
 
 @app.post("/ingest")

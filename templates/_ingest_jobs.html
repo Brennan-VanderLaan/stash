@@ -1,0 +1,33 @@
+{% if jobs %}
+<div class="card">
+  <div class="card-title">Processing</div>
+  {% for j in jobs %}
+  <div class="ingest-item">
+    {% if j.photo %}<img src="/thumbs/{{ j.photo }}" alt="" class="ingest-thumb" loading="lazy">{% endif %}
+    <div class="flex-1">
+      <span class="badge badge-{{ j.status }}">{{ j.status }}</span>
+      {% if j.status == 'done' %}
+        <span class="text-sm text-muted">{{ j.item_count }} item{{ '' if j.item_count == 1 else 's' }} →
+          <a href="/queue">sort</a></span>
+      {% elif j.status == 'failed' %}
+        <span class="text-sm text-danger">{{ j.error }}</span>
+      {% elif j.status == 'processing' %}
+        <span class="text-sm text-muted">Looking…</span>
+      {% else %}
+        <span class="text-sm text-muted">Queued</span>
+      {% endif %}
+    </div>
+    {% if j.status == 'failed' %}
+    <form method="post" action="/ingest/{{ j.id }}/retry">
+      <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
+    </form>
+    {% endif %}
+    {% if j.status in ['failed', 'done'] %}
+    <form method="post" action="/ingest/{{ j.id }}/dismiss">
+      <button type="submit" class="btn btn-ghost btn-icon" title="Dismiss">×</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

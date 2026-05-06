@@ -238,6 +238,25 @@ select:hover,
 textarea:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
+
+/* Native <option> popups inherit OS rendering and on a dark page often
+   end up with near-illegible contrast — especially on the search filter
+   pills which sit on the dark green panel. Force a sensible color pair
+   so the popup always reads as part of the app. */
+select option {
+  background: var(--panel);
+  color: var(--text);
+}
+select optgroup {
+  background: var(--panel);
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 600;
+}
+select option:checked {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
 textarea { min-height: 60px; resize: vertical; }
 input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent); flex-shrink: 0; }
 
