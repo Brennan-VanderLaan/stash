@@ -332,6 +332,32 @@ def test_edit_room_updates_geometry_and_name(client):
     assert abs(row["w"] - 0.4) < 1e-6
 
 
+def test_edit_room_persists_color_from_palette(client):
+    """Color picker in the room edit modal sends a palette-validated color
+    via the same /rooms/{id} endpoint. Must accept it and reject hexes
+    outside the palette."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Kitchen", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+
+    # Set a palette-valid color via the edit endpoint
+    r = client.post(
+        "/rooms/1",
+        data={"name": "Kitchen", "x": 0, "y": 0, "w": 0.3, "h": 0.3, "color": "#f87171"},
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200
+    assert r.json()["color"] == "#f87171"
+
+    # An off-palette color is rejected silently — keep the last good color.
+    r = client.post(
+        "/rooms/1",
+        data={"name": "Kitchen", "x": 0, "y": 0, "w": 0.3, "h": 0.3, "color": "#abc123"},
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200
+    assert r.json()["color"] == "#f87171"
+
+
 def test_room_geometry_can_be_moved_without_renaming(client):
     """The drag-to-move flow resends the existing name + new x/y. The endpoint
     must accept that as a no-op rename plus a geometry update."""

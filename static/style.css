@@ -1544,6 +1544,32 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   color: var(--accent);
 }
 
+.room-color-swatches {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.3rem;
+}
+.room-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--swatch-color);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+.room-swatch:hover { transform: scale(1.12); border-color: var(--text); }
+.room-swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--swatch-color), 0 0 0 4px var(--bg);
+}
+.room-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* === Empty State === */
 .empty {
   color: var(--muted);

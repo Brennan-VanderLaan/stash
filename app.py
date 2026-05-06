@@ -1880,6 +1880,7 @@ def location_detail(
             "rooms": rooms,
             "unassigned_rooms": unassigned,
             "edit_mode": edit == "1",
+            "room_palette": _ROOM_COLORS,
         },
     )
 
@@ -2036,23 +2037,26 @@ def edit_room(
     name: str = Form(...),
     x: float = Form(0), y: float = Form(0),
     w: float = Form(0), h: float = Form(0),
+    color: str = Form(""),
 ):
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
+    color_val = color.strip() if color and color.strip() in _ROOM_COLORS else None
     with db() as conn:
         row = conn.execute(
-            "SELECT location_id, floor_id FROM rooms WHERE id = ?", (room_id,),
+            "SELECT location_id, floor_id, color FROM rooms WHERE id = ?", (room_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404)
+        new_color = color_val if color_val is not None else row["color"]
         conn.execute(
-            "UPDATE rooms SET name = ?, x = ?, y = ?, w = ?, h = ? WHERE id = ?",
-            (name, _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), room_id),
+            "UPDATE rooms SET name = ?, x = ?, y = ?, w = ?, h = ?, color = ? WHERE id = ?",
+            (name, _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), new_color, room_id),
         )
         conn.commit()
     if "application/json" in request.headers.get("accept", ""):
-        return {"ok": True}
+        return {"ok": True, "color": new_color}
     target = f"/locations/{row['location_id']}?edit=1"
     if row["floor_id"]:
         target = f"/locations/{row['location_id']}?floor={row['floor_id']}&edit=1"

@@ -139,6 +139,15 @@
   <div class="room-edit-body">
     <h2 class="room-edit-title" data-room-title></h2>
     <label>Name<input type="text" data-room-name></label>
+    <div>
+      <span class="text-sm text-muted">Color</span>
+      <div class="room-color-swatches" data-room-swatches>
+        {% for c in room_palette %}
+        <button type="button" class="room-swatch" data-color="{{ c }}"
+                style="--swatch-color: {{ c }};" aria-label="Color {{ c }}"></button>
+        {% endfor %}
+      </div>
+    </div>
     <div class="btn-row">
       <button type="button" class="btn btn-primary" data-room-save>Save</button>
       <button type="button" class="btn btn-secondary" data-room-view-boxes>View boxes</button>
@@ -448,12 +457,30 @@
   function openRoomDialog(rect) {
     const id = rect.dataset.roomId;
     dialog.dataset.roomId = id;
+    dialog.dataset.color = rect.dataset.color || '';
     dialog.querySelector('[data-room-title]').textContent = rect.dataset.name;
     const nameInput = dialog.querySelector('[data-room-name]');
     nameInput.value = rect.dataset.name;
+    // Mark the currently-selected color swatch.
+    dialog.querySelectorAll('[data-room-swatches] .room-swatch').forEach(b => {
+      b.classList.toggle('active', b.dataset.color === rect.dataset.color);
+    });
     dialog.showModal();
     nameInput.focus();
     nameInput.select();
+  }
+
+  // Click a swatch → mark it selected (Save commits the change).
+  const swatchRow = dialog.querySelector('[data-room-swatches]');
+  if (swatchRow) {
+    swatchRow.addEventListener('click', (e) => {
+      const swatch = e.target.closest('.room-swatch');
+      if (!swatch) return;
+      dialog.dataset.color = swatch.dataset.color;
+      swatchRow.querySelectorAll('.room-swatch').forEach(b => {
+        b.classList.toggle('active', b === swatch);
+      });
+    });
   }
 
   dialog.querySelector('[data-close-room]').addEventListener('click', () => dialog.close());
@@ -465,15 +492,25 @@
     const newName = dialog.querySelector('[data-room-name]').value.trim();
     if (!rect || !newName) return;
     const cur = rectFromEl(rect);
+    const newColor = dialog.dataset.color || rect.dataset.color || '';
     try {
       const r = await fetch(`/rooms/${id}`, {
         method: 'POST',
         headers: { 'Accept': 'application/json' },
-        body: new URLSearchParams({ name: newName, x: cur.x, y: cur.y, w: cur.w, h: cur.h }),
+        body: new URLSearchParams({
+          name: newName, x: cur.x, y: cur.y, w: cur.w, h: cur.h, color: newColor,
+        }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
       rect.dataset.name = newName;
       rect.querySelector('.room-rect-label').textContent = newName;
+      // Update the rect's color from the server's response so we always
+      // reflect what's persisted (server validates against the palette).
+      if (data.color) {
+        rect.dataset.color = data.color;
+        rect.style.setProperty('--room-color', data.color);
+      }
       dialog.close();
     } catch (err) {
       alert('Save failed: ' + err.message);
