@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.12.0...v0.12.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* search dropdown grouping + cascade, mobile box card polish ([dc5c52c](https://github.com/Brennan-VanderLaan/stash/commit/dc5c52cdbc9afe50327d8adc0d8847e6d4fd5e84))
+
 ## [0.12.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.11.0...v0.12.0) (2026-05-06)
 
 
