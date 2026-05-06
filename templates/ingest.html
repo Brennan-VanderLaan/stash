@@ -7,7 +7,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Ingest a pile</div>
+  <div class="card-title">Ingest a pile</div>
   <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
     Snap a photo — Claude spots every item and queues them for sorting.
   </p>
@@ -31,7 +31,7 @@
 
 {% if jobs %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Processing</div>
+  <div class="card-title">Processing</div>
   {% for j in jobs %}
   <div class="ingest-item">
     {% if j.photo %}<img src="/thumbs/{{ j.photo }}" alt="" class="ingest-thumb" loading="lazy">{% endif %}

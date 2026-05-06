@@ -1,4 +1,5 @@
 venv/
+.venv/
 .env
 deploy/.env
 deploy/emails.txt

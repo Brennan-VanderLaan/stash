@@ -2,7 +2,7 @@
 {% block title %}{{ room.name }} · {{ room.location_name }} · Stash{% endblock %}
 {% block header_left %}
 <a href="/locations/{{ room.location_id }}" class="header-back">← {{ room.location_name }}</a>
-<h1><a href="/">📦 Stash</a></h1>
+<h1>{% include "_brand.html" %}</h1>
 {% endblock %}
 {% block content %}
 

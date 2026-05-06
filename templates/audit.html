@@ -2,12 +2,12 @@
 {% block title %}Audit: {{ box.name }} · Stash{% endblock %}
 {% block header_left %}
 <a href="/boxes/{{ box.id }}" class="header-back">← {{ box.name }}</a>
-<h1><a href="/">📦 Stash</a></h1>
+<h1>{% include "_brand.html" %}</h1>
 {% endblock %}
 {% block content %}
 
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.25rem;">Audit: {{ box.name }}</div>
+  <div class="card-title card-title-tight">Audit: {{ box.name }}</div>
   <p class="text-sm text-muted">
     Tick every item you find in the box. Unchecked items move to the sort queue.
   </p>

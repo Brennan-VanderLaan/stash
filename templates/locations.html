@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.25rem;">Locations</div>
+  <div class="card-title card-title-tight">Locations</div>
   <p class="text-sm text-muted">
     A location is a place — a house, a storage unit, an office. Upload a floorplan
     and draw rooms on it to map exactly where each box lives.
@@ -11,8 +11,8 @@
 </div>
 
 <details class="card" {% if not locations %}open{% endif %}>
-  <summary class="card-title" style="cursor:pointer;list-style:none;">+ New location</summary>
-  <form method="post" action="/locations" style="margin-top:0.75rem;">
+  <summary class="card-title">+ New location</summary>
+  <form method="post" action="/locations">
     <label>Name<input type="text" name="name" required placeholder="e.g. Main house"></label>
     <button type="submit" class="btn btn-primary btn-block">Create location</button>
   </form>
@@ -23,7 +23,7 @@
   {% for loc in locations %}
   <li>
     <a href="/locations/{{ loc.id }}" class="box-card">
-      <div style="flex:1;">
+      <div class="flex-1">
         <div class="box-name">{{ loc.name }}</div>
         <div class="box-meta">
           {{ loc.room_count }} room{{ '' if loc.room_count == 1 else 's' }}
@@ -32,15 +32,16 @@
         </div>
       </div>
       {% if loc.floorplan %}
-      <img src="/thumbs/{{ loc.floorplan }}" alt="" loading="lazy"
-           style="width:64px;height:64px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);">
+      <img src="/thumbs/{{ loc.floorplan }}" alt="" loading="lazy" class="location-card-preview">
       {% endif %}
     </a>
   </li>
   {% endfor %}
 </ul>
 {% else %}
-<div class="empty">No locations yet. Create one above to start mapping where stuff lives.</div>
+<div class="empty empty-mascot" data-mascot="turtle">
+  <p>No locations yet. Create one above to start mapping where stuff lives.</p>
+</div>
 {% endif %}
 
 {% endblock %}

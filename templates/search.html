@@ -3,7 +3,7 @@
 {% block content %}
 
 <form class="card" method="get" action="/search">
-  <div class="card-title" style="margin-bottom:0.5rem;">Search items</div>
+  <div class="card-title">Search items</div>
   <input type="text" name="q" value="{{ q }}" placeholder="Search by name or notes…">
   <select name="tag">
     <option value="">All tags</option>
@@ -16,7 +16,7 @@
 
 <div class="card">
   {% if results %}
-  <div class="card-title" style="margin-bottom:0.5rem;">{{ results|length }} result{{ '' if results|length == 1 else 's' }}</div>
+  <div class="card-title">{{ results|length }} result{{ '' if results|length == 1 else 's' }}</div>
   {% for r in results %}
   <a href="/boxes/{{ r.bid }}" class="result-card">
     {% if r.photo %}<img src="/thumbs/{{ r.photo }}" alt="" class="item-thumb" loading="lazy">{% endif %}

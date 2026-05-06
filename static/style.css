@@ -39,8 +39,26 @@ header {
   top: 0;
   z-index: 100;
 }
-header h1 { font-size: 1.2rem; }
+header h1 { font-size: 1.2rem; line-height: 1; }
 header h1 a { color: var(--accent); text-decoration: none; }
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.brand-mark {
+  width: 28px;
+  height: 22px;
+  display: block;
+  flex-shrink: 0;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* Cute reaction when you mouse over the brand — the turtle pokes its head
+   out a little. Pure CSS, no JS. */
+.brand:hover .brand-mark { transform: translateX(2px); }
 .header-nav { display: none; }
 .header-back { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
 .header-back:hover { color: var(--accent); }
@@ -83,6 +101,15 @@ main {
   padding: 0.75rem;
 }
 
+/* Wider canvas on bigger screens — the old 720px cap left a lot of empty
+   gutters on desktop while box lists stayed in a narrow stripe. */
+@media (min-width: 720px) {
+  main { max-width: 760px; }
+}
+@media (min-width: 1100px) {
+  main { max-width: 1080px; }
+}
+
 /* === Cards === */
 .card {
   background: var(--panel);
@@ -90,6 +117,17 @@ main {
   border-radius: var(--radius);
   padding: 1rem;
   margin-bottom: 0.75rem;
+  /* Soft entrance — every card eases up when its details open or content
+     swaps. Cheap and gives the surface "movement" without heavy animation. */
+  transition: border-color 0.2s, background 0.2s;
+}
+/* The whole document gets a tasteful fade-in on first paint. */
+@keyframes app-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  main { animation: app-fade-in 0.25s ease both; }
 }
 .card-header {
   display: flex;
@@ -102,7 +140,51 @@ main {
   font-size: 1rem;
   font-weight: 600;
   color: var(--accent);
+  margin-bottom: 0.5rem;
 }
+/* When used inside .card-header (which already arranges title + actions on
+   one line), don't add an extra margin below. */
+.card-header .card-title { margin-bottom: 0; }
+/* Same when the title is followed by a short sub-headline / description —
+   keep them visually paired with a tight gap. */
+.card-title-tight { margin-bottom: 0.25rem; }
+/* Bigger title for "this is the page subject" headers like a box detail. */
+.card-title-lg { font-size: 1.1rem; }
+/* Danger variant for "scary" sections (delete confirmations). */
+.card-title-danger { color: var(--danger); }
+/* Make <summary class="card-title"> behave like a normal heading by hiding
+   the default disclosure marker and giving it the right cursor — saves an
+   inline style="cursor:pointer;list-style:none;" on every collapsible card. */
+summary.card-title {
+  cursor: pointer;
+  list-style: none;
+}
+summary.card-title::-webkit-details-marker { display: none; }
+/* Forms inside a <details class="card"> need a small top margin so they
+   don't crowd the summary line that sits above them. */
+details.card > form,
+details.card > .card-form { margin-top: 0.75rem; }
+.card-form { margin-top: 0.75rem; }
+.flex-1 { flex: 1; min-width: 0; }
+
+/* Soft variant of summary.card-title — used when the summary itself is a
+   structured block (e.g. box detail header) rather than a single text line. */
+summary.card-summary-soft {
+  cursor: pointer;
+  list-style: none;
+}
+summary.card-summary-soft::-webkit-details-marker { display: none; }
+.card-meta-row { margin-top: 0.2rem; }
+.danger-zone-blurb { margin: 0.75rem 0 0.5rem; }
+.location-card-preview {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.room-chip-link { text-decoration: none; }
 
 /* === Forms === */
 form { display: flex; flex-direction: column; gap: 0.6rem; }
@@ -136,11 +218,17 @@ select {
   min-height: 44px;
 }
 input[type="text"]:focus,
+input[type="file"]:focus,
 textarea:focus,
 select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+input[type="text"]:hover,
+select:hover,
+textarea:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 textarea { min-height: 60px; resize: vertical; }
 input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent); flex-shrink: 0; }
@@ -165,6 +253,15 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   transition: background 0.15s, transform 0.1s;
 }
 .btn:active { transform: scale(0.97); }
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 .btn-primary { background: var(--accent); color: #0a1810; }
 .btn-primary:hover { background: var(--accent-hover); }
@@ -192,8 +289,22 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .btn-row-end { justify-content: flex-end; }
 .btn-row-end > * { flex: none; }
 
-/* === Box List (index) === */
-.box-list { list-style: none; padding: 0; }
+/* === Box List (index + locations) ===
+   Single column on phones, packs into a responsive grid on bigger screens
+   so the desktop view actually uses the new wider main. */
+.box-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+@media (min-width: 720px) {
+  .box-list { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
+}
+@media (min-width: 1100px) {
+  .box-list { grid-template-columns: repeat(3, 1fr); gap: 0.7rem; }
+}
 .box-card {
   display: flex;
   align-items: center;
@@ -202,15 +313,32 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 0.5rem;
   text-decoration: none;
   color: var(--text);
   min-height: 56px;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s, transform 0.12s;
 }
-.box-card:hover, .box-card:active { background: var(--panel-2); }
-.box-name { font-weight: 600; color: var(--accent); font-size: 1rem; }
-.box-meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+.box-card:hover {
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+  transform: translateY(-1px);
+}
+.box-card:active { transform: translateY(0); }
+.box-card > div:first-child { min-width: 0; flex: 1; }
+.box-name {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.box-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* === Item thumbs (shared with search / tags / audit) === */
 .item-thumb {
@@ -1080,6 +1208,82 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .empty a { color: var(--accent); }
 
+/* Mascot empty states — a friendly turtle or cat above the message. The
+   actual SVG is rendered via the data-mascot attribute through a CSS
+   ::before so templates only need a single attribute. */
+.empty-mascot {
+  font-style: normal;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 2.5rem 1rem 2rem;
+}
+.empty-mascot p { margin: 0; max-width: 32ch; line-height: 1.5; }
+.empty-mascot::before {
+  content: "";
+  display: block;
+  width: 88px;
+  height: 88px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  opacity: 0.85;
+  /* Mascot animations — the turtle "swims" with a gentle bob, the cat
+     gives a subtle tail-flick. Reduced-motion users get static art. */
+  animation: mascot-bob 4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .empty-mascot::before { animation: none; }
+}
+@keyframes mascot-bob {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50%      { transform: translateY(-3px) rotate(1deg); }
+}
+/* Inline-encoded SVG mascots so they don't add HTTP requests. The fill uses
+   the accent green so they pick up theme tweaks for free. The colors below
+   are the literal accent hex with `%23` URL-encoding for `#`. */
+.empty-mascot[data-mascot="turtle"]::before {
+  background-image: url('data:image/svg+xml;utf8,\
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 60">\
+      <ellipse cx="36" cy="36" rx="22" ry="16" fill="none" stroke="%234ade80" stroke-width="2.4"/>\
+      <path d="M36 22 L36 50 M16 30 L56 30 M16 42 L56 42 M22 24 L22 48 M50 24 L50 48"\
+            stroke="%234ade80" stroke-width="1.5" opacity="0.6" fill="none"/>\
+      <circle cx="62" cy="28" r="7" fill="none" stroke="%234ade80" stroke-width="2.4"/>\
+      <circle cx="65" cy="26" r="1.5" fill="%234ade80"/>\
+      <path d="M64 31 q2 1 4 0" stroke="%234ade80" stroke-width="1.5" fill="none" stroke-linecap="round"/>\
+      <line x1="14" y1="50" x2="11" y2="56" stroke="%234ade80" stroke-width="2" stroke-linecap="round"/>\
+      <line x1="26" y1="52" x2="25" y2="58" stroke="%234ade80" stroke-width="2" stroke-linecap="round"/>\
+      <line x1="46" y1="52" x2="47" y2="58" stroke="%234ade80" stroke-width="2" stroke-linecap="round"/>\
+      <line x1="58" y1="50" x2="61" y2="56" stroke="%234ade80" stroke-width="2" stroke-linecap="round"/>\
+    </svg>');
+}
+.empty-mascot[data-mascot="cat"]::before {
+  background-image: url('data:image/svg+xml;utf8,\
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">\
+      <path d="M22 30 L18 18 L28 24 M58 30 L62 18 L52 24"\
+            fill="none" stroke="%234ade80" stroke-width="2.4" stroke-linejoin="round"/>\
+      <ellipse cx="40" cy="38" rx="22" ry="20" fill="none" stroke="%234ade80" stroke-width="2.4"/>\
+      <circle cx="32" cy="36" r="2" fill="%234ade80"/>\
+      <circle cx="48" cy="36" r="2" fill="%234ade80"/>\
+      <path d="M38 44 q2 2 4 0" stroke="%234ade80" stroke-width="2" fill="none" stroke-linecap="round"/>\
+      <path d="M28 42 L20 42 M28 44 L20 45 M52 42 L60 42 M52 44 L60 45"\
+            stroke="%234ade80" stroke-width="1" opacity="0.6" stroke-linecap="round"/>\
+      <path d="M62 56 q12 4 8 16" stroke="%234ade80" stroke-width="2.4" fill="none" stroke-linecap="round"/>\
+    </svg>');
+}
+.empty-mascot[data-mascot="boxes"]::before {
+  background-image: url('data:image/svg+xml;utf8,\
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">\
+      <rect x="14" y="38" width="22" height="22" fill="none" stroke="%234ade80" stroke-width="2.2"/>\
+      <rect x="44" y="44" width="20" height="20" fill="none" stroke="%234ade80" stroke-width="2.2" opacity="0.85"/>\
+      <rect x="28" y="14" width="22" height="22" fill="none" stroke="%234ade80" stroke-width="2.2" opacity="0.7"/>\
+      <line x1="14" y1="49" x2="36" y2="49" stroke="%234ade80" stroke-width="1.2" opacity="0.5"/>\
+      <line x1="44" y1="54" x2="64" y2="54" stroke="%234ade80" stroke-width="1.2" opacity="0.5"/>\
+      <line x1="28" y1="25" x2="50" y2="25" stroke="%234ade80" stroke-width="1.2" opacity="0.5"/>\
+    </svg>');
+}
+
 /* === Utility === */
 .sr-only {
   position: absolute;
@@ -1096,7 +1300,29 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .text-danger { color: var(--danger); }
 .mt-1 { margin-top: 0.5rem; }
 .mt-2 { margin-top: 0.75rem; }
+.mt-3 { margin-top: 1rem; }
+.mb-1 { margin-bottom: 0.5rem; }
+.mb-2 { margin-bottom: 0.75rem; }
+.mb-3 { margin-bottom: 1rem; }
 .gap-row { display: flex; gap: 0.5rem; align-items: center; }
+.row-gap-tight { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+/* Soft disclosure for nested "rarely used" actions inside a card. The
+   triangle marker is implicit — text turns into a clickable line. */
+.disclosure-soft {
+  cursor: pointer;
+  list-style: none;
+  display: inline-block;
+}
+.disclosure-soft::-webkit-details-marker { display: none; }
+.disclosure-soft::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 0.7em;
+  color: var(--muted);
+  width: 0.8em;
+}
+details[open] > .disclosure-soft::before { transform: rotate(90deg); }
 
 /* === Cropper.js Overrides === */
 .cropper-view-box { outline: 2px solid var(--accent); }
@@ -1124,7 +1350,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
     color: var(--accent);
     background: var(--accent-dim);
   }
-  main { max-width: 720px; padding: 1rem; }
+  main { padding: 1rem; }
   .item-thumb { width: 80px; height: 80px; }
 }
 

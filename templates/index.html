@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <details class="card" {% if not boxes %}open{% endif %}>
-  <summary class="card-title" style="cursor:pointer;list-style:none;">+ New box</summary>
-  <form method="post" action="/boxes" style="margin-top:0.75rem;">
+  <summary class="card-title">+ New box</summary>
+  <form method="post" action="/boxes">
     <label>Name<input type="text" name="name" required placeholder="e.g. Kitchen #1"></label>
     {% if rooms %}
     <label>Room
@@ -22,7 +22,7 @@
     </label>
     {% else %}
     <p class="help-text">
-      <a href="/locations" style="color:var(--accent);">Add a location</a> to start placing boxes on a floorplan.
+      <a href="/locations">Add a location</a> to place boxes on a floorplan.
     </p>
     {% endif %}
     <label>Notes<textarea name="notes" rows="2" placeholder="What's inside?"></textarea></label>
@@ -61,6 +61,8 @@
   {% endfor %}
 </ul>
 {% else %}
-<div class="empty">No boxes yet. Create one above.</div>
+<div class="empty empty-mascot" data-mascot="turtle">
+  <p>No boxes yet. Create one above — your turtle is ready to carry it.</p>
+</div>
 {% endif %}
 {% endblock %}

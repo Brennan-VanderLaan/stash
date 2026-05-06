@@ -2,7 +2,7 @@
 {% block title %}{{ box.name }} · Stash{% endblock %}
 {% block header_left %}
 <a href="/" class="header-back">← Boxes</a>
-<h1><a href="/">📦 Stash</a></h1>
+<h1>{% include "_brand.html" %}</h1>
 {% endblock %}
 {% block header_actions %}
 <div class="header-actions">
@@ -21,12 +21,12 @@
 
 {# --- Box Info (tap to edit) --- #}
 <details class="card">
-  <summary style="cursor:pointer;list-style:none;">
-    <div class="card-title" style="font-size:1.1rem;">{{ box.name }}</div>
+  <summary class="card-summary-soft">
+    <div class="card-title card-title-lg">{{ box.name }}</div>
     {% if box.room_name %}
-      <div class="text-sm" style="margin-top:0.2rem;">
+      <div class="text-sm card-meta-row">
         <a href="/locations/{{ box.location_id }}#room-{{ box.room_id }}"
-           class="room-chip" style="--room-color: {{ box.room_color or '#4ade80' }}; text-decoration:none;">
+           class="room-chip room-chip-link" style="--room-color: {{ box.room_color or '#4ade80' }};">
           📍 {{ box.room_name }}
         </a>
         {% if box.location_name %}<span class="text-muted">in {{ box.location_name }}</span>{% endif %}
@@ -36,7 +36,7 @@
     {% endif %}
     {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
   </summary>
-  <form method="post" action="/boxes/{{ box.id }}/edit" style="margin-top:0.75rem;">
+  <form method="post" action="/boxes/{{ box.id }}/edit">
     <label>Name<input type="text" name="name" value="{{ box.name }}" required></label>
     {% if rooms %}
     <label>Room
@@ -65,9 +65,8 @@
 
 {# --- Add Item --- #}
 <details class="card">
-  <summary class="card-title" style="cursor:pointer;list-style:none;">+ Add item</summary>
-  <form method="post" action="/boxes/{{ box.id }}/items" enctype="multipart/form-data"
-        style="margin-top:0.75rem;">
+  <summary class="card-title">+ Add item</summary>
+  <form method="post" action="/boxes/{{ box.id }}/items" enctype="multipart/form-data">
     <label>Name<input type="text" name="name" required></label>
     <label>Notes<textarea name="notes" rows="2"></textarea></label>
     <label>
@@ -143,10 +142,10 @@
 
 {# --- Delete Box --- #}
 <details class="card danger-zone">
-  <summary class="card-title" style="cursor:pointer;list-style:none;color:var(--danger);">
+  <summary class="card-title card-title-danger">
     ⚠ Delete entire box
   </summary>
-  <p class="text-sm text-muted" style="margin:0.75rem 0 0.5rem;">
+  <p class="text-sm text-muted danger-zone-blurb">
     This will permanently delete <strong>{{ box.name }}</strong> and all
     <strong>{{ items_with_tags|length }} item{{ '' if items_with_tags|length == 1 else 's' }}</strong> inside it,
     including photos. This cannot be undone.

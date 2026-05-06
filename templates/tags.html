@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">All tags</div>
+  <div class="card-title">All tags</div>
   {% if tags %}
   {% for t in tags %}
   <a href="/search?tag={{ t.name }}" class="result-card">
@@ -18,7 +18,9 @@
   </a>
   {% endfor %}
   {% else %}
-  <div class="empty">No tags yet. Add tags from a box detail page.</div>
+  <div class="empty empty-mascot" data-mascot="cat">
+    <p>No tags yet. Add tags from any box detail page.</p>
+  </div>
   {% endif %}
 </div>
 

@@ -2,14 +2,14 @@
 {% block title %}{{ location.name }} · Stash{% endblock %}
 {% block header_left %}
 <a href="/locations" class="header-back">← Where</a>
-<h1><a href="/">📦 Stash</a></h1>
+<h1>{% include "_brand.html" %}</h1>
 {% endblock %}
 {% block content %}
 
 <div class="card">
   <div class="card-header">
     <span class="card-title">{{ location.name }}</span>
-    <div style="display:flex; gap:0.4rem;">
+    <div class="row-gap-tight">
       {% if current_floor and current_floor.floorplan %}
       <a href="/locations/{{ location.id }}?floor={{ current_floor.id }}{% if not edit_mode %}&edit=1{% endif %}"
          class="btn btn-secondary btn-sm">{% if edit_mode %}Done editing{% else %}Edit rooms{% endif %}</a>
@@ -17,12 +17,12 @@
     </div>
   </div>
   <details>
-    <summary class="text-sm text-muted" style="cursor:pointer;">Rename or delete this location</summary>
-    <form method="post" action="/locations/{{ location.id }}" style="margin-top:0.5rem;">
+    <summary class="text-sm text-muted disclosure-soft">Rename or delete this location</summary>
+    <form method="post" action="/locations/{{ location.id }}" class="mt-1">
       <label>Name<input type="text" name="name" value="{{ location.name }}" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Rename</button>
     </form>
-    <form method="post" action="/locations/{{ location.id }}/delete" style="margin-top:0.5rem;">
+    <form method="post" action="/locations/{{ location.id }}/delete" class="mt-1">
       <label>
         Type <code>{{ location.name }}</code> to delete this location and all its floors
         <input type="text" name="confirm" placeholder="{{ location.name }}" autocomplete="off">
@@ -54,8 +54,8 @@
 
 {% if not floors %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Add your first floor</div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+  <div class="card-title">Add your first floor</div>
+  <p class="text-sm text-muted mb-2">
     A location can have many floors — basement, ground floor, attic. Each floor gets
     its own floorplan image and its own rooms.
   </p>
@@ -73,7 +73,7 @@
       <button type="submit" class="btn btn-ghost btn-sm">Delete floor</button>
     </form>
   </div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+  <p class="text-sm text-muted mb-2">
     Upload a floorplan image — a real plan, a hand sketch, or even a satellite screenshot.
     You'll draw rectangles over it to mark each room.
   </p>
@@ -110,23 +110,22 @@
     </div>
   </div>
   {% if edit_mode %}
-  <p class="text-sm text-muted" style="margin-top:0.5rem;">
+  <p class="text-sm text-muted mt-1">
     <strong>Drag empty space</strong> to draw a new room.
     <strong>Drag a rectangle</strong> to move it, or grab a corner handle to resize.
     <strong>Click</strong> a rectangle to rename or delete it.
   </p>
-  <details style="margin-top:0.5rem;">
-    <summary class="text-sm text-muted" style="cursor:pointer;">Rename or replace this floor</summary>
-    <form method="post" action="/floors/{{ current_floor.id }}" style="margin-top:0.5rem;">
+  <details class="mt-1">
+    <summary class="text-sm text-muted disclosure-soft">Rename or replace this floor</summary>
+    <form method="post" action="/floors/{{ current_floor.id }}" class="mt-1">
       <label>Floor name<input type="text" name="name" value="{{ current_floor.name }}" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Rename floor</button>
     </form>
-    <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data"
-          style="margin-top:0.5rem;">
+    <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data" class="mt-1">
       <label>Replace floorplan image<input type="file" name="image" accept="image/*" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Replace floorplan</button>
     </form>
-    <form method="post" action="/floors/{{ current_floor.id }}/delete" style="margin-top:0.5rem;"
+    <form method="post" action="/floors/{{ current_floor.id }}/delete" class="mt-1"
           onsubmit="return confirm('Delete the {{ current_floor.name }} floor and all its rooms?');">
       <button type="submit" class="btn btn-danger btn-block">Delete this floor</button>
     </form>
@@ -152,7 +151,7 @@
 
 {% if current_floor %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Rooms on {{ current_floor.name }} ({{ rooms | length }})</div>
+  <div class="card-title">Rooms on {{ current_floor.name }} ({{ rooms | length }})</div>
   {% if rooms %}
   <ul class="box-list">
     {% for r in rooms %}
@@ -174,8 +173,8 @@
 
 {% if unassigned_rooms %}
 <div class="card">
-  <div class="card-title" style="margin-bottom:0.5rem;">Unassigned rooms ({{ unassigned_rooms | length }})</div>
-  <p class="text-sm text-muted" style="margin-bottom:0.75rem;">
+  <div class="card-title">Unassigned rooms ({{ unassigned_rooms | length }})</div>
+  <p class="text-sm text-muted mb-2">
     These rooms aren't on any floor yet — they were carried over from your old free-text locations.
     They still hold their assigned boxes; once you have a floor, you can drag them into shape.
   </p>
