@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.18.1...v0.19.0) (2026-05-07)
+
+
+### Features
+
+* thread per-box colours through the index, room view, search, and floorplan preview ([299d290](https://github.com/Brennan-VanderLaan/stash/commit/299d29046d59a3e4be27225be7497bc95ee5d679))
+
+
+### Bug Fixes
+
+* render boxes index as a uniform grid instead of stub-card chaos ([4ab5579](https://github.com/Brennan-VanderLaan/stash/commit/4ab55796efe5bd2196508f6ce33bf4dc45e84c19))
+* strip EXIF before sending to the vision model so AI bboxes line up ([4aece97](https://github.com/Brennan-VanderLaan/stash/commit/4aece971b0c40b3f3f14ec62fc376ea384431080))
+
 ## [0.18.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.18.0...v0.18.1) (2026-05-07)
 
 
