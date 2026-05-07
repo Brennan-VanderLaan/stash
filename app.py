@@ -2359,6 +2359,12 @@ def maintenance(request: Request, cleaned: str = "", update: str = "", imported:
         box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
     on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
     referenced = len(_referenced_uploads())
+    # Access-control panel: surface what oauth2-proxy hands us so the operator
+    # can see who's currently signed in, and reflect the configured allowlist
+    # so they don't have to SSH in to remember who has access. No state is
+    # stored on stash's side — sessions are owned by the proxy.
+    current_email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
+    current_user = (request.headers.get("X-Forwarded-User") or "").strip()
     return templates.TemplateResponse(
         request, "maintenance.html",
         {
@@ -2372,6 +2378,10 @@ def maintenance(request: Request, cleaned: str = "", update: str = "", imported:
             "update_enabled": bool(WATCHTOWER_URL),
             "update_status": update,
             "changelog_html": CHANGELOG_HTML,
+            "allowed_emails": sorted(_ALLOWED_EMAILS),
+            "fully_public": _FULLY_PUBLIC,
+            "current_email": current_email,
+            "current_user": current_user,
         },
     )
 

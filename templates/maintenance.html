@@ -97,6 +97,71 @@
   {% endif %}
 </div>
 
+<div class="card maintenance-card">
+  <div class="card-title">Access</div>
+  {% if fully_public %}
+  <p class="text-sm">
+    <span class="notice notice-danger">Stash is running in <code>FULLY_PUBLIC</code> mode — the
+    in-app email gate is disabled. Anything oauth2-proxy lets through gets in.</span>
+  </p>
+  {% else %}
+  <p class="text-sm text-muted">
+    Allow-listed emails are gated at <strong>two</strong> layers: oauth2-proxy's
+    <code>emails.txt</code> and stash's own <code>STASH_ALLOWED_EMAILS</code>.
+    Both must include an address before that user can reach the app.
+  </p>
+  {% endif %}
+
+  {% if current_email %}
+  <dl class="stat-row">
+    <div><dt>Signed in as</dt><dd>{{ current_email }}</dd></div>
+    {% if current_user and current_user != current_email %}
+    <div><dt>Account</dt><dd>{{ current_user }}</dd></div>
+    {% endif %}
+  </dl>
+  {% else %}
+  <p class="text-sm text-muted">
+    No <code>X-Forwarded-Email</code> on this request — either oauth2-proxy
+    isn't in front of stash right now, or you're signed in via a path that
+    doesn't pass user headers.
+  </p>
+  {% endif %}
+
+  <div class="section-label" style="margin-top:0.75rem;">Allow-listed emails ({{ allowed_emails | length }})</div>
+  {% if allowed_emails %}
+  <ul class="allowed-emails">
+    {% for e in allowed_emails %}
+    <li>
+      <code>{{ e }}</code>
+      {% if e == current_email %}<span class="text-muted text-sm">— you</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-muted">
+    No allow-list configured. Stash would normally refuse to start in this
+    state — you're seeing this because <code>FULLY_PUBLIC=true</code> is set.
+  </p>
+  {% endif %}
+
+  <details style="margin-top:0.75rem;">
+    <summary class="disclosure-soft text-sm text-muted">Revoke access</summary>
+    <p class="text-sm text-muted" style="margin-top:0.5rem;">
+      Sessions live in oauth2-proxy / Google, not in stash, so revocation is a
+      server-side action:
+    </p>
+    <ol class="text-sm text-muted">
+      <li>Remove the email from <code>emails.txt</code> <em>and</em>
+        <code>STASH_ALLOWED_EMAILS</code> in <code>.env</code>.</li>
+      <li><code>docker compose restart oauth2-proxy stash</code> so both layers
+        reload.</li>
+      <li>For an immediate session kill, also rotate
+        <code>OAUTH2_PROXY_COOKIE_SECRET</code> in <code>.env</code> and
+        restart oauth2-proxy. Otherwise sessions die at the next 1h refresh.</li>
+    </ol>
+  </details>
+</div>
+
 {% if changelog_html %}
 <div class="card maintenance-card">
   <div class="card-title">Changelog</div>
