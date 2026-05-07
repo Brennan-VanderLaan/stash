@@ -1470,7 +1470,13 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 
 /* The viewport is a fixed-size scroll window. Pan = native scroll, zoom =
    --zoom which scales the stage's width. On mobile this means pinch-to-
-   zoom + touch-drag-to-pan come "for free" via standard browser scrolling. */
+   zoom + touch-drag-to-pan come "for free" via standard browser scrolling.
+
+   Flex + `safe center` keeps the stage centred when it's smaller than the
+   viewport (low zoom on a wide monitor) — without this the stage left-aligns
+   and zooming in/out feels off-balance because the content snaps to the left
+   gutter. The `safe` keyword falls back to start-alignment once the stage is
+   larger than the viewport, so normal scroll-to-pan still works at zoom > 1. */
 .floorplan-viewport {
   position: relative;
   width: 100%;
@@ -1478,6 +1484,9 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   overflow: auto;
   border-radius: var(--radius);
   background: #0c1810;
+  display: flex;
+  justify-content: safe center;
+  align-items: flex-start;
   /* Pan via scroll, but allow pinch via custom Pointer Events handlers. */
   touch-action: pan-x pan-y;
   -webkit-overflow-scrolling: touch;
@@ -1495,6 +1504,10 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .floorplan-stage {
   position: relative;
   width: calc(100% * var(--zoom, 1));
+  /* Don't let flex squish the stage smaller than its CSS-driven width — the
+     room overlays are positioned in % of the stage, so a flex-shrink would
+     misalign them against the underlying floorplan image. */
+  flex-shrink: 0;
   user-select: none;
   -webkit-user-select: none;
   /* In edit mode the stage owns pointer events for drawing/moving rooms;
