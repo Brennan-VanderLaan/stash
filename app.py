@@ -145,6 +145,105 @@ def db():
 def init_db():
     with db() as conn:
         conn.executescript("""
+        -- ── Multi-tenancy core ────────────────────────────────────────
+        -- See spec.md § "Architecture · Schema additions".  Every owned
+        -- table joins back to a tenant; members are (tenant_id, email)
+        -- pairs with a role; invites + object_shares are the two
+        -- sharing mechanisms.  audit_log captures user-visible events
+        -- (tenant_id NULL for operator cross-tenant actions).
+        CREATE TABLE IF NOT EXISTS tenants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            -- Lifecycle: soft-delete first, hard-delete by cron after grace.
+            deleted_at TEXT,
+            hard_delete_after TEXT,
+            archived_backup_key TEXT,
+            archived_backup_until TEXT,
+            -- Wrapped DEK (envelope encryption); populated in roadmap step 2.
+            wrapped_dek BLOB,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS tenant_members (
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            -- NULL locale = use Accept-Language / deployment default.
+            locale TEXT,
+            invited_by_email TEXT,
+            invited_at TEXT,
+            joined_at TEXT,
+            PRIMARY KEY (tenant_id, email)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_members_email ON tenant_members(email);
+
+        CREATE TABLE IF NOT EXISTS tenant_invites (
+            token TEXT PRIMARY KEY,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            consumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
+
+        CREATE TABLE IF NOT EXISTS object_shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            -- 'box' | 'item'.  Discriminator over the join target.
+            target_kind TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            recipient_email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_object_shares_target ON object_shares(target_kind, target_id);
+        CREATE INDEX IF NOT EXISTS idx_object_shares_recipient ON object_shares(recipient_email);
+
+        CREATE TABLE IF NOT EXISTS usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            -- 'ai' | 'upload' | 'backup' | 'core'.
+            surface TEXT NOT NULL,
+            -- 'gemini_detect', 'gemini_art', 'anthropic_match',
+            -- 'upload_bytes', 'backup_bytes', etc.
+            kind TEXT NOT NULL,
+            units INTEGER NOT NULL,
+            cost_micros INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_events_tenant_surface
+            ON usage_events(tenant_id, surface, created_at);
+
+        CREATE TABLE IF NOT EXISTS quotas (
+            tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+            monthly_ai_calls INTEGER,
+            monthly_upload_bytes INTEGER,
+            backup_storage_bytes INTEGER,
+            -- JSON blob for plan-specific overrides; NULL = inherit plan defaults.
+            overrides_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- NULL on operator cross-tenant actions that don't belong to a
+            -- single tenant (e.g. global DR import).
+            tenant_id INTEGER,
+            actor_email TEXT,
+            action TEXT NOT NULL,
+            target_kind TEXT,
+            target_id INTEGER,
+            metadata_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at);
+
+        -- ── App data tables (existing) ────────────────────────────────
         CREATE TABLE IF NOT EXISTS locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -277,7 +376,124 @@ def migrate_db():
         )
         _migrate_legacy_locations(conn)
         _migrate_locations_to_floors(conn)
+
+        # Multi-tenancy: every owned table gets a tenant_id pointing at
+        # tenants(id).  Nullable in the column DDL because SQLite doesn't
+        # support adding NOT NULL via ALTER without a DEFAULT we can't
+        # safely supply pre-backfill — the DAO enforces non-null on writes
+        # once it lands.  See spec.md § "Schema migrations to existing
+        # tables".
+        for tbl in (
+            "locations", "floors", "rooms", "boxes", "items",
+            "tags", "item_tags", "pending_item_tags",
+            "pending_items", "ingest_jobs",
+        ):
+            _add_column_if_missing(
+                conn, tbl, "tenant_id",
+                "INTEGER REFERENCES tenants(id) ON DELETE CASCADE",
+            )
+        # Hot-path indexes — every later query that filters by tenant_id
+        # rides on these.
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_boxes_tenant ON boxes(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_items_tenant_box ON items(tenant_id, box_id)",
+            "CREATE INDEX IF NOT EXISTS idx_locations_tenant ON locations(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_floors_tenant ON floors(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rooms_tenant ON rooms(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pending_items_tenant ON pending_items(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ingest_jobs_tenant ON ingest_jobs(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_tags_tenant ON tags(tenant_id)",
+        ):
+            conn.execute(idx_sql)
+
+        # Versioning column for the optimistic-concurrency story
+        # (roadmap step 4).  Defaults to 1 so existing rows behave as
+        # "version 1" on the first edit after the migration lands.
+        for tbl in ("boxes", "items", "rooms", "floors", "locations"):
+            _add_column_if_missing(conn, tbl, "version", "INTEGER NOT NULL DEFAULT 1")
+            _add_column_if_missing(conn, tbl, "updated_at", "TEXT")
+
+        _migrate_to_multi_tenant(conn)
         conn.commit()
+
+
+def _first_email_from_env(var: str) -> str:
+    """Pluck the first non-empty email out of a comma-separated env var.
+    Falls back to '' if none."""
+    for part in os.environ.get(var, "").split(","):
+        e = part.strip().lower()
+        if e:
+            return e
+    return ""
+
+
+def _migrate_to_multi_tenant(conn) -> None:
+    """One-time: existing data gets folded into a Personal tenant.
+
+    Runs whenever migrate_db sees rows in the app tables and no tenants
+    yet exist.  The bootstrap email comes from STASH_BOOTSTRAP_MEMBER_EMAIL
+    (preferred), falling back to the first entry in STASH_ALLOWED_EMAILS
+    so existing single-user deploys upgrade without extra config.
+
+    Idempotent: any subsequent run is a no-op once tenants exist.
+    Backfill of NULL tenant_id rows happens unconditionally because a
+    legacy route inserting after the migration could leave fresh NULLs."""
+    if conn.execute("SELECT 1 FROM tenants LIMIT 1").fetchone():
+        # Sweep any NULLs that snuck in from legacy routes — once the
+        # DAO migration (roadmap step 3-4) is complete this becomes a
+        # no-op.
+        for tbl in (
+            "locations", "floors", "rooms", "boxes", "items",
+            "tags", "item_tags", "pending_item_tags",
+            "pending_items", "ingest_jobs",
+        ):
+            conn.execute(
+                f"UPDATE {tbl} SET tenant_id = (SELECT id FROM tenants ORDER BY id LIMIT 1) "
+                f"WHERE tenant_id IS NULL"
+            )
+        return
+
+    has_data = any(
+        conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone()
+        for t in ("boxes", "items", "locations", "ingest_jobs", "pending_items")
+    )
+    if not has_data:
+        # Fresh DB — first user creates a tenant via the sign-up flow
+        # (roadmap step 5).  Nothing to migrate yet.
+        return
+
+    bootstrap_email = (
+        os.environ.get("STASH_BOOTSTRAP_MEMBER_EMAIL", "").strip().lower()
+        or _first_email_from_env("STASH_ALLOWED_EMAILS")
+    )
+
+    cur = conn.execute(
+        "INSERT INTO tenants (name, plan) VALUES ('Personal', 'pro')"
+    )
+    tenant_id = cur.lastrowid
+
+    if bootstrap_email:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (tenant_id, bootstrap_email),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, metadata_json) "
+            "VALUES (?, ?, 'tenant.bootstrap', ?)",
+            (tenant_id, bootstrap_email, '{"source": "migrate_to_multi_tenant"}'),
+        )
+
+    for tbl in (
+        "locations", "floors", "rooms", "boxes", "items",
+        "tags", "item_tags", "pending_item_tags",
+        "pending_items", "ingest_jobs",
+    ):
+        conn.execute(
+            f"UPDATE {tbl} SET tenant_id = ? WHERE tenant_id IS NULL",
+            (tenant_id,),
+        )
 
 
 def _migrate_locations_to_floors(conn) -> None:

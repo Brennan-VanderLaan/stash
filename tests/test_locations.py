@@ -31,6 +31,99 @@ def _setup_location_with_floor(client, location_name: str = "House", floor_name:
 
 # ── Migration: legacy text locations → rooms ─────────────────────────
 
+def test_personal_tenant_backfill_for_existing_data(tmp_path, monkeypatch):
+    """The first multi-tenancy migration takes a single-user DB with no
+    tenant rows and folds every existing record into a Personal tenant,
+    using STASH_BOOTSTRAP_MEMBER_EMAIL (preferred) or the first entry of
+    STASH_ALLOWED_EMAILS as the sole maintainer.  Idempotent on second
+    run."""
+    import importlib
+    import sqlite3
+    import sys
+
+    db_path = tmp_path / "single.db"
+    monkeypatch.setenv("STASH_DB", str(db_path))
+    monkeypatch.setenv("STASH_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv("STASH_BOOTSTRAP_MEMBER_EMAIL", "live@example.com")
+
+    # Pre-multi-tenancy schema with one box + one item, simulating an
+    # existing stash about to upgrade.
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE boxes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "name TEXT NOT NULL, location TEXT, notes TEXT, "
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+        "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "box_id INTEGER NOT NULL, name TEXT NOT NULL, notes TEXT, "
+        "photo TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+    )
+    conn.execute("INSERT INTO boxes (name) VALUES ('Garage')")
+    conn.execute("INSERT INTO items (box_id, name) VALUES (1, 'drill')")
+    conn.commit()
+    conn.close()
+
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app
+    importlib.reload(app)
+
+    with app.db() as conn:
+        tenants = [dict(r) for r in conn.execute("SELECT * FROM tenants").fetchall()]
+        members = [dict(r) for r in conn.execute("SELECT * FROM tenant_members").fetchall()]
+        boxes = [dict(r) for r in conn.execute("SELECT id, name, tenant_id FROM boxes").fetchall()]
+        items = [dict(r) for r in conn.execute("SELECT id, name, tenant_id FROM items").fetchall()]
+
+    assert len(tenants) == 1
+    assert tenants[0]["name"] == "Personal"
+    assert tenants[0]["plan"] == "pro"
+    assert len(members) == 1
+    assert members[0]["email"] == "live@example.com"
+    assert members[0]["role"] == "maintainer"
+    assert all(b["tenant_id"] == tenants[0]["id"] for b in boxes)
+    assert all(i["tenant_id"] == tenants[0]["id"] for i in items)
+
+    # Idempotent: a second migrate_db run leaves the tenant + member alone.
+    app.migrate_db()
+    with app.db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tenants").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM tenant_members").fetchone()[0] == 1
+
+
+def test_personal_tenant_falls_back_to_allowed_emails(tmp_path, monkeypatch):
+    """Existing single-user deploys have STASH_ALLOWED_EMAILS set, not
+    STASH_BOOTSTRAP_MEMBER_EMAIL.  The migration falls back to the first
+    entry of the former so an upgrade doesn't require new env config."""
+    import importlib
+    import sqlite3
+    import sys
+
+    db_path = tmp_path / "single.db"
+    monkeypatch.setenv("STASH_DB", str(db_path))
+    monkeypatch.setenv("STASH_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.delenv("STASH_BOOTSTRAP_MEMBER_EMAIL", raising=False)
+    monkeypatch.setenv("STASH_ALLOWED_EMAILS", "first@example.com,second@example.com")
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE boxes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "name TEXT NOT NULL, location TEXT, notes TEXT, "
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+    )
+    conn.execute("INSERT INTO boxes (name) VALUES ('A')")
+    conn.commit()
+    conn.close()
+
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app
+    importlib.reload(app)
+
+    with app.db() as conn:
+        members = [dict(r) for r in conn.execute("SELECT * FROM tenant_members").fetchall()]
+    assert len(members) == 1
+    assert members[0]["email"] == "first@example.com"
+
+
 def test_legacy_location_strings_migrate_to_rooms(tmp_path, monkeypatch):
     """Boxes created before locations existed had a free-text `location` column.
     The migration must convert each unique string into a Room under a single
