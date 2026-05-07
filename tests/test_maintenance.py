@@ -21,6 +21,17 @@ def _uploads(client) -> Path:
     return Path(client.app_module.UPLOAD_DIR)
 
 
+def _read_db_bytes(client) -> bytes:
+    """Drain the WAL into main.db before snapshotting the file.  WAL mode
+    means recent commits can sit in the -wal sidecar until checkpointed,
+    so a raw read_bytes() captures a stale snapshot.  /maintenance/export
+    handles this internally; tests that simulate "user copied stash.db
+    off disk" must do the same explicitly."""
+    with client.app_module.db() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return client.app_module.DB_PATH.read_bytes()
+
+
 def _ingest_and_assign(client):
     client.post("/boxes", data={"name": "Box"})
     with patch("app.vision.detect_items", return_value=[
@@ -199,7 +210,7 @@ def test_import_raw_db_file_replaces_db(client):
     client.post("/boxes", data={"name": "Original"})
 
     # Snapshot the DB to bytes (like a user's local stash.db)
-    db_bytes = client.app_module.DB_PATH.read_bytes()
+    db_bytes = _read_db_bytes(client)
 
     # Mutate state so we can confirm replacement
     client.post("/boxes", data={"name": "Should be wiped"})
@@ -220,7 +231,7 @@ def test_import_raw_db_file_replaces_db(client):
 def test_import_creates_backup_of_existing_db(client):
     """The current DB is preserved as stash.db.bak-<timestamp> before replacement."""
     client.post("/boxes", data={"name": "Pre-import"})
-    db_bytes = client.app_module.DB_PATH.read_bytes()
+    db_bytes = _read_db_bytes(client)
 
     db_path = client.app_module.DB_PATH
     backups_before = list(db_path.parent.glob(f"{db_path.name}.bak-*"))
@@ -380,7 +391,7 @@ def test_import_zip_larger_than_photo_upload_limit(client):
     """Backups can exceed MAX_UPLOAD_BYTES (the photo cap) — only MAX_IMPORT_BYTES
     should bound them. Confirms the streaming path doesn't reuse the wrong limit."""
     client.post("/boxes", data={"name": "Box"})
-    db_bytes = client.app_module.DB_PATH.read_bytes()
+    db_bytes = _read_db_bytes(client)
 
     # Pad the zip with an uncompressible blob bigger than the per-photo cap so we
     # exercise the streaming path. ZIP_STORED means the bytes hit disk uncompressed.
@@ -423,7 +434,7 @@ def test_import_zip_skips_path_traversal_entries(client):
     """A malicious zip with `uploads/../evil` must not write outside UPLOAD_DIR."""
     # Build a minimal valid backup zip
     client.post("/boxes", data={"name": "Box"})
-    db_bytes = client.app_module.DB_PATH.read_bytes()
+    db_bytes = _read_db_bytes(client)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

@@ -71,44 +71,79 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
-# Defense-in-depth on top of oauth2-proxy. The proxy is supposed to gate on
-# emails.txt, but a missing host file silently turns the bind mount into a
-# directory — oauth2-proxy then loads an empty list and `--email-domain "*"`
-# happily lets every Google account through. With this gate, even if the
-# proxy fails open, stash refuses any X-Forwarded-Email that isn't on the
-# explicit STASH_ALLOWED_EMAILS list.
+# ── Actor middleware ─────────────────────────────────────────────────
+# Resolves X-Forwarded-Email (set by oauth2-proxy) into a `request.state.actor`
+# carrying the active tenant + role + operator flag.  Replaces the old
+# STASH_ALLOWED_EMAILS / FULLY_PUBLIC pair: the new gate is tenant_members.
+# An email with no membership and no operator status gets a 403; everything
+# downstream (routes, DAO once it lands) reads the actor off request.state.
 #
-# Fails-closed at startup: refuse to boot without an allowlist unless the
-# operator opts into a fully-public deployment with FULLY_PUBLIC=true.
-# Sessions stay owned by oauth2-proxy / Google — to revoke someone, remove
-# them from emails.txt (and rotate the cookie secret if you need active
-# sessions killed immediately) rather than chasing it through stash's DB.
-_ALLOWED_EMAILS = frozenset(
+# Operator emails (STASH_OPERATOR_EMAILS) get is_operator=True regardless
+# of tenant membership.  /admin routes (lifecycle, metadata, vendor cost
+# panel — see spec § "Operator surface") gate on this flag; tenant-data
+# routes do NOT — operators access tenant data only via an explicit
+# maintainer invite from the user, by design.
+import dataclasses
+
+_OPERATOR_EMAILS = frozenset(
     e.strip().lower()
-    for e in os.environ.get("STASH_ALLOWED_EMAILS", "").split(",")
+    for e in os.environ.get("STASH_OPERATOR_EMAILS", "").split(",")
     if e.strip()
 )
-_FULLY_PUBLIC = os.environ.get("FULLY_PUBLIC", "").strip().lower() == "true"
 
-if not _ALLOWED_EMAILS and not _FULLY_PUBLIC:
-    raise RuntimeError(
-        "Refusing to start: STASH_ALLOWED_EMAILS is empty. Set it to a "
-        "comma-separated list of authorized emails, or set FULLY_PUBLIC=true "
-        "to explicitly opt into a no-allowlist deployment."
-    )
+
+@dataclasses.dataclass(frozen=True)
+class Actor:
+    """The resolved identity of the current request.
+
+    `tenant_id` and `role` reflect the *active* membership; a user who's
+    a member of multiple tenants picks via the switcher (roadmap
+    step 15), but for now we just take the first by joined_at.
+    `memberships` is the full list so the eventual switcher UI can
+    render without another DB hit.
+    """
+    email: str
+    tenant_id: int | None
+    role: str | None
+    is_operator: bool
+    memberships: tuple[tuple[int, str], ...]
 
 
 @app.middleware("http")
-async def enforce_email_allowlist(request: Request, call_next):
-    if _FULLY_PUBLIC:
-        return await call_next(request)
+async def current_actor(request: Request, call_next):
     email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
-    if not email or email not in _ALLOWED_EMAILS:
+    is_operator = bool(email) and email in _OPERATOR_EMAILS
+
+    memberships: tuple[tuple[int, str], ...] = ()
+    if email:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT tenant_id, role FROM tenant_members "
+                "WHERE email = ? "
+                # joined_at is nullable until invites are accepted; sort
+                # accepted members first (NULL last) without relying on
+                # the NULLS LAST clause that older SQLite builds may
+                # lack.
+                "ORDER BY joined_at IS NULL, joined_at, tenant_id",
+                (email,),
+            ).fetchall()
+        memberships = tuple((r["tenant_id"], r["role"]) for r in rows)
+
+    if not memberships and not is_operator:
         return Response(
-            "Forbidden — your email is not authorized for this stash.",
+            "Forbidden — your email is not a member of any tenant on this stash.",
             status_code=403,
             media_type="text/plain",
         )
+
+    active_tenant_id, active_role = memberships[0] if memberships else (None, None)
+    request.state.actor = Actor(
+        email=email,
+        tenant_id=active_tenant_id,
+        role=active_role,
+        is_operator=is_operator,
+        memberships=memberships,
+    )
     return await call_next(request)
 
 
@@ -2698,17 +2733,26 @@ def _referenced_uploads() -> set[str]:
 
 @app.get("/maintenance", response_class=HTMLResponse)
 def maintenance(request: Request, cleaned: str = "", update: str = "", imported: str = ""):
+    actor: Actor = request.state.actor
     with db() as conn:
         item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
         box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
+        tenant_name = None
+        members = []
+        if actor.tenant_id is not None:
+            row = conn.execute(
+                "SELECT name FROM tenants WHERE id = ?", (actor.tenant_id,),
+            ).fetchone()
+            tenant_name = row["name"] if row else None
+            members = [
+                dict(r) for r in conn.execute(
+                    "SELECT email, role FROM tenant_members "
+                    "WHERE tenant_id = ? ORDER BY joined_at, email",
+                    (actor.tenant_id,),
+                ).fetchall()
+            ]
     on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
     referenced = len(_referenced_uploads())
-    # Access-control panel: surface what oauth2-proxy hands us so the operator
-    # can see who's currently signed in, and reflect the configured allowlist
-    # so they don't have to SSH in to remember who has access. No state is
-    # stored on stash's side — sessions are owned by the proxy.
-    current_email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
-    current_user = (request.headers.get("X-Forwarded-User") or "").strip()
     return templates.TemplateResponse(
         request, "maintenance.html",
         {
@@ -2722,10 +2766,16 @@ def maintenance(request: Request, cleaned: str = "", update: str = "", imported:
             "update_enabled": bool(WATCHTOWER_URL),
             "update_status": update,
             "changelog_html": CHANGELOG_HTML,
-            "allowed_emails": sorted(_ALLOWED_EMAILS),
-            "fully_public": _FULLY_PUBLIC,
-            "current_email": current_email,
-            "current_user": current_user,
+            # Access panel data: the active tenant + its members, replacing
+            # the old global STASH_ALLOWED_EMAILS view.  This whole card
+            # moves to /usage in roadmap step 13; until then we keep it on
+            # /maintenance with tenant-scoped data so the live user has
+            # parity with the old behaviour.
+            "tenant_name": tenant_name,
+            "tenant_members": members,
+            "current_email": actor.email,
+            "current_role": actor.role,
+            "is_operator": actor.is_operator,
         },
     )
 
