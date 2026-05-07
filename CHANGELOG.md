@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.15.0...v0.16.0) (2026-05-07)
+
+
+### Features
+
+* drag boxes between rooms on the floorplan + sort form fix ([78322d5](https://github.com/Brennan-VanderLaan/stash/commit/78322d58615ef27ada03eb0d09a07486657e4126))
+* item DnD + zoom-12x + responsive modals + full-width floorplan ([24db91c](https://github.com/Brennan-VanderLaan/stash/commit/24db91c2ba771f450c23e5fac93a4676948e0076))
+
 ## [0.15.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.14.0...v0.15.0) (2026-05-07)
 
 
