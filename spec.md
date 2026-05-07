@@ -18,8 +18,37 @@ maintainer member" with zero hand-touching.
   enforcement that degrades gracefully — when AI is capped, browsing
   still works.
 - Per-tenant backups with off-site disaster recovery via Backblaze B2.
-- Move global maintenance to an operator-only admin surface; replace
-  it on the user side with a per-tenant usage page.
+  Soft-delete tenants with a generous grace period and retain one
+  off-site backup beyond it — losing someone's photos is the worst.
+- Move global maintenance to an operator-only admin surface; the
+  operator surface deliberately does NOT grant data access to
+  tenants. Replace `/maintenance` on the user side with a per-tenant
+  usage page that includes price transparency.
+
+## Ethos: "software that doesn't hate you"
+
+Stash takes a deliberately unfashionable position on pricing and
+trust:
+
+- **Show your work.** The usage page lists every paid backend in
+  play (Gemini, Anthropic, Backblaze B2, host), what each one
+  charges per unit, what *this tenant* used last cycle, and the
+  platform's gross margin on that cycle. No black-box "Pro tier
+  $5/mo" — users see where the money goes.
+- **Small margins on top of real cost, not max-extract pricing.**
+  Goal is in-the-black, not gouging. The per-tenant breakdown should
+  make it obvious that the price is close to actual cost.
+- **Free tier is genuinely usable.** Initial caps: **100 MB photo
+  storage, one retained backup, modest AI quota** (placeholder until
+  we have telemetry; see "Open decisions"). Caps may shrink as the
+  free base grows, but the tier doesn't disappear.
+- **Operators can't read your data.** Support requests are handled
+  by the user inviting the operator into their tenant — same path
+  as inviting a partner. No backdoor, no "view as user" mode in the
+  admin dashboard. (See "Operator surface" below.)
+- **Soft-delete by default.** A deleted tenant enters a grace period
+  during which the user can sign back in and reactivate; their B2
+  backup is retained beyond that for catastrophic recovery.
 
 ## Non-goals (for this round)
 
@@ -287,26 +316,114 @@ the `enforce_email_allowlist`-style pattern:
 - `/admin/*` routes require `is_operator`; everything else ignores
   the flag.
 
+**Hard rule: operators cannot read tenant data through `/admin`.**
+The dashboard exposes counts, usage, billing, lifecycle state, and
+audit-log entries — not boxes, items, photos, or names. Any
+operator who genuinely needs to see a tenant's data goes through the
+same invite path a partner would: ask the tenant to send them a
+maintainer invite. This trades operator convenience for a story we
+can stand behind ("we cannot snoop your stash; we don't even have a
+button for it").
+
 Surfaces:
-- All-tenant list with usage rollups.
-- Per-tenant drill-down: members, shares, audit log, raw SQL inspect
-  (read-only).
-- Per-tenant restore from B2.
-- Operator-only DR: full-DB import (the current
-  `/maintenance/import` moves here verbatim).
+- All-tenant list with metadata + usage rollups (no content).
+- Per-tenant lifecycle: soft-delete, reactivate, force hard-delete
+  (GDPR right-to-erasure), trigger an off-cycle backup.
+- Per-tenant restore from B2 — operator confirms then a tenant
+  maintainer drives the actual restore from `/usage` after sign-in.
+- Operator-only DR: full-DB import (today's
+  `/maintenance/import`) for the catastrophic case where the whole
+  deployment needs reseeding. Logs prominently to the global audit
+  log.
 - Quota override editor.
+- Vendor cost panel — what the platform paid each vendor last
+  cycle, total revenue, gross margin. The numbers shown here are the
+  source of truth for the in-app price-transparency block.
 
 ### User-facing usage page (replaces `/maintenance` for tenants)
 
 - Plan + role at the top.
 - Three meters: storage, AI calls, backup retention — each with this
   cycle's used / cap, plus a sparkline of the last 30 days.
+- **Cost transparency block.** A table of every paid backend (Gemini
+  Flash, Gemini 3 Pro Image, Anthropic Opus, Backblaze B2, host
+  share), what each charges per unit, this tenant's last-cycle usage
+  in those units, vendor cost on the tenant's behalf, what the
+  tenant paid (free tier shows $0), and the platform's margin. Same
+  data the `/admin` vendor cost panel rolls up — different framing,
+  same source numbers, so the public claim and the operator view
+  can never disagree.
 - Backups list with download links. Per-tenant restore.
 - Members + invites table.
 - Outbound shares (boxes/items I've shared) with revoke.
+- **Delete tenant** action with the soft-delete grace period clearly
+  explained ("you have 30 days to reactivate; one backup will be
+  retained beyond that for one year"). Maintainer-only.
 
-The only "destructive" action exposed here is per-tenant restore;
-operator support handles tenant deletion and DR.
+The only "destructive" actions exposed here are per-tenant restore
+and tenant soft-delete; the operator surface handles cross-tenant DR
+and post-grace hard-delete.
+
+### Tenant lifecycle
+
+- **Active**: normal use.
+- **Soft-deleted**: `tenants.deleted_at IS NOT NULL`. Sign-in lands
+  on a "this stash is scheduled for deletion on
+  YYYY-MM-DD — reactivate?" screen. Read-only browsing allowed during
+  grace; mutations and AI calls disabled.
+- **Reactivated**: clearing `deleted_at` returns the tenant to
+  active. Members, shares, and quotas resume.
+- **Hard-deleted**: after the grace period (default 30 days, or
+  immediately on operator override for GDPR), DB rows + uploads are
+  removed. The most recent B2 backup is retained for one year
+  beyond hard-delete in a separate `s3://stash-backups/_archived/`
+  prefix; only operators can restore from there.
+
+Schema:
+
+```text
+tenants(
+    ...
+    deleted_at TEXT,                 -- soft-delete timestamp
+    hard_delete_after TEXT,          -- when the cron may purge
+    archived_backup_key TEXT,        -- B2 key of the retained zip
+    archived_backup_until TEXT       -- when that zip will be purged
+)
+```
+
+A scheduled job promotes soft-deleted tenants past their
+`hard_delete_after` to hard-delete. A second job purges archived
+backups past their retention.
+
+### Logging & observability
+
+Every log line carries enough context that a single grep tells the
+story of a request:
+
+- `request_id`: short uuid stamped by the request middleware.
+- `actor_email` and `tenant_id` from `current_actor` (both nullable
+  for unauthenticated paths and operator cross-tenant work).
+- `surface`: which API surface group ran (`ai`, `upload`,
+  `core`, `admin`).
+- `layer`: which architectural layer emitted the log
+  (`route`, `dao`, `vision`, `backup`, `quota`).
+- `action`: short verb-noun string for the operation
+  (`box.update`, `share.create`, `quota.exceeded`).
+
+Implementation:
+
+- Stdlib `logging` + a `LoggerAdapter` per layer that pulls these
+  fields out of `contextvars` set by middleware.
+- Structured (JSON) lines in production, pretty in dev.
+- Audit-worthy events ALSO write to `audit_log` so users can see
+  their own tenant's history. Privacy-sensitive events (operator
+  cross-tenant inspection) write to the global audit log only —
+  there is no operator-on-tenant action that can read tenant data,
+  by design, so this stays a thin surface (e.g.
+  `tenant.lifecycle.soft_delete` from operator).
+- Sentry / external aggregator is deferred to the support-surface
+  work; the structured stdlib output already gives the shape we'd
+  ship to it.
 
 ## Roadmap
 
@@ -352,11 +469,28 @@ In order. Each step ends in a testable, deployable state.
 9. **Quotas + enforcement.** Soft caps wired into router-prefix
    middleware. Banners on usage page. 429s when surfaces are gated.
 
-10. **Operator dashboard.** `/admin` surface with cross-tenant views,
-    restore, quota overrides, audit log inspection.
+10. **Operator dashboard.** `/admin` surface with cross-tenant
+    metadata, lifecycle controls (soft-delete / reactivate /
+    force-hard-delete), quota overrides, audit-log view, vendor cost
+    panel. Explicitly no per-tenant data access.
 
-11. **User usage page.** `/usage` rebuilt as the per-tenant home for
-    plan/role/quotas/backups/members/shares.
+11. **User usage page + cost transparency.** `/usage` rebuilt as the
+    per-tenant home for plan/role/quotas/backups/members/shares,
+    plus the public cost-transparency block driven from the same
+    vendor cost numbers `/admin` rolls up.
+
+12. **Tenant lifecycle.** Soft-delete UX, reactivate flow, scheduled
+    hard-delete job, archived-backup retention on B2.
+
+13. **Tenant switcher (top-right).** Persistent SaaS-pattern
+    avatar/initials menu in the global header: list of tenants the
+    user is a member of, "Shared with you" entry, account/usage
+    link, sign out. Active tenant marked, others one click away.
+    Stays consistent across pages.
+
+14. **Logging pass.** Layered `LoggerAdapter`s, request-id middleware,
+    structured JSON output. Backfill `audit_log` writes on key
+    actions.
 
 (Support / Sentry / in-app feedback link — deferred.)
 
@@ -407,24 +541,44 @@ no 403/404.
 
 ## Open decisions
 
-- **Plans / pricing.** This spec assumes free + pro + operator with
-  per-tenant overrides. Actual price points and Stripe integration
-  are out of scope for this round; quotas exist so the boundary is
-  in place when billing lands.
-- **Tenant deletion.** Cascade behaviour is set at the FK level. UX
-  for confirming "yes, nuke everything" is operator-side for now.
-- **Operator emergency access.** An operator inspecting a tenant's
-  data is a privacy-sensitive action — should it be logged into the
-  tenant's audit log too, or only the global one? Lean toward both.
-- **`FULLY_PUBLIC`.** Loses meaning under multi-tenancy. Keep for
-  local dev only, or remove. Recommend remove after migration; tests
-  set up a tenant + actor explicitly.
-- **Multiple-tenant tenant switcher.** When a user is a member of >1
-  tenant (or has shares), the UI needs an active-tenant selector.
-  Likely a top-bar dropdown that survives across pages. Belongs to
-  the `/usage` rebuild step.
-- **Tag uniqueness across tenants.** Per-tenant `(tenant_id, name)`
-  unique constraint; no global tag namespace.
+- **Free-tier numerical caps.** Initial values: 100 MB photo storage,
+  one retained backup. AI quota is still TBD — pick after the
+  telemetry step lands a baseline of typical free-user behaviour.
+  Caps may shrink as the free base grows; the tier itself is
+  permanent.
+- **Paid tier shape.** Single Pro tier with transparent cost
+  breakdown, vs. metered "pay for what you use" billing. Both fit
+  the ethos; metered is more legible but harder to operate. Decide
+  after the cost-transparency block exists and we know what real
+  per-tenant cost curves look like.
+- **Stripe integration.** Out of scope for this round — quotas exist
+  so the billing boundary is wired when payment lands.
+- **AI quota grace.** When a free tenant blows through their AI cap
+  mid-ingest, do we (a) hard-fail the rest of the batch, (b) finish
+  the current photo and 429 the next one, or (c) burn into a
+  per-tenant overdraft and surface it as "this batch put you $0.12
+  over budget; please upgrade." Lean toward (b) — predictable,
+  doesn't punish users for one over-the-line photo.
+
+## Resolved decisions
+
+- **Operator emergency access** (originally: "log to tenant audit
+  log AND global?"): there is no operator emergency-access path.
+  Operators read only metadata + usage; for tenant-data access they
+  request a maintainer invite from the user, same flow as a
+  partner. Audit log only ever holds the lifecycle/quota actions an
+  operator *can* take, which all log to the global audit log.
+- **`FULLY_PUBLIC`**: removed after the migration. Tests explicitly
+  set up a tenant + actor; there is no "no allowlist" mode in
+  production any more.
+- **Tenant switcher**: top-right header, modern SaaS pattern (avatar
+  / initials → dropdown). See roadmap step 13.
+- **Tag uniqueness**: per-tenant `(tenant_id, name)` unique; no
+  global tag namespace.
+- **Tenant deletion**: soft-delete with 30-day grace, then hard-delete
+  via cron, archived backup retained on B2 for one year. Operator
+  can force immediate hard-delete for GDPR. UX described in "Tenant
+  lifecycle".
 
 ## Out of scope (this spec)
 
