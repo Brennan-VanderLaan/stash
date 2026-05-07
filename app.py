@@ -2364,7 +2364,15 @@ def room_boxes(request: Request, room_id: int):
 
 def _referenced_uploads() -> set[str]:
     """All upload filenames referenced by any row in the DB, plus their
-    derived thumbnail companions so the orphan sweep keeps both halves."""
+    derived thumbnail companions so the orphan sweep keeps both halves.
+
+    This is the single source of truth for both /maintenance/cleanup
+    (orphan deletion) and /maintenance/export (backup zip).  Any new
+    file-bearing column MUST be added here — otherwise a fresh feature
+    will silently leak files on cleanup AND drop them from backups.
+
+    DB tables themselves are captured by zipping the whole stash.db, so
+    DB-only additions (new tables, new non-file columns) need nothing."""
     refs: set[str] = set()
     with db() as conn:
         for sql in (

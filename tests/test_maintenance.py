@@ -234,6 +234,118 @@ def test_import_creates_backup_of_existing_db(client):
     assert len(backups_after) == len(backups_before) + 1
 
 
+def test_export_includes_floorplans_and_background_art(client):
+    """Pin coverage for every file-bearing column beyond items.photo: a
+    location floorplan, a floor floorplan, and a box's generated
+    background art must all ride along in the backup zip."""
+    import secrets
+
+    _ingest_and_assign(client)
+
+    # 1. Background art on the box (the bytes are written directly to disk
+    #    by the /generate-art handler; mirror that here without invoking
+    #    the model).
+    art_name = f"art-{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / art_name).write_bytes(_fake_jpg())
+
+    # 2. Floorplan on a location.
+    loc_floorplan = f"{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / loc_floorplan).write_bytes(_fake_jpg())
+
+    # 3. Floorplan on a floor (multi-floor support added after the original
+    #    backup tests were written).
+    floor_floorplan = f"{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / floor_floorplan).write_bytes(_fake_jpg())
+
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE boxes SET background_art = ? WHERE id = 1", (art_name,))
+        cur = conn.execute(
+            "INSERT INTO locations (name, floorplan) VALUES ('home', ?)",
+            (loc_floorplan,),
+        )
+        loc_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO floors (location_id, name, floorplan, sort_order) "
+            "VALUES (?, 'main', ?, 0)",
+            (loc_id, floor_floorplan),
+        )
+        conn.commit()
+
+    r = client.get("/maintenance/export")
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = set(zf.namelist())
+
+    for expected in (art_name, loc_floorplan, floor_floorplan):
+        assert f"uploads/{expected}" in names, f"{expected} missing from export"
+
+
+def test_import_round_trip_restores_floorplans_and_background_art(client):
+    """Round-trip: backup → wipe → restore brings back the floorplan and
+    background-art files alongside the DB rows that point at them."""
+    import secrets
+
+    _ingest_and_assign(client)
+
+    art_name = f"art-{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / art_name).write_bytes(_fake_jpg())
+    loc_floorplan = f"{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / loc_floorplan).write_bytes(_fake_jpg())
+    floor_floorplan = f"{secrets.token_hex(8)}.jpg"
+    (_uploads(client) / floor_floorplan).write_bytes(_fake_jpg())
+
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE boxes SET background_art = ? WHERE id = 1", (art_name,))
+        cur = conn.execute(
+            "INSERT INTO locations (name, floorplan) VALUES ('home', ?)",
+            (loc_floorplan,),
+        )
+        loc_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO floors (location_id, name, floorplan, sort_order) "
+            "VALUES (?, 'main', ?, 0)",
+            (loc_id, floor_floorplan),
+        )
+        conn.commit()
+
+    backup = client.get("/maintenance/export").content
+
+    # Wipe DB rows + the files on disk so the restore has actual work to do.
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE boxes SET background_art = NULL")
+        conn.execute("DELETE FROM floors")
+        conn.execute("DELETE FROM locations")
+        conn.commit()
+    for name in (art_name, loc_floorplan, floor_floorplan):
+        try:
+            (_uploads(client) / name).unlink()
+        except FileNotFoundError:
+            pass
+
+    r = client.post(
+        "/maintenance/import",
+        files={"file": ("backup.zip", io.BytesIO(backup), "application/zip")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    # All three files come back on disk, and the DB rows pointing at them
+    # are restored too.
+    for name in (art_name, loc_floorplan, floor_floorplan):
+        assert (_uploads(client) / name).exists(), f"{name} not restored"
+
+    with client.app_module.db() as conn:
+        assert conn.execute(
+            "SELECT background_art FROM boxes WHERE id = 1"
+        ).fetchone()["background_art"] == art_name
+        assert conn.execute(
+            "SELECT floorplan FROM locations WHERE name = 'home'"
+        ).fetchone()["floorplan"] == loc_floorplan
+        assert conn.execute(
+            "SELECT floorplan FROM floors WHERE name = 'main'"
+        ).fetchone()["floorplan"] == floor_floorplan
+
+
 def test_import_rejects_non_sqlite_file(client):
     r = client.post(
         "/maintenance/import",
