@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.18.0...v0.18.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* stop cropper.js double-rotating EXIF photos so saved crop matches drag ([7eb2e1c](https://github.com/Brennan-VanderLaan/stash/commit/7eb2e1c294000549f370e153532abeddf10fb638))
+
 ## [0.18.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.2...v0.18.0) (2026-05-07)
 
 
