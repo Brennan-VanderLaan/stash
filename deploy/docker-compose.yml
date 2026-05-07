@@ -45,8 +45,12 @@ services:
       # Re-validate the session against Google every 1h so a revoked Google
       # account stops working within the hour, not at full cookie expiry.
       OAUTH2_PROXY_COOKIE_REFRESH: 1h
-      # Allow any email domain — the actual gate is the explicit allowlist file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # ── DO NOT set OAUTH2_PROXY_EMAIL_DOMAINS here ───────────────────────
+      # oauth2-proxy's email check is OR semantics: an email passes if it
+      # matches the domain list *or* the authenticated-emails-file. Setting
+      # `--email-domain *` therefore bypasses emails.txt entirely and lets
+      # every Google identity in. The file alone is the gate; leave the
+      # domain list unset so the only path through is an explicit listing.
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
       # No skip-auth routes / regex configured by design — every path on this
       # stack must pass auth. /oauth2/* paths are owned by oauth2-proxy itself

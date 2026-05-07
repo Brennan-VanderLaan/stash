@@ -44,12 +44,16 @@ scoped proxy that exposes only the Docker API endpoints it actually needs.
 
 **Two-layer email allowlist.** The first gate is oauth2-proxy's `emails.txt`.
 The second is `STASH_ALLOWED_EMAILS` inside stash itself, which checks the
-`X-Forwarded-Email` header on every request. Both must allow the user.  This
-is deliberate: a missing/misnamed `emails.txt` on the host turns the bind
-mount into an empty directory, oauth2-proxy loads zero entries, and the
-`--email-domain "*"` fallback would otherwise let every Google account in.
-With the second layer, stash refuses to boot unless `STASH_ALLOWED_EMAILS`
-(or the explicit `FULLY_PUBLIC=true` opt-out) is configured.
+`X-Forwarded-Email` header on every request. Both must allow the user.
+
+oauth2-proxy uses **OR semantics** when both `--email-domain` and
+`--authenticated-emails-file` are configured — an email matching *either*
+gate passes. That's why this stack deliberately leaves `--email-domain`
+unset: a `*` wildcard there would short-circuit `emails.txt` and let every
+Google identity through. Stash's own gate is a second line of defence so a
+mistake on the proxy side can't silently leak the app, which is why the app
+refuses to boot unless `STASH_ALLOWED_EMAILS` (or the explicit
+`FULLY_PUBLIC=true` opt-out) is configured.
 
 **Revoking access.** Sessions are owned by oauth2-proxy / Google, not stash.
 To pull access for someone:
