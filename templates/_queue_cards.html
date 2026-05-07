@@ -1,0 +1,6 @@
+{# Just the pending-item cards — no page chrome.  Returned by
+   /queue/items so the queue page can splice in newly-arrived items
+   (and prune ones that vanished elsewhere) without a full reload. #}
+{% for p in pending %}
+{% include "_queue_card.html" %}
+{% endfor %}

@@ -10,14 +10,14 @@
   {% for t in all_tags %}<option value="{{ t }}">{% endfor %}
 </datalist>
 
-{% if not pending %}
-<div class="card">
+{# Empty-state placeholder — always rendered so the real-time refresh can
+   toggle its visibility without re-fetching the whole page. #}
+<div class="card queue-empty" {% if pending %}hidden{% endif %}>
   <div class="empty empty-mascot" data-mascot="cat">
     <p>Queue is empty. The cat approves.<br>
        <a href="/ingest">Ingest a photo</a> when you're ready for more.</p>
   </div>
 </div>
-{% endif %}
 
 {% if pending and not boxes %}
 <div class="card">
@@ -25,96 +25,15 @@
 </div>
 {% endif %}
 
-{% for p in pending %}
-<form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card" id="card-{{ p.id }}">
-
-  {# Photo + crop. The bbox overlay shows what the VLM actually detected so
-     the user can name the right item — without it they were sorting against
-     the whole photo and the post-accept crop was a surprise. #}
-  {% if p.photo %}
-  <div class="sort-photo">
-    <div class="sort-photo-frame">
-      <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
-      {% if p.bbox_y_min is not none and p.bbox_x_min is not none
-            and p.bbox_y_max is not none and p.bbox_x_max is not none %}
-      <div class="sort-bbox-overlay" id="bbox-overlay-{{ p.id }}"
-           style="--bbox-x0: {{ p.bbox_x_min / 10 }}%;
-                  --bbox-y0: {{ p.bbox_y_min / 10 }}%;
-                  --bbox-x1: {{ p.bbox_x_max / 10 }}%;
-                  --bbox-y1: {{ p.bbox_y_max / 10 }}%;">
-        <span class="sort-bbox-label">AI detected</span>
-      </div>
-      {% endif %}
-    </div>
-  </div>
-  <div class="crop-toolbar">
-    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
-            id="crop-btn-{{ p.id }}">Adjust crop</button>
-    <button type="button" class="btn btn-ghost btn-sm" onclick="resetCrop({{ p.id }})"
-            id="reset-btn-{{ p.id }}" style="display:none;">Reset</button>
-    <button type="button" class="btn btn-ghost btn-sm" onclick="clearCrop({{ p.id }})"
-            id="clear-btn-{{ p.id }}" style="display:none;">No crop</button>
-  </div>
-  {% endif %}
-
-  {# Hidden crop fields #}
-  <input type="hidden" name="crop_y_min" id="cy0-{{ p.id }}" value="{{ p.bbox_y_min if p.bbox_y_min is not none else '' }}">
-  <input type="hidden" name="crop_x_min" id="cx0-{{ p.id }}" value="{{ p.bbox_x_min if p.bbox_x_min is not none else '' }}">
-  <input type="hidden" name="crop_y_max" id="cy1-{{ p.id }}" value="{{ p.bbox_y_max if p.bbox_y_max is not none else '' }}">
-  <input type="hidden" name="crop_x_max" id="cx1-{{ p.id }}" value="{{ p.bbox_x_max if p.bbox_x_max is not none else '' }}">
-  <input type="hidden" name="skip_crop" id="skip-crop-{{ p.id }}" value="">
-
-  {# Item details #}
-  <div class="sort-body">
-    <input type="text" name="name" value="{{ p.name }}" required placeholder="Item name">
-    <textarea name="description" rows="2" placeholder="Description">{{ p.description or '' }}</textarea>
-    <input type="text" name="tags" placeholder="Tags — type to create, comma-separated"
-           list="tag-suggestions" autocomplete="off">
-    <span class="help-text">e.g. costa-rica, serial:ABC123 — new tags are created on submit</span>
-
-    {% if p.previous_box_name %}
-    <div class="text-sm text-muted">
-      Was in <strong>{{ p.previous_box_name }}</strong> — missing on last audit
-    </div>
-    {% endif %}
-
-    {% if p.suggestion_reason %}
-    <div class="suggestion">
-      {% if p.suggested_box_name %}
-        → <strong>{{ p.suggested_box_name }}</strong>
-      {% elif p.suggested_new_box_name %}
-        → new box <strong>{{ p.suggested_new_box_name }}</strong>
-        <span class="text-sm text-muted">(create it first)</span>
-      {% endif %}
-      <span class="text-sm text-muted"> — {{ p.suggestion_reason }}</span>
-    </div>
-    {% endif %}
-
-    <select name="box_id" required>
-      <option value="">— pick a box —</option>
-      {% for label, group in boxes_grouped %}
-      <optgroup label="{{ label }}">
-        {% for b in group %}
-        <option value="{{ b.id }}" {% if p.suggested_box_id == b.id %}selected{% endif %}>
-          {{ b.name }}
-        </option>
-        {% endfor %}
-      </optgroup>
-      {% endfor %}
-    </select>
-
-    <div class="btn-row">
-      {% if not p.suggestion_reason %}
-      <button type="submit" formaction="/queue/{{ p.id }}/match" formnovalidate
-              class="btn btn-secondary">Suggest</button>
-      {% endif %}
-      <button type="submit" class="btn btn-primary">Accept</button>
-      <button type="submit" formaction="/queue/{{ p.id }}/delete" formmethod="post"
-              class="btn btn-danger" formnovalidate>Reject</button>
-    </div>
-  </div>
-</form>
-{% endfor %}
+{# Cards live inside an explicit container so the polling loop below has
+   a stable anchor to splice new items into and to prune vanished ones
+   from.  data-fingerprint tracks the last server state we synced
+   against, so two updates landing back-to-back don't double-process. #}
+<div id="queue-cards" data-fingerprint="{{ fingerprint }}">
+  {% for p in pending %}
+    {% include "_queue_card.html" %}
+  {% endfor %}
+</div>
 
 <script>
 const croppers = {};
@@ -152,6 +71,10 @@ function toggleCrop(id) {
     };
   }
   croppers[id] = new Cropper(img, opts);
+  // Touching the cropper is a clear "I'm working on this card" signal —
+  // mark the card dirty so the polling loop below can't yank it out from
+  // under the user.
+  markCardDirty(id);
   document.getElementById('crop-btn-' + id).textContent = 'Done';
   document.getElementById('reset-btn-' + id).style.display = '';
   document.getElementById('clear-btn-' + id).style.display = '';
@@ -201,24 +124,105 @@ function clearCrop(id) {
   document.getElementById('clear-btn-' + id).style.display = 'none';
 }
 
-document.querySelectorAll('.sort-card').forEach(f => {
-  f.addEventListener('submit', function() {
-    const id = this.id.replace('card-','');
-    if (croppers[id]) finalizeCrop(id);
-  });
+// ── Real-time queue updates ──────────────────────────────────────────
+// The page polls /queue/state for a fingerprint.  When the fingerprint
+// changes we fetch the cards fragment, splice new items in, and prune
+// items that vanished (e.g. another tab assigned or rejected one).
+//
+// Crucially: never touch a card the user is actively editing.  A card is
+// considered "busy" if any element inside it has focus, the cropper is
+// open, or the card has been marked dirty by user input — in which case
+// the polling loop leaves it alone even if the server says it's gone.
+
+const cardsContainer = document.getElementById('queue-cards');
+
+function markCardDirty(id) {
+  const card = document.getElementById('card-' + id);
+  if (card) card.dataset.dirty = '1';
+}
+
+function isCardBusy(card) {
+  if (!card) return false;
+  if (card.contains(document.activeElement)) return true;
+  if (card.dataset.dirty === '1') return true;
+  const id = card.id.replace(/^card-/, '');
+  if (croppers[id]) return true;
+  return false;
+}
+
+// Any input/select/change inside a card flags it as dirty so the next
+// poll won't pull it out from under the user — even if the user has
+// since clicked outside of it.
+cardsContainer.addEventListener('input', function(e) {
+  const card = e.target.closest('.sort-card');
+  if (card) card.dataset.dirty = '1';
+});
+cardsContainer.addEventListener('change', function(e) {
+  const card = e.target.closest('.sort-card');
+  if (card) card.dataset.dirty = '1';
 });
 
+// Form-submit hook used to live as a one-shot querySelectorAll loop;
+// move it to delegation so dynamically-added cards inherit it for free.
+document.addEventListener('submit', function(e) {
+  const form = e.target.closest('.sort-card');
+  if (!form) return;
+  const id = form.id.replace(/^card-/, '');
+  if (croppers[id]) finalizeCrop(id);
+});
+
+function toggleEmptyState() {
+  const empty = document.querySelector('.queue-empty');
+  if (!empty) return;
+  empty.hidden = !!cardsContainer.querySelector('.sort-card');
+}
+
+async function refreshQueueCards() {
+  let html;
+  try {
+    const r = await fetch('/queue/items', {cache: 'no-store'});
+    if (!r.ok) return;
+    html = await r.text();
+  } catch (e) {
+    return;
+  }
+
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const incomingCards = Array.from(tmp.querySelectorAll('.sort-card'));
+  const incomingIds = new Set(incomingCards.map(c => c.id));
+
+  // Prune cards the user isn't editing whose ids no longer appear in the
+  // server's pending list.
+  for (const card of Array.from(cardsContainer.querySelectorAll('.sort-card'))) {
+    if (!incomingIds.has(card.id) && !isCardBusy(card)) {
+      card.remove();
+    }
+  }
+
+  // Add cards we don't already have.  Existing cards stay exactly as the
+  // user left them — including any in-flight typing or crop adjustment.
+  const presentIds = new Set(
+    Array.from(cardsContainer.querySelectorAll('.sort-card')).map(c => c.id)
+  );
+  for (const card of incomingCards) {
+    if (!presentIds.has(card.id)) {
+      cardsContainer.appendChild(card);
+    }
+  }
+
+  toggleEmptyState();
+}
+
 (function() {
-  const initial = "{{ fingerprint }}";
   setInterval(async function() {
     try {
-      const {fingerprint} = await (await fetch("/queue/state",{cache:"no-store"})).json();
-      if (fingerprint !== initial) {
-        const active = document.activeElement;
-        const busy = (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) || Object.keys(croppers).length;
-        if (!busy) location.reload();
+      const {fingerprint} = await (await fetch("/queue/state", {cache: "no-store"})).json();
+      if (fingerprint !== cardsContainer.dataset.fingerprint) {
+        await refreshQueueCards();
+        cardsContainer.dataset.fingerprint = fingerprint;
       }
-    } catch(e) {}
+    } catch (e) {}
   }, 2000);
 })();
 </script>

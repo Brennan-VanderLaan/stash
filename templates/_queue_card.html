@@ -1,0 +1,92 @@
+{# One pending-item card.  Rendered by /queue at first load and by
+   /queue/items on real-time refresh — keep it self-contained so the
+   diff-based update path can splice individual cards in/out without
+   needing the surrounding page chrome. #}
+<form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card" id="card-{{ p.id }}">
+
+  {# Photo + crop. The bbox overlay shows what the VLM actually detected so
+     the user can name the right item — without it they were sorting against
+     the whole photo and the post-accept crop was a surprise. #}
+  {% if p.photo %}
+  <div class="sort-photo">
+    <div class="sort-photo-frame">
+      <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
+      {% if p.bbox_y_min is not none and p.bbox_x_min is not none
+            and p.bbox_y_max is not none and p.bbox_x_max is not none %}
+      <div class="sort-bbox-overlay" id="bbox-overlay-{{ p.id }}"
+           style="--bbox-x0: {{ p.bbox_x_min / 10 }}%;
+                  --bbox-y0: {{ p.bbox_y_min / 10 }}%;
+                  --bbox-x1: {{ p.bbox_x_max / 10 }}%;
+                  --bbox-y1: {{ p.bbox_y_max / 10 }}%;">
+        <span class="sort-bbox-label">AI detected</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="crop-toolbar">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
+            id="crop-btn-{{ p.id }}">Adjust crop</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="resetCrop({{ p.id }})"
+            id="reset-btn-{{ p.id }}" style="display:none;">Reset</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="clearCrop({{ p.id }})"
+            id="clear-btn-{{ p.id }}" style="display:none;">No crop</button>
+  </div>
+  {% endif %}
+
+  {# Hidden crop fields #}
+  <input type="hidden" name="crop_y_min" id="cy0-{{ p.id }}" value="{{ p.bbox_y_min if p.bbox_y_min is not none else '' }}">
+  <input type="hidden" name="crop_x_min" id="cx0-{{ p.id }}" value="{{ p.bbox_x_min if p.bbox_x_min is not none else '' }}">
+  <input type="hidden" name="crop_y_max" id="cy1-{{ p.id }}" value="{{ p.bbox_y_max if p.bbox_y_max is not none else '' }}">
+  <input type="hidden" name="crop_x_max" id="cx1-{{ p.id }}" value="{{ p.bbox_x_max if p.bbox_x_max is not none else '' }}">
+  <input type="hidden" name="skip_crop" id="skip-crop-{{ p.id }}" value="">
+
+  {# Item details #}
+  <div class="sort-body">
+    <input type="text" name="name" value="{{ p.name }}" required placeholder="Item name">
+    <textarea name="description" rows="2" placeholder="Description">{{ p.description or '' }}</textarea>
+    <input type="text" name="tags" placeholder="Tags — type to create, comma-separated"
+           list="tag-suggestions" autocomplete="off">
+    <span class="help-text">e.g. costa-rica, serial:ABC123 — new tags are created on submit</span>
+
+    {% if p.previous_box_name %}
+    <div class="text-sm text-muted">
+      Was in <strong>{{ p.previous_box_name }}</strong> — missing on last audit
+    </div>
+    {% endif %}
+
+    {% if p.suggestion_reason %}
+    <div class="suggestion">
+      {% if p.suggested_box_name %}
+        → <strong>{{ p.suggested_box_name }}</strong>
+      {% elif p.suggested_new_box_name %}
+        → new box <strong>{{ p.suggested_new_box_name }}</strong>
+        <span class="text-sm text-muted">(create it first)</span>
+      {% endif %}
+      <span class="text-sm text-muted"> — {{ p.suggestion_reason }}</span>
+    </div>
+    {% endif %}
+
+    <select name="box_id" required>
+      <option value="">— pick a box —</option>
+      {% for label, group in boxes_grouped %}
+      <optgroup label="{{ label }}">
+        {% for b in group %}
+        <option value="{{ b.id }}" {% if p.suggested_box_id == b.id %}selected{% endif %}>
+          {{ b.name }}
+        </option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+
+    <div class="btn-row">
+      {% if not p.suggestion_reason %}
+      <button type="submit" formaction="/queue/{{ p.id }}/match" formnovalidate
+              class="btn btn-secondary">Suggest</button>
+      {% endif %}
+      <button type="submit" class="btn btn-primary">Accept</button>
+      <button type="submit" formaction="/queue/{{ p.id }}/delete" formmethod="post"
+              class="btn btn-danger" formnovalidate>Reject</button>
+    </div>
+  </div>
+</form>

@@ -1300,26 +1300,27 @@ def ingest_dismiss(job_id: int):
     return RedirectResponse("/ingest", status_code=303)
 
 
-@app.get("/queue", response_class=HTMLResponse)
-def queue(request: Request):
-    with db() as conn:
-        pending = conn.execute(
-            "SELECT p.*, b.name AS suggested_box_name FROM pending_items p "
-            "LEFT JOIN boxes b ON b.id = p.suggested_box_id "
-            "ORDER BY p.created_at ASC"
-        ).fetchall()
-        boxes = conn.execute(
-            "SELECT b.id, b.name, b.location, "
-            "       r.name AS room_name, "
-            "       l.id AS location_id, l.name AS location_name "
-            "FROM boxes b "
-            "LEFT JOIN rooms r ON r.id = b.room_id "
-            "LEFT JOIN locations l ON l.id = r.location_id "
-            # Sort so optgroup ordering is stable: location first, then room,
-            # then box name within each room.
-            "ORDER BY l.name IS NULL, l.name, r.name, b.name"
-        ).fetchall()
-        all_tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()]
+def _queue_view_context(conn) -> dict:
+    """Load the data needed to render the queue page (or just its cards
+    fragment).  Both /queue and /queue/items share the same shape so a
+    real-time refresh produces markup identical to the SSR path."""
+    pending = conn.execute(
+        "SELECT p.*, b.name AS suggested_box_name FROM pending_items p "
+        "LEFT JOIN boxes b ON b.id = p.suggested_box_id "
+        "ORDER BY p.created_at ASC"
+    ).fetchall()
+    boxes = conn.execute(
+        "SELECT b.id, b.name, b.location, "
+        "       r.name AS room_name, "
+        "       l.id AS location_id, l.name AS location_name "
+        "FROM boxes b "
+        "LEFT JOIN rooms r ON r.id = b.room_id "
+        "LEFT JOIN locations l ON l.id = r.location_id "
+        # Sort so optgroup ordering is stable: location first, then room,
+        # then box name within each room.
+        "ORDER BY l.name IS NULL, l.name, r.name, b.name"
+    ).fetchall()
+    all_tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()]
 
     # Group boxes for the <optgroup>'d picker: "Location · Room", or just
     # "Room" if no location, or "Unassigned" for boxes with neither.
@@ -1348,16 +1349,34 @@ def queue(request: Request):
         for r in pending
     ) + "||" + "|".join(f"{b['id']}:{b['name']}" for b in boxes)
     fingerprint = hashlib.sha1(payload.encode()).hexdigest()
-    return templates.TemplateResponse(
-        request, "queue.html",
-        {
-            "pending": pending,
-            "boxes": boxes,
-            "boxes_grouped": boxes_grouped,
-            "fingerprint": fingerprint,
-            "all_tags": all_tags,
-        },
-    )
+    return {
+        "pending": pending,
+        "boxes": boxes,
+        "boxes_grouped": boxes_grouped,
+        "fingerprint": fingerprint,
+        "all_tags": all_tags,
+    }
+
+
+@app.get("/queue", response_class=HTMLResponse)
+def queue(request: Request):
+    with db() as conn:
+        ctx = _queue_view_context(conn)
+    return templates.TemplateResponse(request, "queue.html", ctx)
+
+
+@app.get("/queue/items", response_class=HTMLResponse)
+def queue_items_fragment(request: Request):
+    """HTML fragment of the pending-item cards only.
+
+    The queue page polls this on /queue/state fingerprint changes and
+    splices new cards in (and prunes vanished ones) without a full
+    reload — earlier the page hard-reloaded on every fingerprint flip,
+    which kept eating in-flight edits whenever a background ingest job
+    finished or another tab touched the queue."""
+    with db() as conn:
+        ctx = _queue_view_context(conn)
+    return templates.TemplateResponse(request, "_queue_cards.html", ctx)
 
 
 @app.post("/queue/{pending_id}/match")

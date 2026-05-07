@@ -203,6 +203,48 @@ def test_queue_state_fingerprint_changes_on_edit(client):
     assert fp2 != fp1
 
 
+def test_queue_items_fragment_returns_just_the_cards(client):
+    """The /queue/items endpoint backs the page's real-time refresh — it
+    returns a fragment of pending-item cards (no <html>/<body>) so the
+    polling JS can splice individual items in/out of the page without a
+    full reload."""
+    client.post("/boxes", data={"name": "Box"})
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="alpha", description="d", bbox=[0, 0, 500, 500]),
+        DetectedItem(name="beta", description="d"),
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+
+    r = client.get("/queue/items")
+    assert r.status_code == 200
+    text = r.text
+
+    # Each pending row produces a <form id="card-N">.  Both rows show up.
+    assert 'id="card-1"' in text
+    assert 'id="card-2"' in text
+    assert "alpha" in text
+    assert "beta" in text
+    # Page chrome (header, base.html scaffolding, the Queue-is-empty
+    # placeholder) should NOT be in the fragment.
+    assert "<html" not in text.lower()
+    assert "Queue is empty" not in text
+
+
+def test_queue_items_fragment_drops_assigned(client):
+    """After /queue/{id}/assign removes a pending row, the fragment no
+    longer carries that card — the client-side diff uses this to prune
+    vanished items without a page reload."""
+    client.post("/boxes", data={"name": "Box"})
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+
+    assert 'id="card-1"' in client.get("/queue/items").text
+    client.post("/queue/1/assign", data={"box_id": "1", "name": "thing"})
+    assert 'id="card-1"' not in client.get("/queue/items").text
+
+
 def test_drop_pending_item(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
