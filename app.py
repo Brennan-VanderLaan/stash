@@ -71,6 +71,47 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
+# Defense-in-depth on top of oauth2-proxy. The proxy is supposed to gate on
+# emails.txt, but a missing host file silently turns the bind mount into a
+# directory — oauth2-proxy then loads an empty list and `--email-domain "*"`
+# happily lets every Google account through. With this gate, even if the
+# proxy fails open, stash refuses any X-Forwarded-Email that isn't on the
+# explicit STASH_ALLOWED_EMAILS list.
+#
+# Fails-closed at startup: refuse to boot without an allowlist unless the
+# operator opts into a fully-public deployment with FULLY_PUBLIC=true.
+# Sessions stay owned by oauth2-proxy / Google — to revoke someone, remove
+# them from emails.txt (and rotate the cookie secret if you need active
+# sessions killed immediately) rather than chasing it through stash's DB.
+_ALLOWED_EMAILS = frozenset(
+    e.strip().lower()
+    for e in os.environ.get("STASH_ALLOWED_EMAILS", "").split(",")
+    if e.strip()
+)
+_FULLY_PUBLIC = os.environ.get("FULLY_PUBLIC", "").strip().lower() == "true"
+
+if not _ALLOWED_EMAILS and not _FULLY_PUBLIC:
+    raise RuntimeError(
+        "Refusing to start: STASH_ALLOWED_EMAILS is empty. Set it to a "
+        "comma-separated list of authorized emails, or set FULLY_PUBLIC=true "
+        "to explicitly opt into a no-allowlist deployment."
+    )
+
+
+@app.middleware("http")
+async def enforce_email_allowlist(request: Request, call_next):
+    if _FULLY_PUBLIC:
+        return await call_next(request)
+    email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
+    if not email or email not in _ALLOWED_EMAILS:
+        return Response(
+            "Forbidden — your email is not authorized for this stash.",
+            status_code=403,
+            media_type="text/plain",
+        )
+    return await call_next(request)
+
+
 def _static_version() -> str:
     """Content hash of style.css, used for cache-busting. Picks up file changes
     without requiring a server restart — recomputed per request (tiny file, cheap)."""

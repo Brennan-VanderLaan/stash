@@ -79,6 +79,10 @@ services:
       STASH_PUBLIC_URL: https://${DOMAIN}
       WATCHTOWER_URL: http://watchtower:8080
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN}
+      # Defense-in-depth gate. The proxy's emails.txt is the first layer; this
+      # is the second.  Stash refuses to boot if neither is set — see .env.
+      STASH_ALLOWED_EMAILS: ${STASH_ALLOWED_EMAILS}
+      FULLY_PUBLIC: ${FULLY_PUBLIC}
     volumes:
       - stash-data:/data
     networks:

@@ -42,6 +42,26 @@ Stash has no path from the internet that doesn't go through Google sign-in,
 and no host bypasses /var/run/docker.sock — watchtower talks to a tightly
 scoped proxy that exposes only the Docker API endpoints it actually needs.
 
+**Two-layer email allowlist.** The first gate is oauth2-proxy's `emails.txt`.
+The second is `STASH_ALLOWED_EMAILS` inside stash itself, which checks the
+`X-Forwarded-Email` header on every request. Both must allow the user.  This
+is deliberate: a missing/misnamed `emails.txt` on the host turns the bind
+mount into an empty directory, oauth2-proxy loads zero entries, and the
+`--email-domain "*"` fallback would otherwise let every Google account in.
+With the second layer, stash refuses to boot unless `STASH_ALLOWED_EMAILS`
+(or the explicit `FULLY_PUBLIC=true` opt-out) is configured.
+
+**Revoking access.** Sessions are owned by oauth2-proxy / Google, not stash.
+To pull access for someone:
+
+1. Remove their email from `emails.txt` *and* `STASH_ALLOWED_EMAILS` in
+   `.env`.
+2. `docker compose restart oauth2-proxy stash` so both layers reload.
+3. To kill any active cookies immediately, also rotate
+   `OAUTH2_PROXY_COOKIE_SECRET` in `.env` and restart oauth2-proxy.
+   Otherwise, sessions die at the next 1h refresh (configured via
+   `OAUTH2_PROXY_COOKIE_REFRESH`).
+
 ## What you'll need before starting
 
 - A domain you control (e.g. `stash.example.com`).
@@ -115,7 +135,11 @@ $EDITOR .env
 #   - WATCHTOWER_TOKEN — generate with:
 #       openssl rand -hex 32
 
-# Allowlist the Google emails that can sign in
+# Allowlist the Google emails that can sign in. Both files matter:
+#   * emails.txt        — read by oauth2-proxy (one address per line)
+#   * STASH_ALLOWED_EMAILS in .env — read by stash itself (comma-separated)
+# Stash refuses to start if STASH_ALLOWED_EMAILS is empty (set FULLY_PUBLIC=true
+# only if you knowingly want to disable the app-level gate).
 cp emails.example.txt emails.txt
 $EDITOR emails.txt
 #   one email per line — anyone not listed gets a "not authorized" page
@@ -159,12 +183,21 @@ into the `stash-data` named-volume mountpoint, start the stack again.
 
 ## Adding or removing people
 
-Edit `emails.txt` on the host. oauth2-proxy reads it at startup — restart
-that one container to apply:
+Edit **both** allowlists on the host (the proxy and the app each enforce
+their own copy):
+
+1. `emails.txt` — one Google email per line.
+2. `STASH_ALLOWED_EMAILS` in `.env` — comma-separated.
+
+Then restart both containers so they pick up the new lists:
 
 ```bash
-docker compose restart oauth2-proxy
+docker compose restart oauth2-proxy stash
 ```
+
+To kill any sessions issued before the change, also rotate
+`OAUTH2_PROXY_COOKIE_SECRET` in `.env` (otherwise the existing cookies stay
+valid until the next 1h refresh re-checks the lists).
 
 ## What watchtower does NOT cover
 
