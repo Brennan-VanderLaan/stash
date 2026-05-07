@@ -1602,17 +1602,19 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   pointer-events: none;
 }
 
-/* Boxes inside a room — each room rect renders its boxes as little tiles.
-   The grid auto-fits as many tiles as can fit, with each tile carrying the
-   box name and item count. Tiles are tappable and open a preview modal. */
+/* Boxes inside a room — tiles fill the room area instead of clustering
+   at the top-left. auto-fit + 1fr rows + stretch alignment means a small
+   room with 2 boxes shows them as half-the-room each, and a big room
+   with 12 boxes packs them densely while still using the full vertical
+   space. */
 .room-rect-boxes {
   position: absolute;
   inset: 1.6rem 0.35rem 0.35rem 0.35rem;  /* leave room for label + count */
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  grid-auto-rows: minmax(28px, max-content);
-  gap: 0.25rem;
-  align-content: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  grid-auto-rows: minmax(60px, 1fr);
+  gap: 0.3rem;
+  align-content: stretch;
   pointer-events: auto;
   overflow: hidden;
 }
@@ -1665,6 +1667,32 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   background: color-mix(in srgb, var(--room-color, var(--accent)) 35%, transparent);
   box-shadow: inset 0 0 0 3px var(--room-color, var(--accent)),
               0 0 0 9999px rgba(0, 0, 0, 0.25);
+}
+
+/* Item drag — mosaic image is the source. While dragging, the box tile
+   under the cursor highlights as a drop target. */
+.room-box-tile-mosaic-img.drag-source {
+  opacity: 0.3;
+  filter: grayscale(0.6);
+  pointer-events: none;
+}
+.room-box-tile.item-drop-target {
+  filter: brightness(1.25);
+  outline: 2px dashed #fff;
+  outline-offset: -2px;
+}
+.item-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6),
+              0 0 0 2px rgba(74, 222, 128, 0.85);
+  opacity: 0.9;
+  transform: rotate(-2deg);
 }
 
 /* Item DnD source styling shares with the floorplan drag-source rule
@@ -1792,33 +1820,46 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 
 /* Photo mosaic inside a tile — only revealed at the deepest zoom tier
-   so the user can see what's actually in the box. auto-fill grid means
-   the cell size stays roughly constant (~28-36px depending on tile width)
-   so a box with 14 items wraps to multiple rows naturally instead of
-   shrinking each thumb to nothing. */
+   so the user can see what's actually in the box. The grid uses a
+   server-computed column count (⌈√N⌉) so the mosaic packs near-square
+   and each item cell stays as large as the tile allows. flex: 1 on
+   the mosaic itself means it expands to fill the rest of the tile so
+   item thumbs grow with zoom. */
 .room-box-tile-mosaic {
   display: none;
+  position: relative;
   margin-top: 0.3rem;
   gap: 2px;
   border-radius: 3px;
-  overflow: hidden;
-  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  overflow: visible;  /* let hover-zoomed thumbs spill the tile */
+  grid-template-columns: repeat(var(--mosaic-cols, 3), 1fr);
+  flex: 1 1 auto;
+  align-content: stretch;
   /* Inset shadow gives the mosaic a "tile inside a tile" feel. */
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
-.room-box-tile-mosaic img {
+.room-box-tile-mosaic-img {
   width: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
   background: rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, z-index 0s 0.15s;
+  position: relative;
+  z-index: 1;
 }
-[data-zoom-tier="3"] .room-box-tile-mosaic {
-  display: grid;
+/* Hover preview — scale up the thumbnail and pop a label with the
+   item name. Only enabled at the high zoom tier where the mosaic is
+   actually visible. */
+[data-zoom-tier="3"] .room-box-tile-mosaic-img:hover {
+  transform: scale(2.2);
+  z-index: 30;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6),
+              0 0 0 2px var(--accent);
+  transition: transform 0.15s, box-shadow 0.15s, z-index 0s;
 }
-/* Tile rows auto-grow so a box with many items expands its tile to fit
-   them all instead of clipping. The .room-rect-boxes grid is already
-   `grid-auto-rows: minmax(28px, max-content)` which lets this happen. */
+[data-zoom-tier="3"] .room-box-tile-mosaic { display: grid; }
 
 /* Pan cursor — view-mode stage is grabbable when not over a tile. */
 .floorplan-stage[data-edit="0"] { cursor: grab; }

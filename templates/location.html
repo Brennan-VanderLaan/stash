@@ -126,13 +126,21 @@
                 </span>
                 {% endif %}
               </span>
-              {# Photo mosaic — only rendered when there are photos.
-                 CSS reveals at zoom tier 3 so the user can "see inside"
-                 the box at a glance once they're zoomed close enough. #}
-              {% if b.photos %}
-              <span class="room-box-tile-mosaic" data-photo-count="{{ b.photos | length }}">
-                {% for ph in b.photos %}
-                <img src="/thumbs/{{ ph }}" alt="" loading="lazy">
+              {# Item mosaic — only rendered when there are photographed
+                 items. CSS reveals at zoom tier 3 so the user can "see
+                 inside" the box at a glance. Each img carries the item
+                 id + name for the hover tooltip and DnD-between-boxes. #}
+              {% if b['mosaic'] %}
+              <span class="room-box-tile-mosaic"
+                    data-photo-count="{{ b['mosaic'] | length }}"
+                    style="--mosaic-cols: {{ b.mosaic_cols }};">
+                {% for it in b['mosaic'] %}
+                <img class="room-box-tile-mosaic-img"
+                     src="/thumbs/{{ it.photo }}" alt="{{ it.name }}"
+                     title="{{ it.name }}"
+                     data-item-id="{{ it.item_id }}"
+                     data-item-name="{{ it.name }}"
+                     loading="lazy">
                 {% endfor %}
               </span>
               {% endif %}
@@ -423,7 +431,144 @@
   // event fires normally and the modal opens.
   if (!isEdit && boxDialog) {
     let drag = null;
+    let itemDrag = null;
+    // The browser fires `click` synchronously after `pointerup` for the
+    // same gesture even when we used the gesture as a drag. Without this
+    // flag the click handler below would open the box-preview modal
+    // immediately after a successful drop. Cleared on a 0-ms timeout so
+    // it only blocks the synthetic post-drag click and not real clicks
+    // a moment later.
+    let recentlyDragged = false;
     const DRAG_BEGIN_PX = 6;
+
+    // ── Item DnD (mosaic image → another box) ────────────────────────
+    // Registered with capture:true so it fires BEFORE the box-DnD
+    // handler below. When the gesture starts on a mosaic image we want
+    // to drag the ITEM, not its container box. stopImmediatePropagation
+    // keeps the box-DnD handler from also picking up the gesture.
+    overlay.addEventListener('pointerdown', (e) => {
+      const img = e.target.closest('.room-box-tile-mosaic-img');
+      if (!img || e.button !== 0) return;
+      e.stopImmediatePropagation();
+      const sourceTile = img.closest('.room-box-tile');
+      itemDrag = {
+        img,
+        itemId: img.dataset.itemId,
+        itemName: img.dataset.itemName,
+        sourceBoxId: sourceTile ? sourceTile.dataset.boxId : null,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+        ghost: null,
+        currentTarget: null,
+      };
+      img.setPointerCapture(e.pointerId);
+    }, true);
+
+    function findItemDropTile(x, y) {
+      let ghostShown = null;
+      if (itemDrag && itemDrag.ghost) {
+        ghostShown = itemDrag.ghost.style.display;
+        itemDrag.ghost.style.display = 'none';
+      }
+      const el = document.elementFromPoint(x, y);
+      if (itemDrag && itemDrag.ghost) itemDrag.ghost.style.display = ghostShown;
+      if (!el) return null;
+      return el.closest('.room-box-tile');
+    }
+
+    overlay.addEventListener('pointermove', (e) => {
+      if (!itemDrag) return;
+      const dx = e.clientX - itemDrag.startX;
+      const dy = e.clientY - itemDrag.startY;
+      if (!itemDrag.moved && Math.hypot(dx, dy) > DRAG_BEGIN_PX) {
+        itemDrag.moved = true;
+        itemDrag.img.classList.add('drag-source');
+        // Build a bigger ghost — square, fixed size, easier to target.
+        const ghost = document.createElement('img');
+        ghost.src = itemDrag.img.src;
+        ghost.alt = itemDrag.itemName;
+        ghost.className = 'item-drag-ghost';
+        document.body.appendChild(ghost);
+        itemDrag.ghost = ghost;
+      }
+      if (itemDrag.moved && itemDrag.ghost) {
+        itemDrag.ghost.style.left = (e.clientX + 8) + 'px';
+        itemDrag.ghost.style.top = (e.clientY + 8) + 'px';
+        const target = findItemDropTile(e.clientX, e.clientY);
+        if (target !== itemDrag.currentTarget) {
+          overlay.querySelectorAll('.room-box-tile.item-drop-target').forEach(el =>
+            el.classList.remove('item-drop-target'));
+          if (target && target.dataset.boxId !== itemDrag.sourceBoxId) {
+            target.classList.add('item-drop-target');
+          }
+          itemDrag.currentTarget = target;
+        }
+      }
+    }, true);
+
+    async function endItemDrag(e) {
+      if (!itemDrag) return;
+      const finished = itemDrag;
+      itemDrag = null;
+      try { finished.img.releasePointerCapture(e.pointerId); } catch (_) {}
+
+      if (!finished.moved) return;  // it was a click, not a drag
+
+      // Suppress the synthetic post-pointerup click on the source img.
+      recentlyDragged = true;
+      setTimeout(() => { recentlyDragged = false; }, 50);
+
+      finished.img.classList.remove('drag-source');
+      if (finished.ghost) finished.ghost.remove();
+      overlay.querySelectorAll('.room-box-tile.item-drop-target').forEach(el =>
+        el.classList.remove('item-drop-target'));
+
+      const target = findItemDropTile(e.clientX, e.clientY);
+      if (!target || target.dataset.boxId === finished.sourceBoxId) return;
+
+      try {
+        const r = await fetch(`/items/${finished.itemId}/move`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          body: new URLSearchParams({ box_id: target.dataset.boxId }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Optimistic DOM update — move the img into the target tile's
+        // mosaic. If the target had no mosaic yet, build one.
+        let targetMosaic = target.querySelector('.room-box-tile-mosaic');
+        if (!targetMosaic) {
+          targetMosaic = document.createElement('span');
+          targetMosaic.className = 'room-box-tile-mosaic';
+          targetMosaic.style.setProperty('--mosaic-cols', '1');
+          target.appendChild(targetMosaic);
+        }
+        targetMosaic.appendChild(finished.img);
+        // Reflow mosaic-cols on both source + target for a roughly-square
+        // grid that matches what the server would have rendered.
+        retileMosaic(targetMosaic);
+        const sourceTile = overlay.querySelector(
+          `.room-box-tile[data-box-id="${finished.sourceBoxId}"]`);
+        if (sourceTile) {
+          const sourceMosaic = sourceTile.querySelector('.room-box-tile-mosaic');
+          if (sourceMosaic) retileMosaic(sourceMosaic);
+        }
+      } catch (err) {
+        alert(`Move failed: ${err.message || err}`);
+      }
+    }
+
+    function retileMosaic(mosaic) {
+      const n = mosaic.querySelectorAll('.room-box-tile-mosaic-img').length;
+      const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+      mosaic.style.setProperty('--mosaic-cols', cols);
+      mosaic.dataset.photoCount = n;
+      // Empty mosaic? Remove it so the tile doesn't render an empty span.
+      if (n === 0) mosaic.remove();
+    }
+
+    overlay.addEventListener('pointerup', endItemDrag, true);
+    overlay.addEventListener('pointercancel', endItemDrag, true);
 
     function findDropRoom(x, y) {
       // Hide the ghost so elementFromPoint sees the actual room rect.
@@ -504,6 +649,11 @@
         return;
       }
 
+      // Suppress the browser's synthetic post-pointerup click event so
+      // the modal doesn't pop open right after a successful drop.
+      recentlyDragged = true;
+      setTimeout(() => { recentlyDragged = false; }, 50);
+
       // Cleanup visuals first
       finished.tile.classList.remove('drag-source');
       if (finished.ghost) finished.ghost.remove();
@@ -550,13 +700,17 @@
       chip.textContent = Math.max(0, n + delta);
     }
 
-    // Click → modal preview (only fires when pointerdown→up was a click,
-    // not a drag, since dragging consumes the gesture).
+    // Click → modal preview. Skipped when a drag just finished — the
+    // browser fires this click synchronously after pointerup even for
+    // gestures we consumed as a drag.
     overlay.addEventListener('click', async (e) => {
+      if (recentlyDragged) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const tile = e.target.closest('.room-box-tile');
       if (!tile) return;
-      // If a drag just finished, skip the click entirely
-      if (tile.classList.contains('drag-source')) return;
       e.preventDefault();
       e.stopPropagation();
       const boxId = tile.dataset.boxId;

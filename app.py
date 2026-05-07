@@ -1971,11 +1971,11 @@ def location_detail(
                 "ORDER BY b.name",
                 (current_floor["id"],),
             ).fetchall()
-            # Photos for the high-LOD tile mosaic — pull up to 9 per box so
-            # zoom-tier 3 can fill the tile with a 3x3 grid (or whatever
-            # fits). One JOIN, bucketed in Python below.
-            photo_rows = conn.execute(
-                "SELECT i.box_id, i.photo "
+            # Items (with photo) for the high-LOD tile mosaic. Pull id +
+            # name so the rendered img can carry both — needed for the
+            # hover tooltip and the item drag-and-drop between boxes.
+            item_rows = conn.execute(
+                "SELECT i.id AS item_id, i.box_id, i.name AS item_name, i.photo "
                 "FROM items i "
                 "JOIN boxes b ON b.id = i.box_id "
                 "JOIN rooms r ON r.id = b.room_id "
@@ -1986,15 +1986,25 @@ def location_detail(
             # Cap at 64 per box (8x8 grid worth) — enough headroom that even
             # heavily-photographed boxes show every item, but bounded so a
             # pathological 1000-item box doesn't bloat the page payload.
-            photos_by_box: dict[int, list] = {}
-            for p in photo_rows:
-                lst = photos_by_box.setdefault(p["box_id"], [])
+            mosaic_by_box: dict[int, list] = {}
+            for it in item_rows:
+                lst = mosaic_by_box.setdefault(it["box_id"], [])
                 if len(lst) < 64:
-                    lst.append(p["photo"])
+                    lst.append({
+                        "item_id": it["item_id"],
+                        "name": it["item_name"],
+                        "photo": it["photo"],
+                    })
+            import math as _math
             boxes_by_room: dict[int, list] = {}
             for b in box_rows:
                 d = dict(b)
-                d["photos"] = photos_by_box.get(b["id"], [])
+                mosaic = mosaic_by_box.get(b["id"], [])
+                d["mosaic"] = mosaic
+                # Square-ish grid: ⌈√N⌉ columns. With auto-flow rows the
+                # mosaic packs into a near-square so each cell stays as
+                # large as possible at the deepest zoom tier.
+                d["mosaic_cols"] = max(1, _math.ceil(_math.sqrt(len(mosaic)))) if mosaic else 1
                 boxes_by_room.setdefault(b["room_id"], []).append(d)
             for r in rooms:
                 r["boxes"] = boxes_by_room.get(r["id"], [])

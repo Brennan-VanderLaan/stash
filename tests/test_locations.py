@@ -571,14 +571,16 @@ def test_floorplan_tiles_emit_audit_and_created_dates(client):
 
 def test_floorplan_tiles_emit_photo_mosaic_at_high_zoom(client):
     """At zoom-tier 3 each tile fills with item thumbnails. The HTML
-    carries them at all zoom levels — CSS hides them at lower tiers."""
+    carries them at all zoom levels — CSS hides them at lower tiers.
+    Each img also carries data-item-id + data-item-name so the
+    drag-between-boxes handler has what it needs."""
     import io
     from PIL import Image
     loc_id, floor_id = _setup_location_with_floor(client)
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
     client.post("/boxes", data={"name": "Tools", "room_id": "1"})
-    # Add three items with photos
-    for i in range(3):
+    # Add four items with photos so the server picks ⌈√4⌉ = 2 columns
+    for i in range(4):
         buf = io.BytesIO()
         Image.new("RGB", (50, 50), color=(40, 80 + i*20, 30)).save(buf, format="JPEG")
         client.post(
@@ -589,14 +591,20 @@ def test_floorplan_tiles_emit_photo_mosaic_at_high_zoom(client):
 
     page = client.get(f"/locations/{loc_id}").text
     assert 'class="room-box-tile-mosaic"' in page
-    assert 'data-photo-count="3"' in page
-    # Three thumbnail src refs in the mosaic
+    assert 'data-photo-count="4"' in page
+    # Server-computed --mosaic-cols is ⌈√4⌉ = 2
+    assert '--mosaic-cols: 2' in page
+    # Each img must carry the data attributes needed for item DnD
     import re
     mosaic = re.search(
         r'<span class="room-box-tile-mosaic"[^>]*>(.*?)</span>', page, re.S
     )
     assert mosaic
-    assert mosaic.group(1).count('src="/thumbs/') == 3
+    body = mosaic.group(1)
+    assert body.count('src="/thumbs/') == 4
+    assert body.count('data-item-id=') == 4
+    assert body.count('data-item-name=') == 4
+    assert 'data-item-name="item 0"' in body
 
 
 def test_floorplan_view_mode_renders_box_tiles_inside_rooms(client):
