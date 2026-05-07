@@ -159,6 +159,30 @@ def test_locations_index_lists_all(client):
     assert "Storage unit" in page
 
 
+def test_locations_index_uses_floor_floorplan_when_legacy_column_empty(client):
+    """A new location's floorplan lives on its floors, not on the legacy
+    locations.floorplan column.  The index card has to look there too,
+    otherwise a fully-floorplanned location displays "no floorplan"."""
+    loc_id, _ = _setup_location_with_floor(client, "Townhouse", "First floor")
+    # Sanity: locations.floorplan is NULL — the file is on the floor row.
+    with client.app_module.db() as conn:
+        loc_row = conn.execute(
+            "SELECT floorplan FROM locations WHERE id = ?", (loc_id,)
+        ).fetchone()
+        floor_row = conn.execute(
+            "SELECT floorplan FROM floors WHERE location_id = ?", (loc_id,)
+        ).fetchone()
+    assert loc_row["floorplan"] is None
+    assert floor_row["floorplan"] is not None
+
+    page = client.get("/locations").text
+    assert "Townhouse" in page
+    assert "no floorplan" not in page
+    # The floor's floorplan filename should be the one rendered as the
+    # preview thumb on the index card.
+    assert f"/thumbs/{floor_row['floorplan']}" in page
+
+
 def test_rename_location(client):
     client.post("/locations", data={"name": "House"})
     client.post("/locations/1", data={"name": "Big house"})

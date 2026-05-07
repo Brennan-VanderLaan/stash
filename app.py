@@ -1944,12 +1944,28 @@ def _next_room_color(conn, location_id: int) -> str:
 
 
 def _locations_with_room_counts(conn) -> list[dict]:
+    """Locations + per-location counts and a representative floorplan.
+
+    `floorplan` here is "what should we show on the locations index card",
+    not necessarily `locations.floorplan` — multi-floor support moved the
+    actual floorplan image onto floors.floorplan, leaving the legacy
+    locations.floorplan column populated only for pre-migration data
+    (and stale even there once a user replaces the floor's image).  Pick
+    the first floor's floorplan when one exists, fall back to the legacy
+    column otherwise, so the index card never reports "no floorplan" on a
+    location whose floors actually have one."""
     rows = conn.execute(
-        "SELECT l.*, "
+        "SELECT l.id, l.name, l.created_at, "
         "       (SELECT COUNT(*) FROM rooms WHERE location_id = l.id) AS room_count, "
         "       (SELECT COUNT(*) FROM boxes b "
         "         JOIN rooms r ON r.id = b.room_id "
-        "         WHERE r.location_id = l.id) AS box_count "
+        "         WHERE r.location_id = l.id) AS box_count, "
+        "       COALESCE("
+        "         (SELECT f.floorplan FROM floors f "
+        "           WHERE f.location_id = l.id AND f.floorplan IS NOT NULL "
+        "           ORDER BY f.sort_order, f.id LIMIT 1), "
+        "         l.floorplan"
+        "       ) AS floorplan "
         "FROM locations l ORDER BY l.created_at"
     ).fetchall()
     return [dict(r) for r in rows]
