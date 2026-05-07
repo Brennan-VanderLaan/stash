@@ -695,6 +695,34 @@ def box_detail(request: Request, box_id: int):
     )
 
 
+@app.post("/boxes/{box_id}/move-to-room")
+def move_box_to_room(
+    request: Request,
+    box_id: int,
+    room_id: str = Form(""),
+):
+    """Reassign a box to a different room. Used by floorplan drag-and-drop
+    and as a generic API. Empty room_id clears the assignment."""
+    rid = _coerce_room_id(room_id)
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
+            raise HTTPException(404)
+        location_text = ""
+        if rid is not None:
+            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
+            if not row:
+                raise HTTPException(400, "Unknown room")
+            location_text = row["name"]
+        conn.execute(
+            "UPDATE boxes SET room_id = ?, location = ? WHERE id = ?",
+            (rid, location_text, box_id),
+        )
+        conn.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "room_id": rid}
+    return RedirectResponse(f"/boxes/{box_id}", status_code=303)
+
+
 @app.post("/boxes/{box_id}/edit")
 def edit_box(
     box_id: int,

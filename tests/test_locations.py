@@ -472,6 +472,39 @@ def test_location_detail_renders_room_overlays(client):
     assert page.count('class="room-rect"') >= 2
 
 
+def test_move_box_to_room_endpoint_reassigns(client):
+    """Floorplan drag-and-drop hits POST /boxes/{id}/move-to-room. Empty
+    room_id clears the assignment; valid room_id reassigns + denormalizes
+    boxes.location to the room name."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Kitchen", "x": 0.4, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+
+    r = client.post(
+        "/boxes/1/move-to-room",
+        data={"room_id": "2"},
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200
+    assert r.json()["room_id"] == 2
+    with client.app_module.db() as conn:
+        row = conn.execute("SELECT room_id, location FROM boxes WHERE id = 1").fetchone()
+    assert row["room_id"] == 2
+    assert row["location"] == "Kitchen"
+
+    # Empty clears it
+    r = client.post(
+        "/boxes/1/move-to-room",
+        data={"room_id": ""},
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200
+    with client.app_module.db() as conn:
+        row = conn.execute("SELECT room_id, location FROM boxes WHERE id = 1").fetchone()
+    assert row["room_id"] is None
+
+
 def test_box_color_override_persists_and_falls_back(client):
     """Boxes can override the room color via /boxes/{id}/edit. Empty value
     clears the override (falls back to room color). Off-palette values are

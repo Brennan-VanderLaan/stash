@@ -411,11 +411,148 @@
   });
   document.querySelector('[data-zoom-fit]').addEventListener('click', zoomFit);
 
-  // ── Box tile click → preview modal (view mode only) ───────────────
+  // ── Box tile click → preview modal, OR drag → move to a room ─────
+  // Pointerdown on a tile starts a drag-or-click. If the pointer moves
+  // past a small threshold we commit to a drag (creates a ghost element
+  // following the cursor + highlights drop-target rooms). pointerup
+  // fires the move when over a different room, otherwise the click
+  // event fires normally and the modal opens.
   if (!isEdit && boxDialog) {
+    let drag = null;
+    const DRAG_BEGIN_PX = 6;
+
+    function findDropRoom(x, y) {
+      // Hide the ghost so elementFromPoint sees the actual room rect.
+      let ghostShown = null;
+      if (drag && drag.ghost) {
+        ghostShown = drag.ghost.style.display;
+        drag.ghost.style.display = 'none';
+      }
+      const el = document.elementFromPoint(x, y);
+      if (drag && drag.ghost) drag.ghost.style.display = ghostShown;
+      if (!el) return null;
+      const rect = el.closest('.room-rect');
+      if (!rect || rect.classList.contains('room-rect-draft')) return null;
+      return rect;
+    }
+
+    function clearDropHighlights() {
+      overlay.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+    }
+
+    overlay.addEventListener('pointerdown', (e) => {
+      const tile = e.target.closest('.room-box-tile');
+      if (!tile || e.button !== 0) return;
+      const sourceRect = tile.closest('.room-rect');
+      drag = {
+        tile,
+        boxId: tile.dataset.boxId,
+        sourceRoomId: sourceRect ? sourceRect.dataset.roomId : null,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+        ghost: null,
+        currentTarget: null,
+      };
+      tile.setPointerCapture(e.pointerId);
+    });
+
+    overlay.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (!drag.moved && Math.hypot(dx, dy) > DRAG_BEGIN_PX) {
+        drag.moved = true;
+        drag.tile.classList.add('drag-source');
+        // Build a ghost — visual clone that follows the pointer.
+        const ghost = drag.tile.cloneNode(true);
+        ghost.classList.add('drag-ghost');
+        ghost.classList.remove('drag-source');
+        const tr = drag.tile.getBoundingClientRect();
+        ghost.style.width = tr.width + 'px';
+        ghost.style.height = tr.height + 'px';
+        document.body.appendChild(ghost);
+        drag.ghost = ghost;
+      }
+      if (drag.moved && drag.ghost) {
+        drag.ghost.style.left = (e.clientX + 8) + 'px';
+        drag.ghost.style.top = (e.clientY + 8) + 'px';
+        const target = findDropRoom(e.clientX, e.clientY);
+        if (target !== drag.currentTarget) {
+          clearDropHighlights();
+          if (target && target.dataset.roomId !== drag.sourceRoomId) {
+            target.classList.add('drop-target');
+          }
+          drag.currentTarget = target;
+        }
+      }
+    });
+
+    async function endDrag(e) {
+      if (!drag) return;
+      const finished = drag;
+      drag = null;
+      try { finished.tile.releasePointerCapture(e.pointerId); } catch (_) {}
+
+      if (!finished.moved) {
+        // It was a click, not a drag — the click handler below opens
+        // the preview modal.
+        return;
+      }
+
+      // Cleanup visuals first
+      finished.tile.classList.remove('drag-source');
+      if (finished.ghost) finished.ghost.remove();
+      clearDropHighlights();
+
+      const target = findDropRoom(e.clientX, e.clientY);
+      if (!target || target.dataset.roomId === finished.sourceRoomId) return;
+      try {
+        const r = await fetch(`/boxes/${finished.boxId}/move-to-room`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          body: new URLSearchParams({ room_id: target.dataset.roomId }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Move the tile DOM to the new room's box grid so the user sees
+        // the change immediately, no full reload.
+        const targetBoxes = target.querySelector('.room-rect-boxes');
+        if (targetBoxes) {
+          targetBoxes.appendChild(finished.tile);
+        } else {
+          // Target room has no tiles yet — create the container.
+          const wrap = document.createElement('div');
+          wrap.className = 'room-rect-boxes';
+          wrap.appendChild(finished.tile);
+          target.appendChild(wrap);
+        }
+        // Bump the box-count chips on both rooms.
+        bumpRoomCount(finished.sourceRoomId, -1);
+        bumpRoomCount(target.dataset.roomId, +1);
+      } catch (err) {
+        alert(`Move failed: ${err.message || err}`);
+      }
+    }
+    overlay.addEventListener('pointerup', endDrag);
+    overlay.addEventListener('pointercancel', endDrag);
+
+    function bumpRoomCount(roomId, delta) {
+      if (!roomId) return;
+      const rect = overlay.querySelector(`.room-rect[data-room-id="${roomId}"]`);
+      if (!rect) return;
+      const chip = rect.querySelector('[data-box-count]');
+      if (!chip) return;
+      const n = Number(chip.textContent.trim()) || 0;
+      chip.textContent = Math.max(0, n + delta);
+    }
+
+    // Click → modal preview (only fires when pointerdown→up was a click,
+    // not a drag, since dragging consumes the gesture).
     overlay.addEventListener('click', async (e) => {
       const tile = e.target.closest('.room-box-tile');
       if (!tile) return;
+      // If a drag just finished, skip the click entirely
+      if (tile.classList.contains('drag-source')) return;
       e.preventDefault();
       e.stopPropagation();
       const boxId = tile.dataset.boxId;
