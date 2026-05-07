@@ -51,9 +51,26 @@
 </form>
 
 <script>
+// `cropper` outlives a single edit session: after the user clicks Done we
+// disable() rather than destroy(), so the crop box stays on screen as a
+// read-only marker.  Without that, hitting Done left the source image
+// blank and the adjustment looked like it had been thrown away — even
+// though the form fields below were updated and Save crop would have
+// committed the right coords.  `editing` tracks whether the cropper is
+// currently accepting drags so toggleCrop can re-enable it on a second
+// "Adjust crop" click.
 let cropper = null;
+let editing = false;
+
 function toggleCrop() {
-  if (cropper) { finalizeCrop(); return; }
+  if (cropper && editing) { finalizeCrop(); return; }
+  if (cropper && !editing) {
+    cropper.enable();
+    editing = true;
+    document.getElementById('crop-toggle').textContent = 'Done';
+    document.getElementById('crop-reset').style.display = '';
+    return;
+  }
   cropper = new Cropper(document.getElementById('recrop-img'), {
     viewMode:1, dragMode:'crop', autoCropArea:0.8,
     responsive:true, guides:true, highlight:true,
@@ -65,6 +82,7 @@ function toggleCrop() {
     // the user dragged.
     checkOrientation:false,
   });
+  editing = true;
   document.getElementById('crop-toggle').textContent = 'Done';
   document.getElementById('crop-reset').style.display = '';
 }
@@ -76,13 +94,16 @@ function finalizeCrop() {
   document.getElementById('cy1').value = Math.min(1000,Math.round((d.y+d.height)/img.naturalHeight*1000));
   document.getElementById('cx1').value = Math.min(1000,Math.round((d.x+d.width)/img.naturalWidth*1000));
   document.getElementById('skip-crop').value = '';
-  cropper.destroy(); cropper = null;
+  // Disable instead of destroy — the crop box stays visible as proof
+  // that the adjustment was captured.  Re-toggling re-enables editing.
+  cropper.disable();
+  editing = false;
   document.getElementById('crop-toggle').textContent = 'Adjust crop';
   document.getElementById('crop-reset').style.display = 'none';
 }
-function resetCrop() { if (cropper) cropper.reset(); }
+function resetCrop() { if (cropper && editing) cropper.reset(); }
 function undoCrop() {
-  if (cropper) { cropper.destroy(); cropper = null; }
+  if (cropper) { cropper.destroy(); cropper = null; editing = false; }
   ['cy0','cx0','cy1','cx1'].forEach(k => document.getElementById(k).value = '');
   document.getElementById('skip-crop').value = '1';
 }

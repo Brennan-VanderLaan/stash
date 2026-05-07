@@ -160,19 +160,32 @@ function toggleCrop(id) {
 function finalizeCrop(id) {
   const c = croppers[id]; if (!c) return;
   const d = c.getData(true), img = c.getImageData();
-  document.getElementById('cy0-' + id).value = Math.max(0, Math.round(d.y/img.naturalHeight*1000));
-  document.getElementById('cx0-' + id).value = Math.max(0, Math.round(d.x/img.naturalWidth*1000));
-  document.getElementById('cy1-' + id).value = Math.min(1000, Math.round((d.y+d.height)/img.naturalHeight*1000));
-  document.getElementById('cx1-' + id).value = Math.min(1000, Math.round((d.x+d.width)/img.naturalWidth*1000));
+  // 0-1000 normalized — these go into the form fields the server reads
+  // AND drive the static overlay below so the user sees their adjustment.
+  const cy0 = Math.max(0, Math.round(d.y / img.naturalHeight * 1000));
+  const cx0 = Math.max(0, Math.round(d.x / img.naturalWidth * 1000));
+  const cy1 = Math.min(1000, Math.round((d.y + d.height) / img.naturalHeight * 1000));
+  const cx1 = Math.min(1000, Math.round((d.x + d.width) / img.naturalWidth * 1000));
+  document.getElementById('cy0-' + id).value = cy0;
+  document.getElementById('cx0-' + id).value = cx0;
+  document.getElementById('cy1-' + id).value = cy1;
+  document.getElementById('cx1-' + id).value = cx1;
   document.getElementById('skip-crop-' + id).value = '';
   c.destroy(); delete croppers[id];
   document.getElementById('crop-btn-' + id).textContent = 'Adjust crop';
   document.getElementById('reset-btn-' + id).style.display = 'none';
   document.getElementById('clear-btn-' + id).style.display = 'none';
-  // Restore the overlay so the user keeps seeing the AI's detected region
-  // until they accept (unless they cleared the crop).
+  // Snap the static overlay to the user's new crop and reveal it.  Without
+  // updating the CSS vars here the overlay reuses the AI's server-rendered
+  // values and looks like clicking Done reverted the adjustment — even
+  // though the form fields above are correct and Accept would still save
+  // the user's crop.
   const overlay = document.getElementById('bbox-overlay-' + id);
   if (overlay && document.getElementById('skip-crop-' + id).value !== '1') {
+    overlay.style.setProperty('--bbox-x0', (cx0 / 10) + '%');
+    overlay.style.setProperty('--bbox-y0', (cy0 / 10) + '%');
+    overlay.style.setProperty('--bbox-x1', (cx1 / 10) + '%');
+    overlay.style.setProperty('--bbox-y1', (cy1 / 10) + '%');
     overlay.hidden = false;
   }
 }
