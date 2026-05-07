@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.13.0...v0.14.0) (2026-05-06)
+
+
+### Features
+
+* floorplan navigation rework + box colors + zoom-tier detail ([48a6c4a](https://github.com/Brennan-VanderLaan/stash/commit/48a6c4a84da0d5c97cf3f808216d387aa0b67623))
+
 ## [0.13.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.12.1...v0.13.0) (2026-05-06)
 
 
