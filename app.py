@@ -71,44 +71,139 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
-# Defense-in-depth on top of oauth2-proxy. The proxy is supposed to gate on
-# emails.txt, but a missing host file silently turns the bind mount into a
-# directory — oauth2-proxy then loads an empty list and `--email-domain "*"`
-# happily lets every Google account through. With this gate, even if the
-# proxy fails open, stash refuses any X-Forwarded-Email that isn't on the
-# explicit STASH_ALLOWED_EMAILS list.
+# ── Localization seams ───────────────────────────────────────────────
+# v1 ships English-only.  The seams land now (jinja2.ext.i18n + a
+# NullTranslations identity catalog + a babel-driven date filter) so
+# wrapping a string in `_()` or `{% trans %}` is a no-op today and
+# becomes a translation task tomorrow.  Adding a real locale is a PR
+# that drops a `.po` file under `locale/<lang>/LC_MESSAGES/messages.po`
+# plus a one-line registration here; nothing else in the codebase
+# changes.  See spec § "Localization".
+import gettext as _gettext
+from babel.dates import format_datetime as _babel_format_datetime
+from babel.dates import format_date as _babel_format_date
+
+# Active translations object.  NullTranslations passes source strings
+# through unchanged — perfect for an English-only deployment that's
+# wrapping strings for future-proofing.  When a `.po` file lands, swap
+# this for `gettext.translation(...)`.
+_translations = _gettext.NullTranslations()
+_DEFAULT_LOCALE = os.environ.get("STASH_DEFAULT_LOCALE", "en")
+
+templates.env.add_extension("jinja2.ext.i18n")
+templates.env.install_gettext_translations(_translations, newstyle=True)
+
+
+def _(message: str) -> str:
+    """Mark a string for translation. v1 is English-only so this is the
+    identity, but every user-visible string in Python code should still
+    flow through here so `pybabel extract` finds them later."""
+    return _translations.gettext(message)
+
+
+def _format_datetime(dt, fmt: str = "medium", locale: str | None = None) -> str:
+    """Locale-aware datetime formatter for templates. Accepts strings (ISO),
+    datetimes, or None (returns empty)."""
+    if dt is None or dt == "":
+        return ""
+    if isinstance(dt, str):
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(dt.replace(" ", "T"))
+        except ValueError:
+            return dt  # render as-is if we can't parse
+    return _babel_format_datetime(dt, format=fmt, locale=locale or _DEFAULT_LOCALE)
+
+
+def _format_date(dt, fmt: str = "medium", locale: str | None = None) -> str:
+    if dt is None or dt == "":
+        return ""
+    if isinstance(dt, str):
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(dt.replace(" ", "T"))
+        except ValueError:
+            return dt
+    return _babel_format_date(dt, format=fmt, locale=locale or _DEFAULT_LOCALE)
+
+
+templates.env.filters["datetime"] = _format_datetime
+templates.env.filters["date"] = _format_date
+
+
+# ── Actor middleware ─────────────────────────────────────────────────
+# Resolves X-Forwarded-Email (set by oauth2-proxy) into a `request.state.actor`
+# carrying the active tenant + role + operator flag.  Replaces the old
+# STASH_ALLOWED_EMAILS / FULLY_PUBLIC pair: the new gate is tenant_members.
+# An email with no membership and no operator status gets a 403; everything
+# downstream (routes, DAO once it lands) reads the actor off request.state.
 #
-# Fails-closed at startup: refuse to boot without an allowlist unless the
-# operator opts into a fully-public deployment with FULLY_PUBLIC=true.
-# Sessions stay owned by oauth2-proxy / Google — to revoke someone, remove
-# them from emails.txt (and rotate the cookie secret if you need active
-# sessions killed immediately) rather than chasing it through stash's DB.
-_ALLOWED_EMAILS = frozenset(
+# Operator emails (STASH_OPERATOR_EMAILS) get is_operator=True regardless
+# of tenant membership.  /admin routes (lifecycle, metadata, vendor cost
+# panel — see spec § "Operator surface") gate on this flag; tenant-data
+# routes do NOT — operators access tenant data only via an explicit
+# maintainer invite from the user, by design.
+import dataclasses
+
+_OPERATOR_EMAILS = frozenset(
     e.strip().lower()
-    for e in os.environ.get("STASH_ALLOWED_EMAILS", "").split(",")
+    for e in os.environ.get("STASH_OPERATOR_EMAILS", "").split(",")
     if e.strip()
 )
-_FULLY_PUBLIC = os.environ.get("FULLY_PUBLIC", "").strip().lower() == "true"
 
-if not _ALLOWED_EMAILS and not _FULLY_PUBLIC:
-    raise RuntimeError(
-        "Refusing to start: STASH_ALLOWED_EMAILS is empty. Set it to a "
-        "comma-separated list of authorized emails, or set FULLY_PUBLIC=true "
-        "to explicitly opt into a no-allowlist deployment."
-    )
+
+@dataclasses.dataclass(frozen=True)
+class Actor:
+    """The resolved identity of the current request.
+
+    `tenant_id` and `role` reflect the *active* membership; a user who's
+    a member of multiple tenants picks via the switcher (roadmap
+    step 15), but for now we just take the first by joined_at.
+    `memberships` is the full list so the eventual switcher UI can
+    render without another DB hit.
+    """
+    email: str
+    tenant_id: int | None
+    role: str | None
+    is_operator: bool
+    memberships: tuple[tuple[int, str], ...]
 
 
 @app.middleware("http")
-async def enforce_email_allowlist(request: Request, call_next):
-    if _FULLY_PUBLIC:
-        return await call_next(request)
+async def current_actor(request: Request, call_next):
     email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
-    if not email or email not in _ALLOWED_EMAILS:
+    is_operator = bool(email) and email in _OPERATOR_EMAILS
+
+    memberships: tuple[tuple[int, str], ...] = ()
+    if email:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT tenant_id, role FROM tenant_members "
+                "WHERE email = ? "
+                # joined_at is nullable until invites are accepted; sort
+                # accepted members first (NULL last) without relying on
+                # the NULLS LAST clause that older SQLite builds may
+                # lack.
+                "ORDER BY joined_at IS NULL, joined_at, tenant_id",
+                (email,),
+            ).fetchall()
+        memberships = tuple((r["tenant_id"], r["role"]) for r in rows)
+
+    if not memberships and not is_operator:
         return Response(
-            "Forbidden — your email is not authorized for this stash.",
+            "Forbidden — your email is not a member of any tenant on this stash.",
             status_code=403,
             media_type="text/plain",
         )
+
+    active_tenant_id, active_role = memberships[0] if memberships else (None, None)
+    request.state.actor = Actor(
+        email=email,
+        tenant_id=active_tenant_id,
+        role=active_role,
+        is_operator=is_operator,
+        memberships=memberships,
+    )
     return await call_next(request)
 
 
@@ -129,12 +224,121 @@ def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Multi-writer concurrency tuning. With multi-tenant ingest fanning
+    # out to pending_items + tags + thumbs writes in quick succession,
+    # the default rollback journal hits "database is locked" under load.
+    # WAL lets readers proceed during writes, busy_timeout absorbs short
+    # contention without raising, and synchronous=NORMAL pairs cleanly
+    # with WAL for the throughput bump (durability still anchored by the
+    # WAL checkpoint). See spec § "SQLite concurrency".
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def init_db():
     with db() as conn:
         conn.executescript("""
+        -- ── Multi-tenancy core ────────────────────────────────────────
+        -- See spec.md § "Architecture · Schema additions".  Every owned
+        -- table joins back to a tenant; members are (tenant_id, email)
+        -- pairs with a role; invites + object_shares are the two
+        -- sharing mechanisms.  audit_log captures user-visible events
+        -- (tenant_id NULL for operator cross-tenant actions).
+        CREATE TABLE IF NOT EXISTS tenants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            -- Lifecycle: soft-delete first, hard-delete by cron after grace.
+            deleted_at TEXT,
+            hard_delete_after TEXT,
+            archived_backup_key TEXT,
+            archived_backup_until TEXT,
+            -- Wrapped DEK (envelope encryption); populated in roadmap step 2.
+            wrapped_dek BLOB,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS tenant_members (
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            -- NULL locale = use Accept-Language / deployment default.
+            locale TEXT,
+            invited_by_email TEXT,
+            invited_at TEXT,
+            joined_at TEXT,
+            PRIMARY KEY (tenant_id, email)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_members_email ON tenant_members(email);
+
+        CREATE TABLE IF NOT EXISTS tenant_invites (
+            token TEXT PRIMARY KEY,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            consumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
+
+        CREATE TABLE IF NOT EXISTS object_shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            -- 'box' | 'item'.  Discriminator over the join target.
+            target_kind TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            recipient_email TEXT NOT NULL COLLATE NOCASE,
+            role TEXT NOT NULL,
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_object_shares_target ON object_shares(target_kind, target_id);
+        CREATE INDEX IF NOT EXISTS idx_object_shares_recipient ON object_shares(recipient_email);
+
+        CREATE TABLE IF NOT EXISTS usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            -- 'ai' | 'upload' | 'backup' | 'core'.
+            surface TEXT NOT NULL,
+            -- 'gemini_detect', 'gemini_art', 'anthropic_match',
+            -- 'upload_bytes', 'backup_bytes', etc.
+            kind TEXT NOT NULL,
+            units INTEGER NOT NULL,
+            cost_micros INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_events_tenant_surface
+            ON usage_events(tenant_id, surface, created_at);
+
+        CREATE TABLE IF NOT EXISTS quotas (
+            tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+            monthly_ai_calls INTEGER,
+            monthly_upload_bytes INTEGER,
+            backup_storage_bytes INTEGER,
+            -- JSON blob for plan-specific overrides; NULL = inherit plan defaults.
+            overrides_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- NULL on operator cross-tenant actions that don't belong to a
+            -- single tenant (e.g. global DR import).
+            tenant_id INTEGER,
+            actor_email TEXT,
+            action TEXT NOT NULL,
+            target_kind TEXT,
+            target_id INTEGER,
+            metadata_json TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at);
+
+        -- ── App data tables (existing) ────────────────────────────────
         CREATE TABLE IF NOT EXISTS locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -267,7 +471,124 @@ def migrate_db():
         )
         _migrate_legacy_locations(conn)
         _migrate_locations_to_floors(conn)
+
+        # Multi-tenancy: every owned table gets a tenant_id pointing at
+        # tenants(id).  Nullable in the column DDL because SQLite doesn't
+        # support adding NOT NULL via ALTER without a DEFAULT we can't
+        # safely supply pre-backfill — the DAO enforces non-null on writes
+        # once it lands.  See spec.md § "Schema migrations to existing
+        # tables".
+        for tbl in (
+            "locations", "floors", "rooms", "boxes", "items",
+            "tags", "item_tags", "pending_item_tags",
+            "pending_items", "ingest_jobs",
+        ):
+            _add_column_if_missing(
+                conn, tbl, "tenant_id",
+                "INTEGER REFERENCES tenants(id) ON DELETE CASCADE",
+            )
+        # Hot-path indexes — every later query that filters by tenant_id
+        # rides on these.
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_boxes_tenant ON boxes(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_items_tenant_box ON items(tenant_id, box_id)",
+            "CREATE INDEX IF NOT EXISTS idx_locations_tenant ON locations(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_floors_tenant ON floors(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rooms_tenant ON rooms(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pending_items_tenant ON pending_items(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ingest_jobs_tenant ON ingest_jobs(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_tags_tenant ON tags(tenant_id)",
+        ):
+            conn.execute(idx_sql)
+
+        # Versioning column for the optimistic-concurrency story
+        # (roadmap step 4).  Defaults to 1 so existing rows behave as
+        # "version 1" on the first edit after the migration lands.
+        for tbl in ("boxes", "items", "rooms", "floors", "locations"):
+            _add_column_if_missing(conn, tbl, "version", "INTEGER NOT NULL DEFAULT 1")
+            _add_column_if_missing(conn, tbl, "updated_at", "TEXT")
+
+        _migrate_to_multi_tenant(conn)
         conn.commit()
+
+
+def _first_email_from_env(var: str) -> str:
+    """Pluck the first non-empty email out of a comma-separated env var.
+    Falls back to '' if none."""
+    for part in os.environ.get(var, "").split(","):
+        e = part.strip().lower()
+        if e:
+            return e
+    return ""
+
+
+def _migrate_to_multi_tenant(conn) -> None:
+    """One-time: existing data gets folded into a Personal tenant.
+
+    Runs whenever migrate_db sees rows in the app tables and no tenants
+    yet exist.  The bootstrap email comes from STASH_BOOTSTRAP_MEMBER_EMAIL
+    (preferred), falling back to the first entry in STASH_ALLOWED_EMAILS
+    so existing single-user deploys upgrade without extra config.
+
+    Idempotent: any subsequent run is a no-op once tenants exist.
+    Backfill of NULL tenant_id rows happens unconditionally because a
+    legacy route inserting after the migration could leave fresh NULLs."""
+    if conn.execute("SELECT 1 FROM tenants LIMIT 1").fetchone():
+        # Sweep any NULLs that snuck in from legacy routes — once the
+        # DAO migration (roadmap step 3-4) is complete this becomes a
+        # no-op.
+        for tbl in (
+            "locations", "floors", "rooms", "boxes", "items",
+            "tags", "item_tags", "pending_item_tags",
+            "pending_items", "ingest_jobs",
+        ):
+            conn.execute(
+                f"UPDATE {tbl} SET tenant_id = (SELECT id FROM tenants ORDER BY id LIMIT 1) "
+                f"WHERE tenant_id IS NULL"
+            )
+        return
+
+    has_data = any(
+        conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone()
+        for t in ("boxes", "items", "locations", "ingest_jobs", "pending_items")
+    )
+    if not has_data:
+        # Fresh DB — first user creates a tenant via the sign-up flow
+        # (roadmap step 5).  Nothing to migrate yet.
+        return
+
+    bootstrap_email = (
+        os.environ.get("STASH_BOOTSTRAP_MEMBER_EMAIL", "").strip().lower()
+        or _first_email_from_env("STASH_ALLOWED_EMAILS")
+    )
+
+    cur = conn.execute(
+        "INSERT INTO tenants (name, plan) VALUES ('Personal', 'pro')"
+    )
+    tenant_id = cur.lastrowid
+
+    if bootstrap_email:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (tenant_id, bootstrap_email),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, metadata_json) "
+            "VALUES (?, ?, 'tenant.bootstrap', ?)",
+            (tenant_id, bootstrap_email, '{"source": "migrate_to_multi_tenant"}'),
+        )
+
+    for tbl in (
+        "locations", "floors", "rooms", "boxes", "items",
+        "tags", "item_tags", "pending_item_tags",
+        "pending_items", "ingest_jobs",
+    ):
+        conn.execute(
+            f"UPDATE {tbl} SET tenant_id = ? WHERE tenant_id IS NULL",
+            (tenant_id,),
+        )
 
 
 def _migrate_locations_to_floors(conn) -> None:
@@ -2472,17 +2793,26 @@ def _referenced_uploads() -> set[str]:
 
 @app.get("/maintenance", response_class=HTMLResponse)
 def maintenance(request: Request, cleaned: str = "", update: str = "", imported: str = ""):
+    actor: Actor = request.state.actor
     with db() as conn:
         item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
         box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
+        tenant_name = None
+        members = []
+        if actor.tenant_id is not None:
+            row = conn.execute(
+                "SELECT name FROM tenants WHERE id = ?", (actor.tenant_id,),
+            ).fetchone()
+            tenant_name = row["name"] if row else None
+            members = [
+                dict(r) for r in conn.execute(
+                    "SELECT email, role FROM tenant_members "
+                    "WHERE tenant_id = ? ORDER BY joined_at, email",
+                    (actor.tenant_id,),
+                ).fetchall()
+            ]
     on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
     referenced = len(_referenced_uploads())
-    # Access-control panel: surface what oauth2-proxy hands us so the operator
-    # can see who's currently signed in, and reflect the configured allowlist
-    # so they don't have to SSH in to remember who has access. No state is
-    # stored on stash's side — sessions are owned by the proxy.
-    current_email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
-    current_user = (request.headers.get("X-Forwarded-User") or "").strip()
     return templates.TemplateResponse(
         request, "maintenance.html",
         {
@@ -2496,10 +2826,16 @@ def maintenance(request: Request, cleaned: str = "", update: str = "", imported:
             "update_enabled": bool(WATCHTOWER_URL),
             "update_status": update,
             "changelog_html": CHANGELOG_HTML,
-            "allowed_emails": sorted(_ALLOWED_EMAILS),
-            "fully_public": _FULLY_PUBLIC,
-            "current_email": current_email,
-            "current_user": current_user,
+            # Access panel data: the active tenant + its members, replacing
+            # the old global STASH_ALLOWED_EMAILS view.  This whole card
+            # moves to /usage in roadmap step 13; until then we keep it on
+            # /maintenance with tenant-scoped data so the live user has
+            # parity with the old behaviour.
+            "tenant_name": tenant_name,
+            "tenant_members": members,
+            "current_email": actor.email,
+            "current_role": actor.role,
+            "is_operator": actor.is_operator,
         },
     )
 
@@ -2544,6 +2880,14 @@ def maintenance_export():
     import io as _io
     import zipfile
     from datetime import datetime
+
+    # Drain the WAL into main.db so the zip captures every committed
+    # write. In WAL mode, recent UPDATEs can sit in the -wal sidecar
+    # file until checkpointed; zipping just stash.db without this would
+    # ship a snapshot that's missing the latest changes (and the next
+    # restore would silently roll the user back).
+    with db() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     refs = _referenced_uploads()
     buf = _io.BytesIO()
@@ -2609,7 +2953,15 @@ def _replace_db_from_path(src_db: Path) -> None:
     Uses SQLite's online backup API rather than `os.replace` — on Windows the
     live DB file is held open by any active connection, which makes a rename
     fail with `PermissionError`. `Connection.backup()` swaps page contents
-    through the SQLite library and is safe even with concurrent readers."""
+    through the SQLite library and is safe even with concurrent readers.
+
+    With WAL mode enabled on the live DB, pages written by the wipe-step
+    transactions (DELETE FROMs etc.) live in the WAL until checkpointed.
+    `backup()` overwrites the main DB file's contents from the source but
+    doesn't sync the WAL — so subsequent reads can see stale WAL pages
+    layered over the freshly-restored main pages. A FULL checkpoint +
+    TRUNCATE before close forces the WAL to drain into main and resets
+    its size to zero, so the next connection opens a coherent file."""
     with open(src_db, "rb") as f:
         header = f.read(len(_SQLITE_MAGIC))
     if not header.startswith(_SQLITE_MAGIC):
@@ -2620,6 +2972,7 @@ def _replace_db_from_path(src_db: Path) -> None:
     dst = sqlite3.connect(DB_PATH)
     try:
         src.backup(dst)
+        dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         src.close()
         dst.close()
