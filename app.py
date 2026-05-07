@@ -1091,15 +1091,45 @@ def delete_item(item_id: int):
 _EXT_TO_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 
+def _bytes_for_vision(photo_name: str) -> bytes:
+    """Re-encode the saved photo into a JPEG with no EXIF segment before
+    sending it to the vision model.
+
+    save_photo_bytes already runs ImageOps.exif_transpose, but Gemini's
+    behaviour with EXIF is undocumented — when a phone photo carries an
+    orientation tag, the browser auto-rotates while Gemini decoded the raw
+    landscape pixels and returned bboxes in that un-rotated coordinate
+    space, so the overlay rendered 90° off from what the user sees.
+    Stripping the EXIF segment entirely (info.pop + a fresh save without
+    the `exif=` kwarg) means there's nothing left for the decoder to
+    interpret either way: pixel orientation is the only source of truth.
+
+    Falls back to raw bytes if PIL can't decode the file (test fixtures
+    sometimes use synthetic JPEG headers PIL refuses)."""
+    src = UPLOAD_DIR / photo_name
+    try:
+        from PIL import Image, ImageOps
+        import io as _io
+        with Image.open(src) as opened:
+            rotated = ImageOps.exif_transpose(opened)
+        if rotated.mode not in ("RGB", "L"):
+            rotated = rotated.convert("RGB")
+        rotated.info.pop("exif", None)
+        buf = _io.BytesIO()
+        rotated.save(buf, format="JPEG", quality=JPEG_QUALITY)
+        return buf.getvalue()
+    except Exception:
+        return src.read_bytes()
+
+
 def process_ingest_job(job_id: int, photo_name: str) -> None:
     """Background worker: vision pass → insert pending items → mark job done."""
     with db() as conn:
         conn.execute("UPDATE ingest_jobs SET status = 'processing' WHERE id = ?", (job_id,))
         conn.commit()
     try:
-        image_bytes = (UPLOAD_DIR / photo_name).read_bytes()
-        media_type = _EXT_TO_MIME.get(Path(photo_name).suffix.lower(), "image/jpeg")
-        detected = vision.detect_items(image_bytes, media_type=media_type)
+        image_bytes = _bytes_for_vision(photo_name)
+        detected = vision.detect_items(image_bytes, media_type="image/jpeg")
         with db() as conn:
             for item in detected:
                 bbox = item.bbox or [None, None, None, None]
