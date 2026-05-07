@@ -323,10 +323,16 @@
   function renderGroup(g) {
     const div = document.createElement('div');
     div.className = 'card search-group';
-    const where = [g.location_name, g.room_name].filter(Boolean).join(' · ');
-    const colorStyle = g.room_color ? `style="--room-color: ${g.room_color};"` : '';
+    // Same fall-through the server template uses: box's own colour wins,
+    // then the room's, then the global default. Keeps the SSR + AJAX paths
+    // visually identical so the stripe doesn't flicker on a re-render.
+    const tileColor = g.box_color || g.room_color || '#4ade80';
+    const roomColor = g.room_color || '#4ade80';
+    div.style.setProperty('--tile-color', tileColor);
+    div.style.setProperty('--room-color', roomColor);
+    const chipStyle = g.room_color ? `style="--room-color: ${g.room_color};"` : '';
     const chip = g.room_name
-      ? `<span class="room-chip" ${colorStyle}>${escapeHtml(g.room_name)}</span>`
+      ? `<span class="room-chip" ${chipStyle}>${escapeHtml(g.room_name)}</span>`
       : '';
     div.innerHTML = `
       <div class="search-group-header">

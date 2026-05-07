@@ -35,7 +35,8 @@
   {% for b in boxes %}
   <li>
     <a href="/boxes/{{ b.id }}" class="box-card"
-       style="--room-color: {{ b.room_color or '#4ade80' }};">
+       style="--tile-color: {{ b.color or b.room_color or '#4ade80' }};
+              --room-color: {{ b.room_color or '#4ade80' }};">
       <div class="box-card-body">
         <div class="box-card-head">
           <div class="box-name">{{ b.name }}</div>

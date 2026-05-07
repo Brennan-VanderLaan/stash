@@ -1524,7 +1524,7 @@ def search(
 
         rows = conn.execute(
             f"SELECT i.id, i.name, i.notes, i.photo, i.is_missing, "
-            f"       b.id AS box_id, b.name AS box_name, "
+            f"       b.id AS box_id, b.name AS box_name, b.color AS box_color, "
             f"       r.id AS room_id, r.name AS room_name, r.color AS room_color, "
             f"       l.id AS location_id, l.name AS location_name "
             f"{common_join}WHERE {where} "
@@ -1557,6 +1557,7 @@ def search(
             groups.append({
                 "box_id": r["box_id"],
                 "box_name": r["box_name"],
+                "box_color": r["box_color"],
                 "room_name": r["room_name"],
                 "room_color": r["room_color"],
                 "location_name": r["location_name"],

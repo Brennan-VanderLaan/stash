@@ -1,7 +1,9 @@
 {# One result group — boxed items grouped under their box header. The
    client-side renderer in search.html mirrors this markup so SSR + AJAX
    updates produce visually identical output. #}
-<div class="card search-group">
+<div class="card search-group"
+     style="--tile-color: {{ g.box_color or g.room_color or '#4ade80' }};
+            --room-color: {{ g.room_color or '#4ade80' }};">
   <div class="search-group-header">
     <a href="/boxes/{{ g.box_id }}" class="search-group-box">{{ g.box_name }}</a>
     <span class="search-group-where">
