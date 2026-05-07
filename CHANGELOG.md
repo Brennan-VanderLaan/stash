@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.14.0...v0.15.0) (2026-05-07)
+
+
+### Features
+
+* tile photo mosaic at deep zoom + global modal centering ([7e62ca9](https://github.com/Brennan-VanderLaan/stash/commit/7e62ca94abdd67d6a9392d8742c5e5bfe09689cb))
+
 ## [0.14.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.13.0...v0.14.0) (2026-05-06)
 
 
