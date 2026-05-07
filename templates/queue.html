@@ -135,6 +135,9 @@ function toggleCrop(id) {
     viewMode: 1, dragMode: 'crop', autoCropArea: 0.8,
     responsive: true, guides: true, highlight: true,
     cropBoxMovable: true, cropBoxResizable: true,
+    // See recrop.html — browsers + save_photo_bytes both handle EXIF
+    // already, so cropper.js's own check would double-rotate.
+    checkOrientation: false,
   };
   if (hasBbox) {
     opts.autoCrop = true;

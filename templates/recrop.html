@@ -58,6 +58,12 @@ function toggleCrop() {
     viewMode:1, dragMode:'crop', autoCropArea:0.8,
     responsive:true, guides:true, highlight:true,
     cropBoxMovable:true, cropBoxResizable:true,
+    // Modern browsers already honour EXIF orientation natively, and
+    // save_photo_bytes bakes the rotation into the saved pixels — so
+    // cropper.js's own checkOrientation is at best redundant and at worst
+    // applies a second rotation, leaving the saved crop offset from what
+    // the user dragged.
+    checkOrientation:false,
   });
   document.getElementById('crop-toggle').textContent = 'Done';
   document.getElementById('crop-reset').style.display = '';
