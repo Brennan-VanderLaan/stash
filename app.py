@@ -1941,9 +1941,28 @@ def location_detail(
                 "ORDER BY b.name",
                 (current_floor["id"],),
             ).fetchall()
+            # Photos for the high-LOD tile mosaic — pull up to 9 per box so
+            # zoom-tier 3 can fill the tile with a 3x3 grid (or whatever
+            # fits). One JOIN, bucketed in Python below.
+            photo_rows = conn.execute(
+                "SELECT i.box_id, i.photo "
+                "FROM items i "
+                "JOIN boxes b ON b.id = i.box_id "
+                "JOIN rooms r ON r.id = b.room_id "
+                "WHERE r.floor_id = ? AND i.photo IS NOT NULL "
+                "ORDER BY i.box_id, i.created_at DESC",
+                (current_floor["id"],),
+            ).fetchall()
+            photos_by_box: dict[int, list] = {}
+            for p in photo_rows:
+                lst = photos_by_box.setdefault(p["box_id"], [])
+                if len(lst) < 9:
+                    lst.append(p["photo"])
             boxes_by_room: dict[int, list] = {}
             for b in box_rows:
-                boxes_by_room.setdefault(b["room_id"], []).append(dict(b))
+                d = dict(b)
+                d["photos"] = photos_by_box.get(b["id"], [])
+                boxes_by_room.setdefault(b["room_id"], []).append(d)
             for r in rooms:
                 r["boxes"] = boxes_by_room.get(r["id"], [])
 

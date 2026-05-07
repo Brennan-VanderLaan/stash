@@ -536,6 +536,36 @@ def test_floorplan_tiles_emit_audit_and_created_dates(client):
     assert re.search(r'class="room-box-tile-meta">\s*\+ \d{4}-\d{2}-\d{2}', page)
 
 
+def test_floorplan_tiles_emit_photo_mosaic_at_high_zoom(client):
+    """At zoom-tier 3 each tile fills with item thumbnails. The HTML
+    carries them at all zoom levels — CSS hides them at lower tiers."""
+    import io
+    from PIL import Image
+    loc_id, floor_id = _setup_location_with_floor(client)
+    client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
+    client.post("/boxes", data={"name": "Tools", "room_id": "1"})
+    # Add three items with photos
+    for i in range(3):
+        buf = io.BytesIO()
+        Image.new("RGB", (50, 50), color=(40, 80 + i*20, 30)).save(buf, format="JPEG")
+        client.post(
+            "/boxes/1/items",
+            data={"name": f"item {i}"},
+            files={"photo": (f"p{i}.jpg", io.BytesIO(buf.getvalue()), "image/jpeg")},
+        )
+
+    page = client.get(f"/locations/{loc_id}").text
+    assert 'class="room-box-tile-mosaic"' in page
+    assert 'data-photo-count="3"' in page
+    # Three thumbnail src refs in the mosaic
+    import re
+    mosaic = re.search(
+        r'<span class="room-box-tile-mosaic"[^>]*>(.*?)</span>', page, re.S
+    )
+    assert mosaic
+    assert mosaic.group(1).count('src="/thumbs/') == 3
+
+
 def test_floorplan_view_mode_renders_box_tiles_inside_rooms(client):
     """View-mode floorplan now shows each room's boxes as tappable tiles
     inside the room rectangle. Edit mode hides them so the user can drag

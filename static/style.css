@@ -26,6 +26,17 @@ a { color: var(--accent); }
 a:visited { color: var(--accent); }
 a:hover { color: var(--accent-hover); }
 
+/* All <dialog> elements opened via showModal() — explicitly center.
+   Browser defaults vary (Safari and some Chromium configs render them
+   anchored to the top-left when there are fixed-position ancestors or
+   custom max-height rules), so set position + inset + margin:auto for
+   reliable centering across the app. */
+dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
@@ -1663,6 +1674,44 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   /* Tier 3 is "I really want to see everything" — bigger type */
   font-size: 0.78rem;
   padding: 0.4rem 0.55rem;
+}
+
+/* Photo mosaic inside a tile — only revealed at the deepest zoom tier
+   so the user can see what's actually in the box. The grid auto-fits
+   so different photo counts (1, 4, 9) all look intentional. */
+.room-box-tile-mosaic {
+  display: none;
+  margin-top: 0.3rem;
+  gap: 2px;
+  border-radius: 3px;
+  overflow: hidden;
+  /* Inset shadow gives the mosaic a "tile inside a tile" feel. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.room-box-tile-mosaic img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  background: rgba(0, 0, 0, 0.15);
+}
+[data-zoom-tier="3"] .room-box-tile-mosaic {
+  display: grid;
+}
+/* Layout depends on how many photos we got. The data-photo-count
+   attribute tells us so the grid template can adapt. */
+.room-box-tile-mosaic[data-photo-count="1"] { grid-template-columns: 1fr; }
+.room-box-tile-mosaic[data-photo-count="2"],
+.room-box-tile-mosaic[data-photo-count="3"],
+.room-box-tile-mosaic[data-photo-count="4"] {
+  grid-template-columns: repeat(2, 1fr);
+}
+.room-box-tile-mosaic[data-photo-count="5"],
+.room-box-tile-mosaic[data-photo-count="6"],
+.room-box-tile-mosaic[data-photo-count="7"],
+.room-box-tile-mosaic[data-photo-count="8"],
+.room-box-tile-mosaic[data-photo-count="9"] {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 /* Pan cursor — view-mode stage is grabbable when not over a tile. */

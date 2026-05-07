@@ -125,6 +125,16 @@
                 </span>
                 {% endif %}
               </span>
+              {# Photo mosaic — only rendered when there are photos.
+                 CSS reveals at zoom tier 3 so the user can "see inside"
+                 the box at a glance once they're zoomed close enough. #}
+              {% if b.photos %}
+              <span class="room-box-tile-mosaic" data-photo-count="{{ b.photos | length }}">
+                {% for ph in b.photos %}
+                <img src="/thumbs/{{ ph }}" alt="" loading="lazy">
+                {% endfor %}
+              </span>
+              {% endif %}
             </button>
             {% endfor %}
           </div>
