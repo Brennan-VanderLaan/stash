@@ -2007,7 +2007,12 @@ def location_detail(
                 d["mosaic_cols"] = max(1, _math.ceil(_math.sqrt(len(mosaic)))) if mosaic else 1
                 boxes_by_room.setdefault(b["room_id"], []).append(d)
             for r in rooms:
-                r["boxes"] = boxes_by_room.get(r["id"], [])
+                rb = boxes_by_room.get(r["id"], [])
+                r["boxes"] = rb
+                # Same square-pack idea as the mosaic: pick a column count
+                # that lets N boxes fill the room cleanly. 1 box → 1 col
+                # → fills the room; 4 boxes → 2x2; 12 boxes → 4x3-ish.
+                r["box_cols"] = max(1, _math.ceil(_math.sqrt(len(rb)))) if rb else 1
 
         # Rooms with no floor (e.g. from the legacy text-location migration)
         # surface separately so the user can clean them up.

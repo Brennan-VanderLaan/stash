@@ -101,7 +101,7 @@
           <span class="room-rect-label">{{ r.name }}</span>
           <span class="room-rect-count" data-box-count>{{ r.box_count }}</span>
           {% if not edit_mode and r['boxes'] %}
-          <div class="room-rect-boxes">
+          <div class="room-rect-boxes" style="--box-cols: {{ r.box_cols }};">
             {% for b in r['boxes'] %}
             <button type="button" class="room-box-tile" data-box-id="{{ b.id }}"
                     style="--tile-color: {{ b.color or r.color or '#4ade80' }};"
@@ -442,14 +442,24 @@
     const DRAG_BEGIN_PX = 6;
 
     // ── Item DnD (mosaic image → another box) ────────────────────────
-    // Registered with capture:true so it fires BEFORE the box-DnD
-    // handler below. When the gesture starts on a mosaic image we want
-    // to drag the ITEM, not its container box. stopImmediatePropagation
-    // keeps the box-DnD handler from also picking up the gesture.
-    overlay.addEventListener('pointerdown', (e) => {
-      const img = e.target.closest('.room-box-tile-mosaic-img');
-      if (!img || e.button !== 0) return;
-      e.stopImmediatePropagation();
+    // Direct binding on each mosaic image (instead of capture-phase
+    // delegation through the overlay) so the event flow is unambiguous.
+    // pointerdown on the img stops further propagation so neither the
+    // box-DnD handler below nor the pan handler on stage starts a
+    // gesture. Everything else (modal, navigation) still fires for
+    // clicks elsewhere on the tile.
+    function wireMosaicImg(img) {
+      img.addEventListener('pointerdown', onItemPointerDown);
+      img.addEventListener('pointermove', onItemPointerMove);
+      img.addEventListener('pointerup', endItemDrag);
+      img.addEventListener('pointercancel', endItemDrag);
+    }
+    overlay.querySelectorAll('.room-box-tile-mosaic-img').forEach(wireMosaicImg);
+
+    function onItemPointerDown(e) {
+      if (e.button !== 0) return;
+      const img = e.currentTarget;
+      e.stopPropagation();  // don't let box-DnD or pan see this
       const sourceTile = img.closest('.room-box-tile');
       itemDrag = {
         img,
@@ -463,7 +473,7 @@
         currentTarget: null,
       };
       img.setPointerCapture(e.pointerId);
-    }, true);
+    }
 
     function findItemDropTile(x, y) {
       let ghostShown = null;
@@ -477,14 +487,13 @@
       return el.closest('.room-box-tile');
     }
 
-    overlay.addEventListener('pointermove', (e) => {
+    function onItemPointerMove(e) {
       if (!itemDrag) return;
       const dx = e.clientX - itemDrag.startX;
       const dy = e.clientY - itemDrag.startY;
       if (!itemDrag.moved && Math.hypot(dx, dy) > DRAG_BEGIN_PX) {
         itemDrag.moved = true;
         itemDrag.img.classList.add('drag-source');
-        // Build a bigger ghost — square, fixed size, easier to target.
         const ghost = document.createElement('img');
         ghost.src = itemDrag.img.src;
         ghost.alt = itemDrag.itemName;
@@ -505,7 +514,7 @@
           itemDrag.currentTarget = target;
         }
       }
-    }, true);
+    }
 
     async function endItemDrag(e) {
       if (!itemDrag) return;
@@ -513,9 +522,8 @@
       itemDrag = null;
       try { finished.img.releasePointerCapture(e.pointerId); } catch (_) {}
 
-      if (!finished.moved) return;  // it was a click, not a drag
+      if (!finished.moved) return;
 
-      // Suppress the synthetic post-pointerup click on the source img.
       recentlyDragged = true;
       setTimeout(() => { recentlyDragged = false; }, 50);
 
@@ -534,8 +542,6 @@
           body: new URLSearchParams({ box_id: target.dataset.boxId }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        // Optimistic DOM update — move the img into the target tile's
-        // mosaic. If the target had no mosaic yet, build one.
         let targetMosaic = target.querySelector('.room-box-tile-mosaic');
         if (!targetMosaic) {
           targetMosaic = document.createElement('span');
@@ -544,8 +550,9 @@
           target.appendChild(targetMosaic);
         }
         targetMosaic.appendChild(finished.img);
-        // Reflow mosaic-cols on both source + target for a roughly-square
-        // grid that matches what the server would have rendered.
+        // The dropped image is brand-new in this DOM — give it the same
+        // pointer handlers so it can be dragged again from its new home.
+        wireMosaicImg(finished.img);
         retileMosaic(targetMosaic);
         const sourceTile = overlay.querySelector(
           `.room-box-tile[data-box-id="${finished.sourceBoxId}"]`);
@@ -563,12 +570,8 @@
       const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
       mosaic.style.setProperty('--mosaic-cols', cols);
       mosaic.dataset.photoCount = n;
-      // Empty mosaic? Remove it so the tile doesn't render an empty span.
       if (n === 0) mosaic.remove();
     }
-
-    overlay.addEventListener('pointerup', endItemDrag, true);
-    overlay.addEventListener('pointercancel', endItemDrag, true);
 
     function findDropRoom(x, y) {
       // Hide the ghost so elementFromPoint sees the actual room rect.
@@ -695,9 +698,19 @@
       const rect = overlay.querySelector(`.room-rect[data-room-id="${roomId}"]`);
       if (!rect) return;
       const chip = rect.querySelector('[data-box-count]');
-      if (!chip) return;
-      const n = Number(chip.textContent.trim()) || 0;
-      chip.textContent = Math.max(0, n + delta);
+      if (chip) {
+        const n = Number(chip.textContent.trim()) || 0;
+        chip.textContent = Math.max(0, n + delta);
+      }
+      retileRoom(rect);
+    }
+
+    function retileRoom(rect) {
+      const grid = rect.querySelector('.room-rect-boxes');
+      if (!grid) return;
+      const n = grid.querySelectorAll(':scope > .room-box-tile').length;
+      const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+      grid.style.setProperty('--box-cols', cols);
     }
 
     // Click → modal preview. Skipped when a drag just finished — the
