@@ -18,3 +18,7 @@ pypdf
 # visible string gets wrapped now so future translations are a
 # translation task, not an engineering one.  See spec § "Localization".
 Babel
+# AES-256-GCM for at-rest encryption of photos + thumbs.  Per-tenant DEK
+# wrapped by a STASH_KEK env var; see spec § "Encryption at rest" and
+# vault.py for the key-handling story.
+cryptography
