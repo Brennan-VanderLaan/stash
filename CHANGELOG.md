@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.16.0...v0.17.0) (2026-05-07)
+
+
+### Features
+
+* bigger floorplan tiles, item DnD between boxes, hover preview, drop-flash fix ([6fce701](https://github.com/Brennan-VanderLaan/stash/commit/6fce7017c220ff75f576425b8df62585a0b1fb92))
+
 ## [0.16.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.15.0...v0.16.0) (2026-05-07)
 
 
