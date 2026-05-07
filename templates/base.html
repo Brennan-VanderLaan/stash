@@ -15,14 +15,14 @@
     <h1>{% include "_brand.html" %}</h1>
     {% endblock %}
     <nav class="header-nav">
-      <a href="/">Boxes</a>
-      <a href="/locations">Where</a>
-      <a href="/ingest">Ingest</a>
-      <a href="/queue">Sort</a>
-      <a href="/search">Search</a>
-      <a href="/labels">Labels</a>
-      <a href="/tags">Tags</a>
-      <a href="/maintenance">Maintenance</a>
+      <a href="/">{{ _("Boxes") }}</a>
+      <a href="/locations">{{ _("Where") }}</a>
+      <a href="/ingest">{{ _("Ingest") }}</a>
+      <a href="/queue">{{ _("Sort") }}</a>
+      <a href="/search">{{ _("Search") }}</a>
+      <a href="/labels">{{ _("Labels") }}</a>
+      <a href="/tags">{{ _("Tags") }}</a>
+      <a href="/maintenance">{{ _("Maintenance") }}</a>
     </nav>
     {% block header_actions %}{% endblock %}
   </header>
@@ -30,11 +30,11 @@
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
   <nav class="tab-bar">
-    <a href="/"><span class="tab-icon">📦</span>Boxes</a>
-    <a href="/locations"><span class="tab-icon">🗺️</span>Where</a>
-    <a href="/ingest"><span class="tab-icon">📷</span>Ingest</a>
-    <a href="/queue"><span class="tab-icon">📋</span>Sort</a>
-    <a href="/search"><span class="tab-icon">🔍</span>Search</a>
+    <a href="/"><span class="tab-icon">📦</span>{{ _("Boxes") }}</a>
+    <a href="/locations"><span class="tab-icon">🗺️</span>{{ _("Where") }}</a>
+    <a href="/ingest"><span class="tab-icon">📷</span>{{ _("Ingest") }}</a>
+    <a href="/queue"><span class="tab-icon">📋</span>{{ _("Sort") }}</a>
+    <a href="/search"><span class="tab-icon">🔍</span>{{ _("Search") }}</a>
   </nav>
 </body>
 </html>

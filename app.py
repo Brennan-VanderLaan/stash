@@ -71,6 +71,66 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
+# ── Localization seams ───────────────────────────────────────────────
+# v1 ships English-only.  The seams land now (jinja2.ext.i18n + a
+# NullTranslations identity catalog + a babel-driven date filter) so
+# wrapping a string in `_()` or `{% trans %}` is a no-op today and
+# becomes a translation task tomorrow.  Adding a real locale is a PR
+# that drops a `.po` file under `locale/<lang>/LC_MESSAGES/messages.po`
+# plus a one-line registration here; nothing else in the codebase
+# changes.  See spec § "Localization".
+import gettext as _gettext
+from babel.dates import format_datetime as _babel_format_datetime
+from babel.dates import format_date as _babel_format_date
+
+# Active translations object.  NullTranslations passes source strings
+# through unchanged — perfect for an English-only deployment that's
+# wrapping strings for future-proofing.  When a `.po` file lands, swap
+# this for `gettext.translation(...)`.
+_translations = _gettext.NullTranslations()
+_DEFAULT_LOCALE = os.environ.get("STASH_DEFAULT_LOCALE", "en")
+
+templates.env.add_extension("jinja2.ext.i18n")
+templates.env.install_gettext_translations(_translations, newstyle=True)
+
+
+def _(message: str) -> str:
+    """Mark a string for translation. v1 is English-only so this is the
+    identity, but every user-visible string in Python code should still
+    flow through here so `pybabel extract` finds them later."""
+    return _translations.gettext(message)
+
+
+def _format_datetime(dt, fmt: str = "medium", locale: str | None = None) -> str:
+    """Locale-aware datetime formatter for templates. Accepts strings (ISO),
+    datetimes, or None (returns empty)."""
+    if dt is None or dt == "":
+        return ""
+    if isinstance(dt, str):
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(dt.replace(" ", "T"))
+        except ValueError:
+            return dt  # render as-is if we can't parse
+    return _babel_format_datetime(dt, format=fmt, locale=locale or _DEFAULT_LOCALE)
+
+
+def _format_date(dt, fmt: str = "medium", locale: str | None = None) -> str:
+    if dt is None or dt == "":
+        return ""
+    if isinstance(dt, str):
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(dt.replace(" ", "T"))
+        except ValueError:
+            return dt
+    return _babel_format_date(dt, format=fmt, locale=locale or _DEFAULT_LOCALE)
+
+
+templates.env.filters["datetime"] = _format_datetime
+templates.env.filters["date"] = _format_date
+
+
 # ── Actor middleware ─────────────────────────────────────────────────
 # Resolves X-Forwarded-Email (set by oauth2-proxy) into a `request.state.actor`
 # carrying the active tenant + role + operator flag.  Replaces the old

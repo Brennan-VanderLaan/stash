@@ -13,3 +13,8 @@ markdown
 # pypdf to merge per-sheet PDFs into one multi-page download.
 cairosvg
 pypdf
+# Localization seams — gettext-driven message catalog + Babel for date /
+# number / currency formatting.  v1 ships English-only but every user-
+# visible string gets wrapped now so future translations are a
+# translation task, not an engineering one.  See spec § "Localization".
+Babel
