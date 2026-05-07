@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.1...v0.17.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* native image drag was eating pointer events on mosaic items ([39a8f91](https://github.com/Brennan-VanderLaan/stash/commit/39a8f9127b9457d8bf7e7386586c85d49fac9077))
+
 ## [0.17.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.0...v0.17.1) (2026-05-07)
 
 
