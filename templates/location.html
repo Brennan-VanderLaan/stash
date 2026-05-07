@@ -140,6 +140,7 @@
                      title="{{ it.name }}"
                      data-item-id="{{ it.item_id }}"
                      data-item-name="{{ it.name }}"
+                     draggable="false"
                      loading="lazy">
                 {% endfor %}
               </span>
@@ -453,6 +454,10 @@
       img.addEventListener('pointermove', onItemPointerMove);
       img.addEventListener('pointerup', endItemDrag);
       img.addEventListener('pointercancel', endItemDrag);
+      // Belt-and-suspenders: even with draggable="false" + CSS -webkit-
+      // user-drag, some browsers still try to start a native image drag.
+      // Cancelling dragstart guarantees our pointer-event flow wins.
+      img.addEventListener('dragstart', (e) => e.preventDefault());
     }
     overlay.querySelectorAll('.room-box-tile-mosaic-img').forEach(wireMosaicImg);
 

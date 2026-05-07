@@ -1856,10 +1856,11 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   user-select: none;
 }
 .room-box-tile-mosaic-img:active { cursor: grabbing; }
-/* Hover preview — scale up the thumbnail and pop a label with the
-   item name. Only enabled at the high zoom tier where the mosaic is
-   actually visible. */
-[data-zoom-tier="3"] .room-box-tile-mosaic-img:hover {
+/* Hover preview — scale up the thumbnail and pop it above the others.
+   The mosaic itself is display:none below tier 3 so the rule only kicks
+   in when the user can actually see it; no zoom-tier gate needed
+   on the :hover selector itself. */
+.room-box-tile-mosaic-img:hover {
   transform: scale(2.2);
   z-index: 30;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6),
