@@ -413,7 +413,12 @@ def _open_image_oriented(path: Path):
 
 def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     """Crop a photo using bbox (y_min, x_min, y_max, x_max in 0-1000 coords).
-    Returns the filename of the cropped image saved to UPLOAD_DIR."""
+    Returns the filename of the cropped image saved to UPLOAD_DIR.
+
+    Normalizes to JPEG and pre-generates the companion thumbnail so a re-crop
+    is reflected immediately on the next page render — without the thumbnail
+    side, lazy /thumbs generation can fall back to serving the source under an
+    immutable cache header, leaving stale crops visible."""
     src = UPLOAD_DIR / photo_name
     img = _open_image_oriented(src)
     w, h = img.size
@@ -431,9 +436,11 @@ def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     if right - left < 10 or bottom - top < 10:
         return photo_name  # bbox too small, use original
     cropped = img.crop((left, top, right, bottom))
-    ext = Path(photo_name).suffix.lower() or ".jpg"
-    crop_name = f"{secrets.token_hex(8)}{ext}"
-    cropped.save(UPLOAD_DIR / crop_name)
+    if cropped.mode not in ("RGB", "L"):
+        cropped = cropped.convert("RGB")
+    crop_name = f"{secrets.token_hex(8)}.jpg"
+    cropped.save(UPLOAD_DIR / crop_name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    _save_thumb_from_image(cropped, crop_name)
     return crop_name
 
 
