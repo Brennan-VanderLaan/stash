@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.0...v0.17.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* tiles fill the room, mosaic fills the tile, items actually draggable ([4b51ab5](https://github.com/Brennan-VanderLaan/stash/commit/4b51ab5400ee8a693aff26a534f8e99bc55442c9))
+
 ## [0.17.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.16.0...v0.17.0) (2026-05-07)
 
 
