@@ -27,7 +27,7 @@
     {% block header_actions %}{% endblock %}
   </header>
 
-  <main>{% block content %}{% endblock %}</main>
+  <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
   <nav class="tab-bar">
     <a href="/"><span class="tab-icon">📦</span>Boxes</a>

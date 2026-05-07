@@ -761,7 +761,7 @@ def edit_box(
 
 
 @app.post("/items/{item_id}/move")
-def move_item(item_id: int, box_id: int = Form(...)):
+def move_item(request: Request, item_id: int, box_id: int = Form(...)):
     with db() as conn:
         if not conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone():
             raise HTTPException(404)
@@ -769,6 +769,8 @@ def move_item(item_id: int, box_id: int = Form(...)):
             raise HTTPException(400, "Unknown box")
         conn.execute("UPDATE items SET box_id = ? WHERE id = ?", (box_id, item_id))
         conn.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "item_id": item_id, "box_id": box_id}
     return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
 
 
@@ -914,7 +916,7 @@ def box_preview(request: Request, box_id: int):
             raise HTTPException(404)
         items = conn.execute(
             "SELECT id, name, photo FROM items "
-            "WHERE box_id = ? ORDER BY created_at DESC LIMIT 12",
+            "WHERE box_id = ? ORDER BY created_at DESC LIMIT 60",
             (box_id,),
         ).fetchall()
         item_count = conn.execute(
@@ -1981,10 +1983,13 @@ def location_detail(
                 "ORDER BY i.box_id, i.created_at DESC",
                 (current_floor["id"],),
             ).fetchall()
+            # Cap at 64 per box (8x8 grid worth) — enough headroom that even
+            # heavily-photographed boxes show every item, but bounded so a
+            # pathological 1000-item box doesn't bloat the page payload.
             photos_by_box: dict[int, list] = {}
             for p in photo_rows:
                 lst = photos_by_box.setdefault(p["box_id"], [])
-                if len(lst) < 9:
+                if len(lst) < 64:
                     lst.append(p["photo"])
             boxes_by_room: dict[int, list] = {}
             for b in box_rows:

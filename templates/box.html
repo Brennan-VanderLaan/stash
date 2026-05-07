@@ -119,7 +119,7 @@
     {% for entry in items_with_tags %}
     {% set it = entry.item %}
     <button type="button" class="item-tile" data-item-id="{{ it.id }}"
-            onclick="openItem({{ it.id }})" title="{{ it.name }}">
+            title="{{ it.name }}">
       <div class="item-tile-photo">
         {% if it.photo %}
         <img src="/thumbs/{{ it.photo }}" alt="" loading="lazy">
@@ -136,6 +136,25 @@
   {% endif %}
 </div>
 
+{# Drop drawer — slides up from the bottom while an item is being dragged.
+   Each chip is a target box. Drop on it to move the item. Hidden when no
+   drag is active. #}
+{% if other_boxes %}
+<div id="item-drop-drawer" class="item-drop-drawer" hidden>
+  <div class="item-drop-drawer-header">
+    <span class="item-drop-drawer-label">Drop on a box to move</span>
+  </div>
+  <div class="item-drop-drawer-targets">
+    {% for ob in other_boxes %}
+    <button type="button" class="item-drop-target" data-target-box-id="{{ ob.id }}">
+      <span class="item-drop-target-name">{{ ob.name }}</span>
+      {% if ob.location %}<span class="item-drop-target-loc">{{ ob.location }}</span>{% endif %}
+    </button>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 {# --- Item detail dialogs (one per item) --- #}
 {% for entry in items_with_tags %}
 {% set it = entry.item %}
@@ -149,6 +168,7 @@
 {% endfor %}
 
 <script>
+(function() {
   function openItem(id) {
     const d = document.getElementById('dialog-item-' + id);
     if (!d) return;
@@ -166,6 +186,124 @@
     const m = location.hash.match(/^#item-(\d+)$/);
     if (m) openItem(m[1]);
   });
+
+  // ── Drag item → other box ─────────────────────────────────────────
+  // Same drag-or-click pattern as the floorplan tiles. ≤6 px = click
+  // (opens the item modal). > 6 px = drag (slides in the drop drawer
+  // and follows the pointer with a ghost). Drop on a target box →
+  // /items/{id}/move.
+  const grid = document.querySelector('.item-grid');
+  const drawer = document.getElementById('item-drop-drawer');
+  const DRAG_BEGIN_PX = 6;
+  let drag = null;
+
+  if (grid) {
+    grid.addEventListener('pointerdown', (e) => {
+      const tile = e.target.closest('.item-tile');
+      if (!tile || e.button !== 0) return;
+      drag = {
+        tile,
+        itemId: tile.dataset.itemId,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+        ghost: null,
+      };
+      tile.setPointerCapture(e.pointerId);
+    });
+    grid.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (!drag.moved && Math.hypot(dx, dy) > DRAG_BEGIN_PX) {
+        drag.moved = true;
+        drag.tile.classList.add('drag-source');
+        // Ghost
+        const ghost = drag.tile.cloneNode(true);
+        ghost.classList.add('drag-ghost');
+        ghost.classList.remove('drag-source');
+        const tr = drag.tile.getBoundingClientRect();
+        ghost.style.width = tr.width + 'px';
+        ghost.style.height = tr.height + 'px';
+        document.body.appendChild(ghost);
+        drag.ghost = ghost;
+        if (drawer) drawer.hidden = false;
+      }
+      if (drag.moved) {
+        drag.ghost.style.left = (e.clientX + 8) + 'px';
+        drag.ghost.style.top = (e.clientY + 8) + 'px';
+        // Highlight whichever drop target is under the cursor.
+        const tgt = findDropTarget(e.clientX, e.clientY);
+        document.querySelectorAll('.item-drop-target').forEach(el => {
+          el.classList.toggle('drop-active', el === tgt);
+        });
+      }
+    });
+    grid.addEventListener('pointerup', endDrag);
+    grid.addEventListener('pointercancel', endDrag);
+  }
+
+  function findDropTarget(x, y) {
+    if (!drag || !drag.ghost) return null;
+    const ghostShown = drag.ghost.style.display;
+    drag.ghost.style.display = 'none';
+    const el = document.elementFromPoint(x, y);
+    drag.ghost.style.display = ghostShown;
+    return el ? el.closest('.item-drop-target') : null;
+  }
+
+  async function endDrag(e) {
+    if (!drag) return;
+    const finished = drag;
+    drag = null;
+    try { finished.tile.releasePointerCapture(e.pointerId); } catch (_) {}
+
+    if (!finished.moved) {
+      openItem(finished.itemId);
+      return;
+    }
+    // Cleanup visuals
+    finished.tile.classList.remove('drag-source');
+    if (finished.ghost) finished.ghost.remove();
+    document.querySelectorAll('.item-drop-target').forEach(el =>
+      el.classList.remove('drop-active'));
+    if (drawer) drawer.hidden = true;
+
+    const tgt = findDropTargetAt(e.clientX, e.clientY);
+    if (!tgt) return;
+    const targetBoxId = tgt.dataset.targetBoxId;
+    try {
+      const r = await fetch(`/items/${finished.itemId}/move`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({ box_id: targetBoxId }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Item is gone from this box — yank the tile + its dialog.
+      finished.tile.remove();
+      const dlg = document.getElementById('dialog-item-' + finished.itemId);
+      if (dlg) dlg.remove();
+      bumpContentsCount(-1);
+    } catch (err) {
+      alert(`Move failed: ${err.message || err}`);
+    }
+  }
+
+  function findDropTargetAt(x, y) {
+    // After the ghost is removed, query directly.
+    const el = document.elementFromPoint(x, y);
+    return el ? el.closest('.item-drop-target') : null;
+  }
+
+  function bumpContentsCount(delta) {
+    const header = document.querySelector('.card-header .card-title');
+    if (!header) return;
+    const m = header.textContent.match(/Contents \((\d+)\)/);
+    if (!m) return;
+    const next = Math.max(0, Number(m[1]) + delta);
+    header.textContent = `Contents (${next})`;
+  }
+})();
 </script>
 
 {# --- Delete Box --- #}

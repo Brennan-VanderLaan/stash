@@ -129,6 +129,19 @@ main {
   main { max-width: 1080px; }
 }
 
+/* Pages that want to spread across the full screen (the floorplan, in
+   particular — the bigger the canvas, the easier it is to read tiles
+   and zoom into items) opt out of the global cap with .main-wide. */
+main.main-wide {
+  max-width: 100%;
+  /* Side padding so cards aren't kissing the screen edge on huge monitors. */
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+@media (min-width: 1100px) {
+  main.main-wide { padding-left: 1.5rem; padding-right: 1.5rem; }
+}
+
 /* === Cards === */
 .card {
   background: var(--panel);
@@ -581,6 +594,13 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-family: inherit;
 }
 .item-dialog-close:hover { background: rgba(0, 0, 0, 0.8); }
+
+/* Search item modal — wider on desktop than the default item-dialog
+   cap so the hero photo + actions don't feel cramped. */
+#search-item-dialog {
+  width: min(820px, 95vw);
+  max-height: 92vh;
+}
 
 /* Header strip inside the search-result modal — gives users a clear way
    to break out into the actual box page when they want to. */
@@ -1646,6 +1666,75 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   box-shadow: inset 0 0 0 3px var(--room-color, var(--accent)),
               0 0 0 9999px rgba(0, 0, 0, 0.25);
 }
+
+/* Item DnD source styling shares with the floorplan drag-source rule
+   above; a fade-in/zoom for the bottom drawer that appears during drag. */
+.item-tile.drag-source {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Drop drawer — slides up from the bottom while an item is being dragged. */
+.item-drop-drawer {
+  position: fixed;
+  bottom: calc(64px + var(--safe-bottom));  /* clear of the mobile tab bar */
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 90;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem 0.6rem;
+  box-shadow: 0 -8px 22px rgba(0, 0, 0, 0.45);
+  animation: drop-drawer-in 0.18s ease-out;
+}
+@media (min-width: 640px) {
+  /* On desktop there's no bottom tab bar, so sit closer to the edge. */
+  .item-drop-drawer { bottom: 0.75rem; }
+}
+@keyframes drop-drawer-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.item-drop-drawer-header {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+.item-drop-drawer-targets {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+.item-drop-target {
+  flex-shrink: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  text-align: left;
+  min-width: 110px;
+  transition: background 0.12s, border-color 0.12s, transform 0.1s;
+}
+.item-drop-target-name { font-weight: 600; }
+.item-drop-target-loc {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.item-drop-target.drop-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
 .room-box-tile-head {
   display: flex;
   align-items: center;
@@ -1703,14 +1792,17 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 
 /* Photo mosaic inside a tile — only revealed at the deepest zoom tier
-   so the user can see what's actually in the box. The grid auto-fits
-   so different photo counts (1, 4, 9) all look intentional. */
+   so the user can see what's actually in the box. auto-fill grid means
+   the cell size stays roughly constant (~28-36px depending on tile width)
+   so a box with 14 items wraps to multiple rows naturally instead of
+   shrinking each thumb to nothing. */
 .room-box-tile-mosaic {
   display: none;
   margin-top: 0.3rem;
   gap: 2px;
   border-radius: 3px;
   overflow: hidden;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
   /* Inset shadow gives the mosaic a "tile inside a tile" feel. */
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
@@ -1724,34 +1816,35 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 [data-zoom-tier="3"] .room-box-tile-mosaic {
   display: grid;
 }
-/* Layout depends on how many photos we got. The data-photo-count
-   attribute tells us so the grid template can adapt. */
-.room-box-tile-mosaic[data-photo-count="1"] { grid-template-columns: 1fr; }
-.room-box-tile-mosaic[data-photo-count="2"],
-.room-box-tile-mosaic[data-photo-count="3"],
-.room-box-tile-mosaic[data-photo-count="4"] {
-  grid-template-columns: repeat(2, 1fr);
-}
-.room-box-tile-mosaic[data-photo-count="5"],
-.room-box-tile-mosaic[data-photo-count="6"],
-.room-box-tile-mosaic[data-photo-count="7"],
-.room-box-tile-mosaic[data-photo-count="8"],
-.room-box-tile-mosaic[data-photo-count="9"] {
-  grid-template-columns: repeat(3, 1fr);
-}
+/* Tile rows auto-grow so a box with many items expands its tile to fit
+   them all instead of clipping. The .room-rect-boxes grid is already
+   `grid-auto-rows: minmax(28px, max-content)` which lets this happen. */
 
 /* Pan cursor — view-mode stage is grabbable when not over a tile. */
 .floorplan-stage[data-edit="0"] { cursor: grab; }
 .floorplan-stage[data-edit="0"].panning { cursor: grabbing; }
 .floorplan-stage[data-edit="0"] .room-box-tile { cursor: pointer; }
 
-/* Box preview modal — same shape as the search item modal. */
+/* Box preview modal — wide on desktop so 60+ items fit in a generous
+   grid, near-full-screen on mobile so the thumbnails are still useful.
+   max-height respects iOS safe-area bottom inset so the bottom buttons
+   don't get clipped by the home indicator. */
+#floorplan-box-dialog {
+  width: min(1100px, 96vw);
+  max-width: 96vw;
+  max-height: calc(94vh - var(--safe-bottom));
+}
 .floorplan-box-preview {
-  padding: 1rem;
+  padding: 0.8rem 0.85rem 0.95rem;
   border-left: 4px solid var(--room-color, var(--accent));
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+  max-height: inherit;
+  overflow-y: auto;
+}
+@media (min-width: 640px) {
+  .floorplan-box-preview { padding: 1rem 1.1rem 1.1rem; }
 }
 .floorplan-box-preview-head {
   display: flex;
@@ -1759,29 +1852,53 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   justify-content: space-between;
   gap: 0.6rem;
   flex-wrap: wrap;
+  padding-right: 2.5rem;  /* clear of the close × button */
 }
 .floorplan-box-preview-name {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   color: var(--accent);
 }
-.floorplan-box-preview-meta { font-size: 0.85rem; }
+.floorplan-box-preview-meta { font-size: 0.9rem; }
+
+/* Item thumbnails — auto-fit so the grid grows column count with the
+   modal width. 100 px on phones, 140 px on bigger screens — both let
+   you read the item name and see the photo clearly. */
 .floorplan-box-preview-thumbs {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  gap: 0.4rem;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+@media (min-width: 640px) {
+  .floorplan-box-preview-thumbs {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.6rem;
+  }
 }
 .floorplan-box-preview-thumb {
-  position: relative;
-  display: block;
-  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
   text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.12s, transform 0.12s;
 }
-.floorplan-box-preview-thumb img {
+.floorplan-box-preview-thumb:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.floorplan-box-preview-thumb-img {
+  display: block;
+  aspect-ratio: 1 / 1;
+  background: var(--panel);
+  overflow: hidden;
+}
+.floorplan-box-preview-thumb-img img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1793,17 +1910,24 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   justify-content: center;
   width: 100%;
   height: 100%;
-  font-size: 1.5rem;
+  font-size: 1.6rem;
   color: var(--muted);
 }
-.floorplan-box-preview-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.floorplan-box-preview-thumb-name {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0 0.45rem 0.45rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floorplan-box-preview-more .floorplan-box-preview-thumb-fallback {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-  color: var(--muted);
-  text-decoration: none;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 /* Corner resize handles. Only rendered in edit mode (the template only emits

@@ -23,17 +23,23 @@
     {% for it in items %}
     <a href="/boxes/{{ box.id }}#item-{{ it.id }}" class="floorplan-box-preview-thumb"
        title="{{ it.name }}">
-      {% if it.photo %}
-      <img src="/thumbs/{{ it.photo }}" alt="{{ it.name }}" loading="lazy">
-      {% else %}
-      <span class="floorplan-box-preview-thumb-fallback">📦</span>
-      {% endif %}
+      <span class="floorplan-box-preview-thumb-img">
+        {% if it.photo %}
+        <img src="/thumbs/{{ it.photo }}" alt="{{ it.name }}" loading="lazy">
+        {% else %}
+        <span class="floorplan-box-preview-thumb-fallback">📦</span>
+        {% endif %}
+      </span>
+      <span class="floorplan-box-preview-thumb-name">{{ it.name }}</span>
     </a>
     {% endfor %}
     {% if item_count > items | length %}
-    <span class="floorplan-box-preview-thumb floorplan-box-preview-more">
-      +{{ item_count - items | length }}
-    </span>
+    <a href="/boxes/{{ box.id }}" class="floorplan-box-preview-thumb floorplan-box-preview-more">
+      <span class="floorplan-box-preview-thumb-img">
+        <span class="floorplan-box-preview-thumb-fallback">+{{ item_count - items | length }}</span>
+      </span>
+      <span class="floorplan-box-preview-thumb-name text-muted">more…</span>
+    </a>
     {% endif %}
   </div>
   {% endif %}

@@ -23,6 +23,29 @@ def test_create_box_appears_on_index(client):
     assert "0 items" in r.text
 
 
+def test_move_item_returns_json_for_ajax_clients(client):
+    """Box-detail item DnD calls POST /items/{id}/move via fetch with
+    Accept: application/json. Endpoint should return a JSON body, not a
+    303 redirect that the browser would follow into the new box page."""
+    client.post("/boxes", data={"name": "Box A"})
+    client.post("/boxes", data={"name": "Box B"})
+    client.post("/boxes/1/items", data={"name": "thing"})
+    r = client.post(
+        "/items/1/move",
+        data={"box_id": "2"},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["ok"] is True
+    assert payload["item_id"] == 1
+    assert payload["box_id"] == 2
+    with client.app_module.db() as conn:
+        b = conn.execute("SELECT box_id FROM items WHERE id = 1").fetchone()[0]
+    assert b == 2
+
+
 def test_box_detail_404_for_missing(client):
     assert client.get("/boxes/999").status_code == 404
 

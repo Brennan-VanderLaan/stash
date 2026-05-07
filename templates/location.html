@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ location.name }} · Stash{% endblock %}
+{% block main_class %}main-wide{% endblock %}
 {% block header_left %}
 <a href="/locations" class="header-back">← Where</a>
 <h1>{% include "_brand.html" %}</h1>
@@ -280,7 +281,10 @@
   // stage wider than the viewport, so native overflow:auto handles
   // pan via touch-scroll / scrollbars. No transform math needed.
   const ZOOM_MIN = 0.5;
-  const ZOOM_MAX = 5;
+  // High max zoom so users can drill all the way into a single box's
+  // mosaic of item thumbnails. Higher tiers reveal progressively more
+  // detail; the upper bound just stops accidental infinite zoom-in.
+  const ZOOM_MAX = 12;
   let zoom = 1;
   const zoomLabel = document.querySelector('[data-zoom-label]');
   const stagePadding = () => stage.getBoundingClientRect();
