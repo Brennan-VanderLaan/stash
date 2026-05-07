@@ -23,6 +23,55 @@ def test_create_box_appears_on_index(client):
     assert "0 items" in r.text
 
 
+def test_index_groups_boxes_by_room_and_location(client):
+    """The boxes index buckets every card into a (location, room) section
+    so a long list doesn't read as one undifferentiated grid.  Each
+    bucket needs a header + count, and unassigned boxes go into their
+    own group at the end."""
+    # Two rooms in one location, plus a legacy free-text location, plus
+    # a fully-unassigned box.
+    client.post("/locations", data={"name": "Townhouse"})
+    with client.app_module.db() as conn:
+        loc_id = conn.execute(
+            "SELECT id FROM locations WHERE name = 'Townhouse'"
+        ).fetchone()["id"]
+        # Two rooms under the same location.
+        for room_name in ("Kitchen", "Garage"):
+            conn.execute(
+                "INSERT INTO rooms (location_id, name) VALUES (?, ?)",
+                (loc_id, room_name),
+            )
+        conn.commit()
+        kitchen_id = conn.execute(
+            "SELECT id FROM rooms WHERE name = 'Kitchen'"
+        ).fetchone()["id"]
+        garage_id = conn.execute(
+            "SELECT id FROM rooms WHERE name = 'Garage'"
+        ).fetchone()["id"]
+
+    client.post("/boxes", data={"name": "Knives", "room_id": str(kitchen_id)})
+    client.post("/boxes", data={"name": "Plates", "room_id": str(kitchen_id)})
+    client.post("/boxes", data={"name": "Bike tools", "room_id": str(garage_id)})
+    client.post("/boxes", data={"name": "Old paint", "location": "Shed"})
+    client.post("/boxes", data={"name": "Mystery box"})
+
+    page = client.get("/").text
+
+    # Each bucket type renders at least once.  Two-box rooms show "2
+    # boxes", single-box rooms "1 box", and the unassigned bucket has
+    # the "Unassigned" header.
+    assert "2 boxes" in page  # Kitchen has two
+    assert "1 box" in page    # Garage / Shed / Unassigned each have one
+    assert "Kitchen" in page
+    assert "Garage" in page
+    assert "Shed" in page
+    assert "Unassigned" in page
+
+    # All five box names render.
+    for name in ("Knives", "Plates", "Bike tools", "Old paint", "Mystery box"):
+        assert name in page, f"{name} missing from grouped index"
+
+
 def test_move_item_returns_json_for_ajax_clients(client):
     """Box-detail item DnD calls POST /items/{id}/move via fetch with
     Accept: application/json. Endpoint should return a JSON body, not a

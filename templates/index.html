@@ -30,50 +30,57 @@
   </form>
 </details>
 
-{% if boxes %}
-<ul class="box-list">
-  {% for b in boxes %}
-  <li>
-    <a href="/boxes/{{ b.id }}" class="box-card"
-       style="--tile-color: {{ b.color or b.room_color or '#4ade80' }};
-              --room-color: {{ b.room_color or '#4ade80' }};">
-      <div class="box-card-body">
-        <div class="box-card-head">
-          <div class="box-name">{{ b.name }}</div>
-          <span class="box-card-count" aria-label="{{ b.item_count }} items">{{ b.item_count }}</span>
-        </div>
-        <div class="box-meta">
-          {% if b.room_name %}
-            <span class="room-chip">{{ b.room_name }}</span>
-            {% if b.location_name %}<span class="text-muted">in {{ b.location_name }}</span>{% endif %}
-          {% elif b.location %}
-            <span class="text-muted">{{ b.location }}</span>
-          {% else %}
-            <span class="text-muted">Unassigned</span>
-          {% endif %}
-        </div>
-        {# Always render the thumbs row (with a placeholder when empty) so
-           every tile is the same height — a clean grid with no half-cards
-           hanging off the bottom of a row. #}
-        {% set box_thumbs = thumbs.get(b.id, []) %}
-        <div class="box-thumbs{% if not box_thumbs %} box-thumbs-empty{% endif %}">
-          {% if box_thumbs %}
-            {% for photo in box_thumbs %}
-            <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
-            {% endfor %}
-            {% if b.item_count > box_thumbs|length %}
-            <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+{% if box_groups %}
+{# Boxes are grouped by where they live (location + room, then legacy
+   free-text locations, then unassigned).  The group header carries the
+   "where", so the cards inside drop the redundant meta row and just
+   show name + count + thumbs — much less noisy than one undifferentiated
+   grid of everything. #}
+{% for g in box_groups %}
+<section class="box-group">
+  <header class="box-group-header">
+    {% if g.kind == "room" %}
+      <span class="room-chip" style="--room-color: {{ g.room_color or '#4ade80' }};">{{ g.room_name }}</span>
+      {% if g.location_name %}<span class="box-group-loc">in {{ g.location_name }}</span>{% endif %}
+    {% elif g.kind == "loc" %}
+      <span class="box-group-loc">{{ g.legacy_location }}</span>
+    {% else %}
+      <span class="box-group-loc">Unassigned</span>
+    {% endif %}
+    <span class="box-group-count">{{ g.boxes|length }} box{{ '' if g.boxes|length == 1 else 'es' }}</span>
+  </header>
+  <ul class="box-list">
+    {% for b in g.boxes %}
+    <li>
+      <a href="/boxes/{{ b.id }}" class="box-card"
+         style="--tile-color: {{ b.color or b.room_color or '#4ade80' }};
+                --room-color: {{ b.room_color or '#4ade80' }};">
+        <div class="box-card-body">
+          <div class="box-card-head">
+            <div class="box-name">{{ b.name }}</div>
+            <span class="box-card-count" aria-label="{{ b.item_count }} items">{{ b.item_count }}</span>
+          </div>
+          {% set box_thumbs = thumbs.get(b.id, []) %}
+          <div class="box-thumbs{% if not box_thumbs %} box-thumbs-empty{% endif %}">
+            {% if box_thumbs %}
+              {% for photo in box_thumbs %}
+              <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
+              {% endfor %}
+              {% if b.item_count > box_thumbs|length %}
+              <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+              {% endif %}
+            {% else %}
+              <span class="box-thumbs-empty-label">Empty</span>
             {% endif %}
-          {% else %}
-            <span class="box-thumbs-empty-label">Empty</span>
-          {% endif %}
+          </div>
         </div>
-      </div>
-      <span class="box-card-chevron" aria-hidden="true">›</span>
-    </a>
-  </li>
-  {% endfor %}
-</ul>
+        <span class="box-card-chevron" aria-hidden="true">›</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
 {% else %}
 <div class="empty empty-mascot" data-mascot="turtle">
   <p>No boxes yet. Create one above — your turtle is ready to carry it.</p>

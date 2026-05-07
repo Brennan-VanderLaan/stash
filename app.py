@@ -638,7 +638,21 @@ def index(request: Request):
             "LEFT JOIN rooms r ON r.id = b.room_id "
             "LEFT JOIN locations l ON l.id = r.location_id "
             "LEFT JOIN items i ON i.box_id = b.id "
-            "GROUP BY b.id ORDER BY b.created_at DESC"
+            "GROUP BY b.id "
+            # Order so the bucketing loop below produces deterministic
+            # groups: rooms first (sorted by location → room), then legacy
+            # free-text locations, then unassigned at the end. Newest
+            # within a group still surfaces first.
+            "ORDER BY "
+            "  CASE "
+            "    WHEN r.id IS NOT NULL THEN 0 "
+            "    WHEN b.location IS NOT NULL AND TRIM(b.location) != '' THEN 1 "
+            "    ELSE 2 "
+            "  END, "
+            "  COALESCE(l.name, ''), "
+            "  COALESCE(r.name, ''), "
+            "  COALESCE(b.location, ''), "
+            "  b.created_at DESC"
         ).fetchall()
         # Up to 5 most-recent item photos per box, for the preview strip
         thumb_rows = conn.execute(
@@ -651,10 +665,40 @@ def index(request: Request):
         lst = thumbs.setdefault(r["box_id"], [])
         if len(lst) < 5:
             lst.append(r["photo"])
+    box_groups = _group_boxes_for_index(boxes)
     return templates.TemplateResponse(
         request, "index.html",
-        {"boxes": boxes, "thumbs": thumbs, "rooms": rooms},
+        {"boxes": boxes, "thumbs": thumbs, "rooms": rooms,
+         "box_groups": box_groups},
     )
+
+
+def _group_boxes_for_index(boxes) -> list[dict]:
+    """Bucket boxes by their (location, room) so the index renders as
+    visual sections instead of one undifferentiated grid.  The SQL is
+    already sorted into the right order — we just walk it and start a
+    new bucket whenever the key changes."""
+    groups: list[dict] = []
+    prev_key: object = object()
+    for b in boxes:
+        if b["room_name"]:
+            key = ("room", b["location_id"], b["room_id"])
+        elif b["location"] and b["location"].strip():
+            key = ("loc", b["location"].strip().casefold())
+        else:
+            key = ("none",)
+        if key != prev_key:
+            groups.append({
+                "kind": key[0],
+                "location_name": b["location_name"],
+                "room_name": b["room_name"],
+                "room_color": b["room_color"],
+                "legacy_location": b["location"] if not b["room_name"] else None,
+                "boxes": [],
+            })
+            prev_key = key
+        groups[-1]["boxes"].append(b)
+    return groups
 
 
 def _coerce_room_id(value: str) -> int | None:

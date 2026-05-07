@@ -340,6 +340,42 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .btn-row-end { justify-content: flex-end; }
 .btn-row-end > * { flex: none; }
 
+/* === Grouped boxes (index page) ===
+   The boxes index buckets every card into a (location, room) section so
+   a stash with 80 boxes doesn't read as one undifferentiated grid.  The
+   header is intentionally subtle — a room chip + small location text +
+   a count — because it sits *above* the visual structure (the actual
+   tiles); the tiles themselves still carry the per-box colour stripe. */
+.box-group {
+  margin-bottom: 1.4rem;
+}
+.box-group:last-child {
+  margin-bottom: 0;
+}
+.box-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  padding: 0.3rem 0.1rem 0.5rem;
+  margin-bottom: 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+.box-group-loc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.box-group-count {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
 /* === Box List (index + locations) ===
    Single column on phones, packs into a responsive grid on bigger screens
    so the desktop view actually uses the new wider main.  `grid-auto-rows:
