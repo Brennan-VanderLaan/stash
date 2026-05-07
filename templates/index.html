@@ -46,19 +46,28 @@
           {% if b.room_name %}
             <span class="room-chip">{{ b.room_name }}</span>
             {% if b.location_name %}<span class="text-muted">in {{ b.location_name }}</span>{% endif %}
-          {% elif b.location %}<span class="text-muted">{{ b.location }}</span>{% endif %}
-        </div>
-        {% set box_thumbs = thumbs.get(b.id, []) %}
-        {% if box_thumbs %}
-        <div class="box-thumbs">
-          {% for photo in box_thumbs %}
-          <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
-          {% endfor %}
-          {% if b.item_count > box_thumbs|length %}
-          <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+          {% elif b.location %}
+            <span class="text-muted">{{ b.location }}</span>
+          {% else %}
+            <span class="text-muted">Unassigned</span>
           {% endif %}
         </div>
-        {% endif %}
+        {# Always render the thumbs row (with a placeholder when empty) so
+           every tile is the same height — a clean grid with no half-cards
+           hanging off the bottom of a row. #}
+        {% set box_thumbs = thumbs.get(b.id, []) %}
+        <div class="box-thumbs{% if not box_thumbs %} box-thumbs-empty{% endif %}">
+          {% if box_thumbs %}
+            {% for photo in box_thumbs %}
+            <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
+            {% endfor %}
+            {% if b.item_count > box_thumbs|length %}
+            <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+            {% endif %}
+          {% else %}
+            <span class="box-thumbs-empty-label">Empty</span>
+          {% endif %}
+        </div>
       </div>
       <span class="box-card-chevron" aria-hidden="true">›</span>
     </a>

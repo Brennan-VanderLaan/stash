@@ -26,17 +26,21 @@
           <div class="box-name">{{ b.name }}</div>
           <span class="box-card-count">{{ b.item_count }}</span>
         </div>
+        {# Always render so every tile in the grid lines up at the same
+           height — see index.html for the full rationale. #}
         {% set box_thumbs = thumbs.get(b.id, []) %}
-        {% if box_thumbs %}
-        <div class="box-thumbs">
-          {% for photo in box_thumbs %}
-          <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
-          {% endfor %}
-          {% if b.item_count > box_thumbs|length %}
-          <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+        <div class="box-thumbs{% if not box_thumbs %} box-thumbs-empty{% endif %}">
+          {% if box_thumbs %}
+            {% for photo in box_thumbs %}
+            <img src="/thumbs/{{ photo }}" alt="" loading="lazy">
+            {% endfor %}
+            {% if b.item_count > box_thumbs|length %}
+            <span class="box-thumbs-more">+{{ b.item_count - box_thumbs|length }}</span>
+            {% endif %}
+          {% else %}
+            <span class="box-thumbs-empty-label">Empty</span>
           {% endif %}
         </div>
-        {% endif %}
       </div>
       <span class="box-card-chevron" aria-hidden="true">›</span>
     </a>

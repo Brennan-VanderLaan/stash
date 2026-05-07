@@ -342,14 +342,22 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 
 /* === Box List (index + locations) ===
    Single column on phones, packs into a responsive grid on bigger screens
-   so the desktop view actually uses the new wider main. */
+   so the desktop view actually uses the new wider main.  `grid-auto-rows:
+   1fr` makes every implicit row the same height as the tallest one in the
+   page — combined with a card structure that always renders the same set
+   of sections (head + meta + thumbs, with placeholders for empties), the
+   grid lines up cleanly instead of leaving stub-cards on rows with fewer
+   thumbs than the row above. */
 .box-list {
   list-style: none;
   padding: 0;
   display: grid;
   grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
   gap: 0.5rem;
 }
+.box-list > li { display: flex; }
+.box-list > li > .box-card { flex: 1; }
 @media (min-width: 720px) {
   .box-list { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
 }
@@ -359,7 +367,10 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .box-card {
   display: grid;
   grid-template-columns: 1fr auto;
-  align-items: center;
+  /* Top-align so the body sits at the top of the card and any extra
+     stretch space (forced by grid-auto-rows: 1fr) accrues at the bottom
+     instead of pushing the title out of the head row. */
+  align-items: start;
   gap: 0.5rem;
   padding: 0.85rem 0.6rem 0.85rem 1.1rem;
   background: var(--panel);
@@ -449,6 +460,10 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   padding: 0 0.25rem;
   transition: color 0.15s, opacity 0.15s, transform 0.15s;
   flex-shrink: 0;
+  /* Re-centre the chevron in the card body even though .box-card itself is
+     top-aligned (so multi-row stretch space goes to the bottom, not next to
+     the chevron). */
+  align-self: center;
 }
 .box-card:hover .box-card-chevron {
   color: var(--tile-color, var(--room-color, var(--accent)));
@@ -476,7 +491,25 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   flex-wrap: nowrap;
   overflow: hidden;
   /* Stretch thumbs across the available width — each one auto-fits up to
-     a max so the strip doesn't leave a gaping void on the right. */
+     a max so the strip doesn't leave a gaping void on the right.
+     Reserve at least one thumb's worth of vertical space so a box with
+     no items still occupies the same row height as a populated one — the
+     index/room grid stays uniform. */
+  min-height: 48px;
+  align-items: center;
+}
+.box-thumbs.box-thumbs-empty {
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel-2) 50%, transparent);
+}
+.box-thumbs-empty-label {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--muted);
+  opacity: 0.65;
+  letter-spacing: 0.02em;
 }
 .box-thumbs img {
   flex: 1 1 0;
