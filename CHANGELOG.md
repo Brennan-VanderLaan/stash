@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.19.0...v0.20.0) (2026-05-07)
+
+
+### Features
+
+* **index:** group boxes by location/room so the page isn't a wall of tiles ([bd8ad3e](https://github.com/Brennan-VanderLaan/stash/commit/bd8ad3eec2827fb14e77354eca007b5826c4ab7e))
+
+
+### Bug Fixes
+
+* cropper "Done" now reflects the user's adjustment instead of reverting ([2d3c983](https://github.com/Brennan-VanderLaan/stash/commit/2d3c983c91ec446286371dfe24dd6f69ca62af4f))
+* locations index falls back to floor floorplans before reporting "no floorplan" ([5a53dd3](https://github.com/Brennan-VanderLaan/stash/commit/5a53dd38aa2218cc52c5c921f45d5497ec896990))
+
 ## [0.19.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.18.1...v0.19.0) (2026-05-07)
 
 
