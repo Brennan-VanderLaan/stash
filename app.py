@@ -129,6 +129,16 @@ def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Multi-writer concurrency tuning. With multi-tenant ingest fanning
+    # out to pending_items + tags + thumbs writes in quick succession,
+    # the default rollback journal hits "database is locked" under load.
+    # WAL lets readers proceed during writes, busy_timeout absorbs short
+    # contention without raising, and synchronous=NORMAL pairs cleanly
+    # with WAL for the throughput bump (durability still anchored by the
+    # WAL checkpoint). See spec § "SQLite concurrency".
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -2545,6 +2555,14 @@ def maintenance_export():
     import zipfile
     from datetime import datetime
 
+    # Drain the WAL into main.db so the zip captures every committed
+    # write. In WAL mode, recent UPDATEs can sit in the -wal sidecar
+    # file until checkpointed; zipping just stash.db without this would
+    # ship a snapshot that's missing the latest changes (and the next
+    # restore would silently roll the user back).
+    with db() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
     refs = _referenced_uploads()
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -2609,7 +2627,15 @@ def _replace_db_from_path(src_db: Path) -> None:
     Uses SQLite's online backup API rather than `os.replace` — on Windows the
     live DB file is held open by any active connection, which makes a rename
     fail with `PermissionError`. `Connection.backup()` swaps page contents
-    through the SQLite library and is safe even with concurrent readers."""
+    through the SQLite library and is safe even with concurrent readers.
+
+    With WAL mode enabled on the live DB, pages written by the wipe-step
+    transactions (DELETE FROMs etc.) live in the WAL until checkpointed.
+    `backup()` overwrites the main DB file's contents from the source but
+    doesn't sync the WAL — so subsequent reads can see stale WAL pages
+    layered over the freshly-restored main pages. A FULL checkpoint +
+    TRUNCATE before close forces the WAL to drain into main and resets
+    its size to zero, so the next connection opens a coherent file."""
     with open(src_db, "rb") as f:
         header = f.read(len(_SQLITE_MAGIC))
     if not header.startswith(_SQLITE_MAGIC):
@@ -2620,6 +2646,7 @@ def _replace_db_from_path(src_db: Path) -> None:
     dst = sqlite3.connect(DB_PATH)
     try:
         src.backup(dst)
+        dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         src.close()
         dst.close()
