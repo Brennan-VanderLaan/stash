@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.2...v0.18.0) (2026-05-07)
+
+
+### Features
+
+* **maintenance:** show access state and revocation runbook ([05ae3ea](https://github.com/Brennan-VanderLaan/stash/commit/05ae3ea5800e0cff7edf02b5ba954a65baa2f65c))
+
+
+### Bug Fixes
+
+* pre-generate thumbnail on re-crop so stale thumbs don't survive ([05e9d78](https://github.com/Brennan-VanderLaan/stash/commit/05e9d78f329247089732d6c32769e1a0cec4629c))
+* **security:** drop --email-domain wildcard so emails.txt actually gates ([249bdd3](https://github.com/Brennan-VanderLaan/stash/commit/249bdd338e2ff291befef478912f0f340e187cd6))
+* **security:** enforce email allow-list at the app layer ([20de2a8](https://github.com/Brennan-VanderLaan/stash/commit/20de2a808079b08777a994314b29c48de2cd6693))
+* stop floorplan snapping to the left at large viewports ([0790f48](https://github.com/Brennan-VanderLaan/stash/commit/0790f48f37460a186c82f93b2bc3ad346dc05aef))
+
 ## [0.17.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.17.1...v0.17.2) (2026-05-07)
 
 
