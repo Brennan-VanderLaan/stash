@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.0...v0.20.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* **queue:** real-time updates that don't trample in-flight edits ([1cc437e](https://github.com/Brennan-VanderLaan/stash/commit/1cc437e3b3f6b8c03afe35293744a589e2df49af))
+
 ## [0.20.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.19.0...v0.20.0) (2026-05-07)
 
 
