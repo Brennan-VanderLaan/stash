@@ -11,7 +11,16 @@ from fastapi.templating import Jinja2Templates
 import labels
 import vault
 import vision
-from dao import Actor
+from dao import Actor, ConflictError, ForbiddenError, NotFoundError
+from dao import boxes as dao_boxes
+from dao import floors as dao_floors
+from dao import ingest_jobs as dao_ingest_jobs
+from dao import items as dao_items
+from dao import locations as dao_locations
+from dao import pending_items as dao_pending
+from dao import rooms as dao_rooms
+from dao import tags as dao_tags
+from dao import tenants as dao_tenants
 
 load_dotenv()
 
@@ -1285,42 +1294,10 @@ def serve_thumb(request: Request, name: str):
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    with db() as conn:
-        boxes = conn.execute(
-            "SELECT b.*, COUNT(i.id) AS item_count, "
-            "       r.name AS room_name, r.color AS room_color, "
-            "       l.id AS location_id, l.name AS location_name "
-            "FROM boxes b "
-            "LEFT JOIN rooms r ON r.id = b.room_id "
-            "LEFT JOIN locations l ON l.id = r.location_id "
-            "LEFT JOIN items i ON i.box_id = b.id "
-            "GROUP BY b.id "
-            # Order so the bucketing loop below produces deterministic
-            # groups: rooms first (sorted by location → room), then legacy
-            # free-text locations, then unassigned at the end. Newest
-            # within a group still surfaces first.
-            "ORDER BY "
-            "  CASE "
-            "    WHEN r.id IS NOT NULL THEN 0 "
-            "    WHEN b.location IS NOT NULL AND TRIM(b.location) != '' THEN 1 "
-            "    ELSE 2 "
-            "  END, "
-            "  COALESCE(l.name, ''), "
-            "  COALESCE(r.name, ''), "
-            "  COALESCE(b.location, ''), "
-            "  b.created_at DESC"
-        ).fetchall()
-        # Up to 5 most-recent item photos per box, for the preview strip
-        thumb_rows = conn.execute(
-            "SELECT box_id, photo FROM items "
-            "WHERE photo IS NOT NULL ORDER BY box_id, created_at DESC"
-        ).fetchall()
-        rooms = _rooms_for_picker(conn)
-    thumbs: dict[int, list[str]] = {}
-    for r in thumb_rows:
-        lst = thumbs.setdefault(r["box_id"], [])
-        if len(lst) < 5:
-            lst.append(r["photo"])
+    actor: Actor = request.state.actor
+    boxes = dao_boxes.list_with_counts(actor)
+    thumbs = dao_items.list_recent_photos_per_box(actor, limit_per_box=5)
+    rooms = dao_rooms.list_for_picker(actor)
     box_groups = _group_boxes_for_index(boxes)
     return templates.TemplateResponse(
         request, "index.html",
@@ -1406,32 +1383,28 @@ def _known_locations(conn) -> list[str]:
 
 @app.get("/boxes/{box_id}", response_class=HTMLResponse)
 def box_detail(request: Request, box_id: int):
+    actor: Actor = request.state.actor
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    items_raw = dao_items.list_for_box(actor, box_id)
+    # Reverse to newest-first to match the previous ORDER BY DESC.
+    items_raw = list(reversed(items_raw))
+    items_with_tags = [
+        {"item": it, "tags": dao_items.list_tags_for_item(actor, it["id"])}
+        for it in items_raw
+    ]
+    other_boxes = [
+        {"id": b["id"], "name": b["name"], "location": b["location"]}
+        for b in dao_boxes.list_for_picker(actor)
+        if b["id"] != box_id
+    ]
+    other_boxes.sort(key=lambda b: b["name"])
     with db() as conn:
-        box = conn.execute(
-            "SELECT b.*, r.name AS room_name, r.color AS room_color, "
-            "       l.id AS location_id, l.name AS location_name "
-            "FROM boxes b "
-            "LEFT JOIN rooms r ON r.id = b.room_id "
-            "LEFT JOIN locations l ON l.id = r.location_id "
-            "WHERE b.id = ?",
-            (box_id,),
-        ).fetchone()
-        if not box:
-            raise HTTPException(404)
-        items_raw = conn.execute(
-            "SELECT * FROM items WHERE box_id = ? ORDER BY created_at DESC",
-            (box_id,),
-        ).fetchall()
-        items_with_tags = []
-        for it in items_raw:
-            tags = get_item_tags(conn, it["id"])
-            items_with_tags.append({"item": it, "tags": tags})
-        other_boxes = conn.execute(
-            "SELECT id, name, location FROM boxes WHERE id != ? ORDER BY name", (box_id,)
-        ).fetchall()
         locations = _known_locations(conn)
-        rooms = _rooms_for_picker(conn)
-        all_tags = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
+    rooms = dao_rooms.list_for_picker(actor)
+    all_tags = dao_tags.list_names(actor)
     return templates.TemplateResponse(
         request, "box.html",
         {
@@ -1440,7 +1413,7 @@ def box_detail(request: Request, box_id: int):
             "other_boxes": other_boxes,
             "locations": locations,
             "rooms": rooms,
-            "all_tags": [r["name"] for r in all_tags],
+            "all_tags": all_tags,
             "color_palette": _ROOM_COLORS,
         },
     )
@@ -1562,12 +1535,19 @@ def audit_box(request: Request, box_id: int):
 async def submit_audit(request: Request, box_id: int):
     form_data = await request.form()
     found_ids = {int(v) for v in form_data.getlist("found")}
+    actor: Actor = request.state.actor
     with db() as conn:
-        box = conn.execute("SELECT name FROM boxes WHERE id = ?", (box_id,)).fetchone()
+        box = conn.execute(
+            "SELECT name, tenant_id FROM boxes WHERE id = ? AND tenant_id = ?",
+            (box_id, actor.tenant_id),
+        ).fetchone()
         if not box:
             raise HTTPException(404)
+        tenant_id = box["tenant_id"] or actor.tenant_id
         all_items = conn.execute(
-            "SELECT id, name, notes, photo FROM items WHERE box_id = ?", (box_id,)
+            "SELECT id, name, notes, photo FROM items "
+            "WHERE box_id = ? AND tenant_id = ?",
+            (box_id, actor.tenant_id),
         ).fetchall()
         moved_to_queue = 0
         for it in all_items:
@@ -1579,16 +1559,18 @@ async def submit_audit(request: Request, box_id: int):
             else:
                 # Item not in box anymore — extract to sort queue with provenance
                 cur = conn.execute(
-                    "INSERT INTO pending_items (name, description, photo, previous_box_name) "
-                    "VALUES (?, ?, ?, ?)",
-                    (it["name"], it["notes"], it["photo"], box["name"]),
+                    "INSERT INTO pending_items "
+                    "(name, description, photo, previous_box_name, tenant_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (it["name"], it["notes"], it["photo"], box["name"], tenant_id),
                 )
                 pending_id = cur.lastrowid
                 # Preserve tags
                 conn.execute(
-                    "INSERT INTO pending_item_tags (pending_item_id, tag_id, value) "
-                    "SELECT ?, tag_id, value FROM item_tags WHERE item_id = ?",
-                    (pending_id, it["id"]),
+                    "INSERT INTO pending_item_tags "
+                    "(pending_item_id, tag_id, value, tenant_id) "
+                    "SELECT ?, tag_id, value, ? FROM item_tags WHERE item_id = ?",
+                    (pending_id, tenant_id, it["id"]),
                 )
                 conn.execute("DELETE FROM items WHERE id = ?", (it["id"],))
                 moved_to_queue += 1
@@ -1998,27 +1980,13 @@ def ingest_dismiss(job_id: int):
     return RedirectResponse("/ingest", status_code=303)
 
 
-def _queue_view_context(conn) -> dict:
+def _queue_view_context(actor: Actor) -> dict:
     """Load the data needed to render the queue page (or just its cards
     fragment).  Both /queue and /queue/items share the same shape so a
     real-time refresh produces markup identical to the SSR path."""
-    pending = conn.execute(
-        "SELECT p.*, b.name AS suggested_box_name FROM pending_items p "
-        "LEFT JOIN boxes b ON b.id = p.suggested_box_id "
-        "ORDER BY p.created_at ASC"
-    ).fetchall()
-    boxes = conn.execute(
-        "SELECT b.id, b.name, b.location, "
-        "       r.name AS room_name, "
-        "       l.id AS location_id, l.name AS location_name "
-        "FROM boxes b "
-        "LEFT JOIN rooms r ON r.id = b.room_id "
-        "LEFT JOIN locations l ON l.id = r.location_id "
-        # Sort so optgroup ordering is stable: location first, then room,
-        # then box name within each room.
-        "ORDER BY l.name IS NULL, l.name, r.name, b.name"
-    ).fetchall()
-    all_tags = [r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()]
+    pending = dao_pending.list_for_queue(actor)
+    boxes = dao_boxes.list_for_picker(actor)
+    all_tags = dao_tags.list_names(actor)
 
     # Group boxes for the <optgroup>'d picker: "Location · Room", or just
     # "Room" if no location, or "Unassigned" for boxes with neither.
@@ -2040,27 +2008,19 @@ def _queue_view_context(conn) -> dict:
             current_label = label
         current_group.append(b)
 
-    import hashlib
-    payload = "|".join(
-        f"{r['id']}:{r['name']}:{r['description']}:{r['suggested_box_id']}:"
-        f"{r['suggested_new_box_name']}:{r['suggestion_reason']}"
-        for r in pending
-    ) + "||" + "|".join(f"{b['id']}:{b['name']}" for b in boxes)
-    fingerprint = hashlib.sha1(payload.encode()).hexdigest()
     return {
         "pending": pending,
         "boxes": boxes,
         "boxes_grouped": boxes_grouped,
-        "fingerprint": fingerprint,
+        "fingerprint": dao_pending.fingerprint(actor),
         "all_tags": all_tags,
     }
 
 
 @app.get("/queue", response_class=HTMLResponse)
 def queue(request: Request):
-    with db() as conn:
-        ctx = _queue_view_context(conn)
-    return templates.TemplateResponse(request, "queue.html", ctx)
+    actor: Actor = request.state.actor
+    return templates.TemplateResponse(request, "queue.html", _queue_view_context(actor))
 
 
 @app.get("/queue/items", response_class=HTMLResponse)
@@ -2072,9 +2032,10 @@ def queue_items_fragment(request: Request):
     reload — earlier the page hard-reloaded on every fingerprint flip,
     which kept eating in-flight edits whenever a background ingest job
     finished or another tab touched the queue."""
-    with db() as conn:
-        ctx = _queue_view_context(conn)
-    return templates.TemplateResponse(request, "_queue_cards.html", ctx)
+    actor: Actor = request.state.actor
+    return templates.TemplateResponse(
+        request, "_queue_cards.html", _queue_view_context(actor),
+    )
 
 
 @app.post("/queue/{pending_id}/match")
@@ -2174,21 +2135,10 @@ def queue_assign(
 
 
 @app.get("/queue/state")
-def queue_state():
+def queue_state(request: Request):
     """Fingerprint for real-time polling — changes whenever queue content changes."""
-    import hashlib
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT id, name, description, suggested_box_id, suggested_new_box_name, "
-            "suggestion_reason FROM pending_items ORDER BY id"
-        ).fetchall()
-        boxes = conn.execute("SELECT id, name FROM boxes ORDER BY id").fetchall()
-    payload = "|".join(
-        f"{r['id']}:{r['name']}:{r['description']}:{r['suggested_box_id']}:"
-        f"{r['suggested_new_box_name']}:{r['suggestion_reason']}"
-        for r in rows
-    ) + "||" + "|".join(f"{b['id']}:{b['name']}" for b in boxes)
-    return {"fingerprint": hashlib.sha1(payload.encode()).hexdigest()}
+    actor: Actor = request.state.actor
+    return {"fingerprint": dao_pending.fingerprint(actor)}
 
 
 @app.post("/queue/{pending_id}/delete")
@@ -2810,8 +2760,8 @@ def _rooms_for_picker(conn) -> list[dict]:
 
 @app.get("/locations", response_class=HTMLResponse)
 def locations_index(request: Request):
-    with db() as conn:
-        locs = _locations_with_room_counts(conn)
+    actor: Actor = request.state.actor
+    locs = dao_locations.list_with_room_counts(actor)
     return templates.TemplateResponse(
         request, "locations.html", {"locations": locs},
     )
@@ -2823,13 +2773,11 @@ def create_location(request: Request, name: str = Form(...)):
     if not name:
         raise HTTPException(400, "Name required")
     actor: Actor = request.state.actor
-    with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO locations (name, tenant_id) VALUES (?, ?)",
-            (name, actor.tenant_id),
-        )
-        conn.commit()
-    return RedirectResponse(f"/locations/{cur.lastrowid}", status_code=303)
+    try:
+        location_id = dao_locations.create(actor, name)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(f"/locations/{location_id}", status_code=303)
 
 
 @app.get("/locations/{location_id}", response_class=HTMLResponse)
@@ -3179,38 +3127,16 @@ def room_boxes(request: Request, room_id: int):
     """Boxes assigned to a single room — used as the click-through target from
     the floorplan view. Renders with the same card+thumb-strip presentation
     as the main /boxes index so the user gets parity."""
-    with db() as conn:
-        row = conn.execute(
-            "SELECT r.*, l.name AS location_name, l.id AS location_id "
-            "FROM rooms r JOIN locations l ON l.id = r.location_id "
-            "WHERE r.id = ?",
-            (room_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        boxes = conn.execute(
-            "SELECT b.*, COUNT(i.id) AS item_count FROM boxes b "
-            "LEFT JOIN items i ON i.box_id = b.id "
-            "WHERE b.room_id = ? GROUP BY b.id ORDER BY b.name",
-            (room_id,),
-        ).fetchall()
-        # Same per-box thumb-strip as index.html — limited to this room's
-        # boxes to keep the query small.
-        thumb_rows = conn.execute(
-            "SELECT i.box_id, i.photo FROM items i "
-            "JOIN boxes b ON b.id = i.box_id "
-            "WHERE b.room_id = ? AND i.photo IS NOT NULL "
-            "ORDER BY i.box_id, i.created_at DESC",
-            (room_id,),
-        ).fetchall()
-    thumbs: dict[int, list[str]] = {}
-    for r in thumb_rows:
-        lst = thumbs.setdefault(r["box_id"], [])
-        if len(lst) < 5:
-            lst.append(r["photo"])
+    actor: Actor = request.state.actor
+    try:
+        room = dao_rooms.get_with_location(actor, room_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    boxes = dao_boxes.list_for_room(actor, room_id)
+    thumbs = dao_items.list_recent_photos_for_room(actor, room_id, limit_per_box=5)
     return templates.TemplateResponse(
         request, "room_boxes.html",
-        {"room": dict(row), "boxes": boxes, "thumbs": thumbs},
+        {"room": room, "boxes": boxes, "thumbs": thumbs},
     )
 
 
