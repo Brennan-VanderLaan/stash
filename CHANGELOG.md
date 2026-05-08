@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.2.0...v1.3.0) (2026-05-08)
+
+
+### Features
+
+* **admin:** operator dashboard + create-tenant-and-invite bootstrap ([4350228](https://github.com/Brennan-VanderLaan/stash/commit/43502282e4431db358c721d2bed3f916baa763ad))
+
 ## [1.2.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.1.1...v1.2.0) (2026-05-08)
 
 
