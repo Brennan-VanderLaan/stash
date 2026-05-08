@@ -2134,13 +2134,16 @@ def _coerce_search_int(value: str) -> int | None:
 
 
 def _build_search_query(
+    actor: Actor,
     q: str, tag: str, location_id: int | None, room_id: int | None,
     box_id: int | None, missing: bool, has_photo: bool,
 ) -> tuple[str, list]:
     """Compose the WHERE clause + params for the search query. Pulled out so
-    both the listing query and the count/facet queries can share it."""
-    clauses = ["1=1"]
-    params: list = []
+    both the listing query and the count/facet queries can share it.
+    Always pins on i.tenant_id so a tenant can't see another's items
+    even when they brute-force filter ids in the URL."""
+    clauses = ["i.tenant_id = ?"]
+    params: list = [actor.tenant_id]
     if q.strip():
         like = f"%{q.strip()}%"
         clauses.append("(i.name LIKE ? OR i.notes LIKE ?)")
@@ -2148,9 +2151,10 @@ def _build_search_query(
     if tag.strip():
         clauses.append(
             "i.id IN (SELECT it.item_id FROM item_tags it "
-            "JOIN tags t ON t.id = it.tag_id WHERE t.name = ?)"
+            "JOIN tags t ON t.id = it.tag_id "
+            "WHERE t.name = ? AND it.tenant_id = ?)"
         )
-        params.append(tag.strip())
+        params.extend([tag.strip(), actor.tenant_id])
     if box_id is not None:
         clauses.append("b.id = ?")
         params.append(box_id)
@@ -2193,17 +2197,17 @@ def search(
     is_missing = bool(missing)
     has_photo_flag = bool(has_photo)
     offset = max(0, offset)
+    actor: Actor = request.state.actor
 
+    all_tags = dao_tags.list_names(actor)
     with db() as conn:
-        all_tags = [
-            r["name"] for r in conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
-        ]
         all_locations = [
             dict(r) for r in conn.execute(
-                "SELECT id, name FROM locations ORDER BY name"
+                "SELECT id, name FROM locations WHERE tenant_id = ? ORDER BY name",
+                (actor.tenant_id,),
             ).fetchall()
         ]
-        all_rooms = _rooms_for_picker(conn)
+        all_rooms = dao_rooms.list_for_picker(actor)
         all_boxes = [
             dict(r) for r in conn.execute(
                 "SELECT b.id, b.name, "
@@ -2212,11 +2216,14 @@ def search(
                 "FROM boxes b "
                 "LEFT JOIN rooms r ON r.id = b.room_id "
                 "LEFT JOIN locations l ON l.id = r.location_id "
-                "ORDER BY l.name IS NULL, l.name, r.name, b.name"
+                "WHERE b.tenant_id = ? "
+                "ORDER BY l.name IS NULL, l.name, r.name, b.name",
+                (actor.tenant_id,),
             ).fetchall()
         ]
 
         where, params = _build_search_query(
+            actor,
             q, tag, loc_id, rm_id, bx_id, is_missing, has_photo_flag,
         )
         common_join = (
@@ -2255,8 +2262,9 @@ def search(
             for r in conn.execute(
                 f"SELECT it.item_id, t.id AS tag_id, t.name, it.value "
                 f"FROM item_tags it JOIN tags t ON t.id = it.tag_id "
-                f"WHERE it.item_id IN ({placeholders}) ORDER BY t.name",
-                item_ids,
+                f"WHERE it.item_id IN ({placeholders}) AND it.tenant_id = ? "
+                f"ORDER BY t.name",
+                [*item_ids, actor.tenant_id],
             ).fetchall():
                 tags_by_item.setdefault(r["item_id"], []).append(dict(r))
 
@@ -2328,26 +2336,26 @@ def search(
 
 @app.get("/tags", response_class=HTMLResponse)
 def tags_page(request: Request):
-    with db() as conn:
-        tags = conn.execute(
-            "SELECT t.name, t.id, COUNT(it.item_id) AS item_count "
-            "FROM tags t LEFT JOIN item_tags it ON it.tag_id = t.id "
-            "GROUP BY t.id ORDER BY t.name"
-        ).fetchall()
+    actor: Actor = request.state.actor
+    # ``use_count`` here is the template's "item_count" — rename in the
+    # template if/when this loses its single caller, but for now keep
+    # the dict shape stable.
+    tags = [
+        {"id": t["id"], "name": t["name"], "item_count": t["use_count"]}
+        for t in dao_tags.list_with_counts(actor)
+    ]
     return templates.TemplateResponse(request, "tags.html", {"tags": tags})
 
 
 @app.get("/tags/autocomplete")
-def tags_autocomplete(q: str = ""):
-    with db() as conn:
-        if q:
-            rows = conn.execute(
-                "SELECT name FROM tags WHERE name LIKE ? ORDER BY name LIMIT 20",
-                (f"{q}%",),
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT name FROM tags ORDER BY name LIMIT 50").fetchall()
-    return [r["name"] for r in rows]
+def tags_autocomplete(request: Request, q: str = ""):
+    actor: Actor = request.state.actor
+    names = dao_tags.list_names(actor)
+    if q:
+        ql = q.lower()
+        # Same prefix-match LIKE 'q%' semantic, capped at 20.
+        return [n for n in names if n.lower().startswith(ql)][:20]
+    return names[:50]
 
 
 def _box_art_bytes(box_row) -> bytes | None:
@@ -2378,14 +2386,10 @@ def _attach_art_bytes(box_dict: dict) -> dict:
 @app.get("/boxes/{box_id}/label.svg")
 def box_label_svg(request: Request, box_id: int):
     actor: Actor = request.state.actor
-    with db() as conn:
-        box = conn.execute(
-            "SELECT * FROM boxes WHERE id = ?", (box_id,),
-        ).fetchone()
-        if not box:
-            raise HTTPException(404)
-        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
     svg = labels.render_label_svg(
         box["id"], box["name"], box["notes"] or "", PUBLIC_URL,
         background_art=_box_art_bytes(box),
@@ -2397,25 +2401,32 @@ def box_label_svg(request: Request, box_id: int):
     )
 
 
-def _selected_boxes(conn, box_ids_raw: list[str]) -> list:
-    """Return rows for the selected boxes, or all boxes if no selection given.
-    Ordering matches the labels page (alpha) so printed sheets are predictable."""
+def _selected_boxes(conn, actor: Actor, box_ids_raw: list[str]) -> list:
+    """Return rows for the selected boxes, or all boxes in the actor's
+    tenant if no selection given.  Ordering matches the labels page
+    (alpha) so printed sheets are predictable."""
     if box_ids_raw:
         placeholders = ",".join("?" * len(box_ids_raw))
         return conn.execute(
-            f"SELECT id, name, notes, background_art FROM boxes "
-            f"WHERE id IN ({placeholders}) ORDER BY name",
-            [int(b) for b in box_ids_raw],
+            f"SELECT id, name, notes, background_art, tenant_id FROM boxes "
+            f"WHERE id IN ({placeholders}) AND tenant_id = ? ORDER BY name",
+            [*[int(b) for b in box_ids_raw], actor.tenant_id],
         ).fetchall()
     return conn.execute(
-        "SELECT id, name, notes, background_art FROM boxes ORDER BY name"
+        "SELECT id, name, notes, background_art, tenant_id FROM boxes "
+        "WHERE tenant_id = ? ORDER BY name",
+        (actor.tenant_id,),
     ).fetchall()
 
 
 @app.get("/labels", response_class=HTMLResponse)
 def labels_page(request: Request):
+    actor: Actor = request.state.actor
     with db() as conn:
-        boxes = conn.execute("SELECT * FROM boxes ORDER BY name").fetchall()
+        boxes = conn.execute(
+            "SELECT * FROM boxes WHERE tenant_id = ? ORDER BY name",
+            (actor.tenant_id,),
+        ).fetchall()
     return templates.TemplateResponse(
         request, "labels.html",
         {
@@ -2428,9 +2439,10 @@ def labels_page(request: Request):
 
 @app.get("/labels/sheet.svg")
 def labels_sheet(request: Request):
+    actor: Actor = request.state.actor
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = _selected_boxes(conn, box_ids_raw)
+        boxes = _selected_boxes(conn, actor, box_ids_raw)
     payload = [_attach_art_bytes(dict(b)) for b in boxes]
     svg = labels.render_sheet_svg(payload, PUBLIC_URL)
     return Response(
@@ -2444,9 +2456,10 @@ def labels_sheet(request: Request):
 def labels_sheet_pdf(request: Request):
     """Multi-page vector PDF — fits Avery label sheets directly and is the
     Cricut/print-ready artifact. Each sheet is its own page."""
+    actor: Actor = request.state.actor
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = _selected_boxes(conn, box_ids_raw)
+        boxes = _selected_boxes(conn, actor, box_ids_raw)
     payload = [_attach_art_bytes(dict(b)) for b in boxes]
     try:
         pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL)
@@ -2470,9 +2483,10 @@ def labels_print(request: Request):
     """Browser-printable preview of all selected labels, paginated via CSS so
     Cmd/Ctrl+P produces real multi-page output. Single-sheet SVGs get wrapped
     in page-break-after divs — no PDF library needed for clean printing."""
+    actor: Actor = request.state.actor
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = [_attach_art_bytes(dict(b)) for b in _selected_boxes(conn, box_ids_raw)]
+        boxes = [_attach_art_bytes(dict(b)) for b in _selected_boxes(conn, actor, box_ids_raw)]
     pages = []
     for chunk_start in range(0, max(len(boxes), 1), labels.LABELS_PER_PAGE):
         chunk = boxes[chunk_start:chunk_start + labels.LABELS_PER_PAGE]
@@ -2510,23 +2524,14 @@ def generate_box_art(
     name. The old image, if any, is cleaned up only after the new one writes
     successfully so a failed generation doesn't strand the box without art."""
     actor: Actor = request.state.actor
-    with db() as conn:
-        box = conn.execute(
-            "SELECT id, name, notes, background_art, tenant_id FROM boxes WHERE id = ?",
-            (box_id,),
-        ).fetchone()
-        if not box:
-            raise HTTPException(404)
-        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = box["tenant_id"] or actor.tenant_id
-        items = [
-            dict(r) for r in conn.execute(
-                "SELECT name, notes, photo FROM items WHERE box_id = ? "
-                "ORDER BY created_at DESC LIMIT 12",
-                (box_id,),
-            ).fetchall()
-        ]
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    tenant_id = box["tenant_id"]
+    # Newest 12 items, by created_at DESC, for the prompt.  list_for_box
+    # returns oldest-first so we reverse + slice here.
+    items = list(reversed(dao_items.list_for_box(actor, box_id)))[:12]
 
     # Up to 3 small photo references for the multimodal prompt.  Read +
     # decrypt; mime is always image/jpeg post-phase-2 because every
@@ -2558,14 +2563,14 @@ def generate_box_art(
     new_name = f"art-{secrets.token_hex(8)}.jpg"
     _write_encrypted(tenant_id, new_name, image_bytes)
 
-    with db() as conn:
-        old = box["background_art"]
-        conn.execute(
-            "UPDATE boxes SET background_art = ? WHERE id = ?",
-            (new_name, box_id),
-        )
-        conn.commit()
-        if old and old != new_name:
+    try:
+        old = dao_boxes.set_background_art(actor, box_id, new_name)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if old and old != new_name:
+        with db() as conn:
             _delete_upload_if_orphan(conn, tenant_id, old)
 
     if _wants_json(request):
@@ -2583,19 +2588,15 @@ def clear_box_art(
 ):
     """Drop the generated background art for a box."""
     actor: Actor = request.state.actor
-    with db() as conn:
-        row = conn.execute(
-            "SELECT background_art, tenant_id FROM boxes WHERE id = ?", (box_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = row["tenant_id"] or actor.tenant_id
-        conn.execute("UPDATE boxes SET background_art = NULL WHERE id = ?", (box_id,))
-        conn.commit()
-        if row["background_art"]:
-            _delete_upload_if_orphan(conn, tenant_id, row["background_art"])
+    try:
+        old = dao_boxes.clear_background_art(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if old:
+        with db() as conn:
+            _delete_upload_if_orphan(conn, actor.tenant_id, old)
 
     if _wants_json(request):
         return {"ok": True, "box_id": box_id, "background_art": None}
@@ -2607,23 +2608,20 @@ def clear_box_art(
 @app.post("/boxes/{box_id}/delete")
 def delete_box(request: Request, box_id: int, confirm: str = Form(...)):
     actor: Actor = request.state.actor
-    with db() as conn:
-        box = conn.execute(
-            "SELECT name, tenant_id FROM boxes WHERE id = ?", (box_id,),
-        ).fetchone()
-        if not box:
-            raise HTTPException(404)
-        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        if confirm.strip() != box["name"]:
-            raise HTTPException(400, "Type the box name to confirm deletion")
-        tenant_id = box["tenant_id"] or actor.tenant_id
-        photos = [r["photo"] for r in conn.execute(
-            "SELECT photo FROM items WHERE box_id = ? AND photo IS NOT NULL", (box_id,)
-        ).fetchall()]
-        conn.execute("DELETE FROM boxes WHERE id = ?", (box_id,))
-        conn.commit()
-    for p in photos:
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    if confirm.strip() != box["name"]:
+        raise HTTPException(400, "Type the box name to confirm deletion")
+    try:
+        result = dao_boxes.delete(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    tenant_id = result["tenant_id"]
+    for p in result["photos"]:
         try:
             _tenant_file(tenant_id, p).unlink()
         except FileNotFoundError:
