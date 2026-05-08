@@ -15,12 +15,14 @@ from dao import Actor, ConflictError, ForbiddenError, NotFoundError
 from dao import boxes as dao_boxes
 from dao import floors as dao_floors
 from dao import ingest_jobs as dao_ingest_jobs
+from dao import invites as dao_invites
 from dao import items as dao_items
 from dao import locations as dao_locations
 from dao import pending_items as dao_pending
 from dao import rooms as dao_rooms
 from dao import tags as dao_tags
 from dao import tenants as dao_tenants
+from dao import usage as dao_usage
 
 load_dotenv()
 
@@ -170,25 +172,43 @@ _OPERATOR_EMAILS = frozenset(
 # circular dao→app import.  Imported at the top of this module.
 
 
+def _invite_token_in_path(path: str) -> str | None:
+    """Pull the token segment out of ``/invite/<token>`` and
+    ``/invite/<token>/accept``.  Returns None for any other path so
+    the middleware bypass only fires on the redemption surface — not
+    e.g. ``/api/invite/...`` or a future namespaced route."""
+    parts = path.strip("/").split("/")
+    if len(parts) >= 2 and parts[0] == "invite" and parts[1]:
+        # Reject /invite/ alone or query-shaped tails.
+        token = parts[1]
+        if token and all(c.isalnum() or c in "-_" for c in token):
+            return token
+    return None
+
+
 @app.middleware("http")
 async def current_actor(request: Request, call_next):
     email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
     is_operator = bool(email) and email in _OPERATOR_EMAILS
 
-    memberships: tuple[tuple[int, str], ...] = ()
-    if email:
-        with db() as conn:
-            rows = conn.execute(
-                "SELECT tenant_id, role FROM tenant_members "
-                "WHERE email = ? "
-                # joined_at is nullable until invites are accepted; sort
-                # accepted members first (NULL last) without relying on
-                # the NULLS LAST clause that older SQLite builds may
-                # lack.
-                "ORDER BY joined_at IS NULL, joined_at, tenant_id",
-                (email,),
-            ).fetchall()
-        memberships = tuple((r["tenant_id"], r["role"]) for r in rows)
+    memberships = dao_tenants.memberships_for_email(email) if email else ()
+
+    # Invite-bypass: a signed-in email with no current membership is
+    # still allowed onto /invite/<token> so they can land on the
+    # redemption page.  The redemption itself only succeeds if the
+    # token is valid + un-consumed (DAO enforces).  Spec § "Sign-up +
+    # onboarding" path #2 — "sign-in following an invite link".
+    if not memberships and not is_operator and email:
+        token = _invite_token_in_path(request.url.path)
+        if token and dao_invites.get_by_token(token) is not None:
+            request.state.actor = Actor(
+                email=email,
+                tenant_id=None,
+                role=None,
+                is_operator=False,
+                memberships=(),
+            )
+            return await call_next(request)
 
     if not memberships and not is_operator:
         return Response(
@@ -837,6 +857,11 @@ def save_photo_bytes(tenant_id: int, data: bytes, filename: str) -> str:
 
     Also writes the companion thumbnail in the same pass so the first grid
     view of a fresh upload doesn't have to lazy-generate it.
+
+    Records an upload usage event with the *post-encode* byte count.
+    The cap check above runs against the raw bytes, but billing /
+    storage cost is the encoded size that actually lands on disk —
+    use that so the meter reflects what's eating B2 quota.
     """
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Upload too large")
@@ -852,17 +877,20 @@ def save_photo_bytes(tenant_id: int, data: bytes, filename: str) -> str:
         name = f"{secrets.token_hex(8)}.jpg"
         out = _io.BytesIO()
         img.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-        _write_encrypted(tenant_id, name, out.getvalue())
+        encoded = out.getvalue()
+        _write_encrypted(tenant_id, name, encoded)
         # Pre-generate the thumb from the in-memory image — cheaper than
         # opening the file again, and covers the new-upload-then-immediately-
         # render case without paying the lazy-gen cost on the first request.
         _save_thumb_from_image(tenant_id, img, name)
+        dao_usage.record(tenant_id, "upload", "upload_bytes", units=len(encoded))
         return name
     except HTTPException:
         raise
     except Exception:
         name = f"{secrets.token_hex(8)}.jpg"
         _write_encrypted(tenant_id, name, data)
+        dao_usage.record(tenant_id, "upload", "upload_bytes", units=len(data))
         return name
 
 
@@ -1871,6 +1899,7 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     try:
         image_bytes = _bytes_for_vision(tenant_id, photo_name)
         detected = vision.detect_items(image_bytes, media_type="image/jpeg")
+        dao_usage.record(tenant_id, "ai", "gemini_detect")
         for item in detected:
             bbox = item.bbox or [None, None, None, None]
             dao_ingest_jobs.insert_pending_item(
@@ -2035,6 +2064,7 @@ def queue_match(request: Request, pending_id: int):
     boxes = dao_boxes.list_for_picker(actor)
 
     suggestion = vision.suggest_box(row["name"], row["description"] or "", boxes)
+    dao_usage.record(actor.tenant_id, "ai", "anthropic_match")
 
     try:
         dao_pending.update_suggestion(
@@ -2569,6 +2599,7 @@ def generate_box_art(
             box["name"], box["notes"] or "",
             items=items, item_photos=photo_refs,
         )
+        dao_usage.record(tenant_id, "ai", "gemini_art")
     except Exception as e:
         if _wants_json(request):
             raise HTTPException(502, f"Art generation failed: {e}")
@@ -3077,6 +3108,119 @@ def _referenced_uploads() -> set[tuple[int, str]]:
     for tid, name in list(refs):
         refs.add((tid, _thumb_path(tid, name).name))
     return refs
+
+
+# ── /usage — per-tenant members + invites + telemetry ─────────────
+#
+# Spec § "User-facing usage page".  Phase-5 + 9 surface: members
+# table, mint/revoke invite tokens, AI/upload counters.  The full
+# spec'd page also has a billing breakdown, GDPR data export,
+# backup links — those land in later phases (7, 8) where the
+# underlying machinery exists.
+
+
+@app.get("/usage", response_class=HTMLResponse)
+def usage_page(request: Request, invite_url: str = ""):
+    """Per-tenant usage + members surface.  Maintainers see the full
+    page; readonly members see the meters only (membership listing
+    too, since they're already in it).  ``invite_url`` lets the mint
+    POST round-trip the freshly-created link into the page so the
+    user can copy it without an email send."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None:
+        raise HTTPException(403, "No active tenant")
+    tenant = dao_tenants.get_tenant(actor, actor.tenant_id)
+    members = dao_tenants.list_members(actor, actor.tenant_id)
+    invites = []
+    if actor.role == "maintainer":
+        invites = dao_invites.list_for_tenant(actor)
+    summary = dao_usage.summary(actor)
+    return templates.TemplateResponse(
+        request, "usage.html",
+        {
+            "tenant": tenant,
+            "members": members,
+            "invites": invites,
+            "current_email": actor.email,
+            "current_role": actor.role,
+            "is_maintainer": actor.role == "maintainer",
+            "usage": summary,
+            "invite_url": invite_url,
+            "public_url": PUBLIC_URL,
+        },
+    )
+
+
+@app.post("/usage/invites")
+def create_invite(
+    request: Request,
+    email: str = Form(...),
+    role: str = Form("maintainer"),
+):
+    """Mint a new invite and round-trip the URL into the /usage page
+    so the maintainer can copy it.  No email send — the link goes
+    out-of-band (text, signal, paper, whatever)."""
+    actor: Actor = request.state.actor
+    try:
+        invite = dao_invites.create(actor, email=email, role=role)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    url = f"{base}/invite/{invite['token']}"
+    # Stash the URL on the redirect so the page can render the
+    # copy-this-link block right after the round-trip.
+    from urllib.parse import urlencode
+    return RedirectResponse(
+        f"/usage?{urlencode({'invite_url': url})}",
+        status_code=303,
+    )
+
+
+@app.post("/usage/invites/{token}/revoke")
+def revoke_invite(request: Request, token: str):
+    actor: Actor = request.state.actor
+    try:
+        dao_invites.revoke(actor, token)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse("/usage", status_code=303)
+
+
+@app.get("/invite/{token}", response_class=HTMLResponse)
+def invite_accept_page(request: Request, token: str):
+    """Landing page after the recipient clicks the share link.  Shows
+    tenant name, role, who invited, and a one-button accept.  Reuses
+    the 4-state model from the DAO: redeemable / consumed / expired /
+    unknown — copy differs per state so the recipient knows whether
+    to ask the inviter for a fresh link."""
+    actor: Actor = request.state.actor
+    invite = dao_invites.get_by_token(token)
+    return templates.TemplateResponse(
+        request, "invite.html",
+        {
+            "invite": invite,
+            "current_email": actor.email,
+            "token": token,
+        },
+    )
+
+
+@app.post("/invite/{token}/accept")
+def invite_accept(request: Request, token: str):
+    actor: Actor = request.state.actor
+    try:
+        result = dao_invites.redeem(token, actual_email=actor.email)
+    except NotFoundError:
+        raise HTTPException(404, "Invite is no longer valid")
+    except ForbiddenError as exc:
+        raise HTTPException(403, str(exc))
+    # Newly-joined member needs a fresh request so the middleware
+    # picks up the membership; redirect home.
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/maintenance", response_class=HTMLResponse)

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Invite") }} · Stash{% endblock %}
+{% block content %}
+
+<div class="card maintenance-card">
+  {% if not invite %}
+    {# Unknown token — neither expired nor consumed; just doesn't exist. #}
+    <div class="card-title">{{ _("Invite not found") }}</div>
+    <p>{{ _("This invite link is not valid. Ask the person who invited you to mint a fresh one.") }}</p>
+
+  {% elif invite.consumed %}
+    <div class="card-title">{{ _("Invite already used") }}</div>
+    <p>
+      {{ _("This invite was already accepted on") }} {{ invite.consumed_at[:10] }}.
+      {{ _("If you're the original recipient, you should already be a member —") }}
+      <a href="/">{{ _("try the home page") }}</a>.
+      {{ _("Otherwise ask for a fresh invite.") }}
+    </p>
+
+  {% elif invite.expired %}
+    <div class="card-title">{{ _("Invite expired") }}</div>
+    <p>{{ _("This invite expired on") }} {{ invite.expires_at[:10] }}.
+       {{ _("Ask the person who invited you to mint a fresh one.") }}</p>
+
+  {% else %}
+    <div class="card-title">{{ _("Join") }} {{ invite.tenant_name }}?</div>
+    <p>
+      <code>{{ invite.created_by_email }}</code>
+      {{ _("invited you to be a") }} <strong>{{ invite.role }}</strong>
+      {{ _("of their stash") }} <strong>{{ invite.tenant_name }}</strong>.
+    </p>
+
+    {% if not current_email %}
+      <p class="notice">
+        {{ _("You're not signed in. Sign in first, then revisit this link.") }}
+      </p>
+
+    {% else %}
+      <p class="text-sm text-muted">
+        {{ _("Signed in as") }} <code>{{ current_email }}</code>.
+        {% if invite.email != current_email %}
+          {{ _("Note: the invite was originally addressed to") }}
+          <code>{{ invite.email }}</code>.
+          {{ _("Accepting will bind the membership to your current email instead.") }}
+        {% endif %}
+      </p>
+      <form method="post" action="/invite/{{ token }}/accept">
+        <button type="submit" class="btn btn-primary btn-block">
+          {{ _("Accept invite + join") }} {{ invite.tenant_name }}
+        </button>
+      </form>
+    {% endif %}
+  {% endif %}
+</div>
+
+{% endblock %}
