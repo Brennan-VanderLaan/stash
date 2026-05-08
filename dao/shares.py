@@ -432,6 +432,79 @@ def fetch_box_items_for_recipient(actor: Actor, box_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def file_allowlist_for_actor(actor: Actor) -> set[str]:
+    """Filenames a share-only actor is allowed to fetch via
+    /uploads or /thumbs.  Computed fresh per request so a box
+    share that gains items after creation still covers the new
+    photos (cascade-on-add for files, mirroring the cascade on
+    role).
+
+    Each share contributes:
+    * Per-item shares — the item's ``photo`` and ``source_photo``
+      plus their ``_thumb.jpg`` companions.
+    * Per-box shares — every photo + source_photo + thumb of every
+      item *currently* in the box, plus the box's
+      ``background_art`` (so label backgrounds render in the
+      shared view).
+
+    The widening that previously let a recipient fetch any file in
+    a share-tenant directory by guessing names is gone — this set
+    is the only authoritative answer to "can this email read this
+    filename?" outside membership / operator paths.
+
+    Members of a tenant don't go through this path; their access
+    is bound by ``actor.memberships`` already."""
+    if not actor.shares:
+        return set()
+    allowed: set[str] = set()
+
+    def _add_with_thumb(name: str | None) -> None:
+        if not name:
+            return
+        allowed.add(name)
+        # The thumb companion follows ``<stem>_thumb.jpg`` per
+        # _save_thumb_from_image; keep both reachable.
+        from pathlib import Path
+        allowed.add(f"{Path(name).stem}_thumb.jpg")
+
+    with db() as conn:
+        for s in actor.shares:
+            tid = s["tenant_id"]
+            kind = s["target_kind"]
+            tid_v = s["target_id"]
+            if kind == "item":
+                row = conn.execute(
+                    "SELECT photo, source_photo FROM items "
+                    "WHERE id = ? AND tenant_id = ?",
+                    (tid_v, tid),
+                ).fetchone()
+                if row is not None:
+                    _add_with_thumb(row["photo"])
+                    _add_with_thumb(row["source_photo"])
+            elif kind == "box":
+                # Box's own art (label background).
+                box_row = conn.execute(
+                    "SELECT background_art FROM boxes "
+                    "WHERE id = ? AND tenant_id = ?",
+                    (tid_v, tid),
+                ).fetchone()
+                if box_row is not None:
+                    _add_with_thumb(box_row["background_art"])
+                # Plus every item currently in the box.  The
+                # "currently" pivot is what makes follows-on-move
+                # work for files: an item moving out of a shared
+                # box drops out of this set on the next request.
+                rows = conn.execute(
+                    "SELECT photo, source_photo FROM items "
+                    "WHERE box_id = ? AND tenant_id = ?",
+                    (tid_v, tid),
+                ).fetchall()
+                for r in rows:
+                    _add_with_thumb(r["photo"])
+                    _add_with_thumb(r["source_photo"])
+    return allowed
+
+
 def fetch_item_for_recipient(actor: Actor, item_id: int) -> dict | None:
     """The recipient view of a shared item.  Returns the item joined
     with its box + tenant for breadcrumb rendering, or None if the

@@ -369,6 +369,136 @@ def test_http_recipient_can_view_shared_box(tmp_path, monkeypatch):
         assert "/shared" in r.text  # Shared tab is in the nav.
 
 
+def test_share_recipient_file_allowlist_excludes_other_files(
+    tmp_path, monkeypatch,
+):
+    """A box-share recipient can only fetch files belonging to
+    items in *that* box, not any other file in T1's tenant
+    directory.  Closes the previously-noted widening regression."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    # Two boxes in T1: "Kitchen" (the existing one with item 1)
+    # and "Garage" (a brand-new box with its own item + photo).
+    # Share Kitchen with friend@example.com.  Friend must reach
+    # Kitchen's photos, NOT Garage's.
+    with app_mod.db() as conn:
+        conn.execute(
+            "UPDATE items SET photo='kitchen.jpg', source_photo='kitchen.jpg' "
+            "WHERE id = ?",
+            (ids["item_id"],),
+        )
+        cur = conn.execute(
+            "INSERT INTO boxes (name, location, notes, tenant_id) "
+            "VALUES ('Garage', 'B', '', ?)",
+            (ids["t1"],),
+        )
+        garage_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO items (box_id, name, photo, source_photo, tenant_id) "
+            "VALUES (?, 'Drill', 'garage.jpg', 'garage.jpg', ?)",
+            (garage_id, ids["t1"]),
+        )
+        conn.commit()
+    # Drop ciphertext-shaped placeholders into the tenant's upload
+    # dir for both files so the existence check inside
+    # _resolve_serve_tenant has something to find.
+    upload_dir = Path(tmp_path / "uploads" / str(ids["t1"]))
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / "kitchen.jpg").write_bytes(b"k")
+    (upload_dir / "garage.jpg").write_bytes(b"g")
+
+    from dao import shares as dao_shares
+    owner = _actor("owner@t1.example", tenant_id=ids["t1"],
+                   role="maintainer",
+                   memberships=((ids["t1"], "maintainer"),))
+    dao_shares.create(owner, target_kind="box",
+                      target_id=ids["box_id"],
+                      recipient_email="friend@example.com")
+
+    rec = _actor("friend@example.com",
+                 shares=dao_shares.shares_for_email("friend@example.com"))
+    allowed = dao_shares.file_allowlist_for_actor(rec)
+    assert "kitchen.jpg" in allowed
+    assert "garage.jpg" not in allowed
+    # Thumb companion of the allowed file is in the set too.
+    assert "kitchen_thumb.jpg" in allowed
+
+
+def test_share_box_allowlist_picks_up_new_items(tmp_path, monkeypatch):
+    """A box share should grant file access to items added to the
+    box AFTER the share was minted (cascade-on-add applies to
+    files, not just role)."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    with app_mod.db() as conn:
+        conn.execute(
+            "UPDATE items SET photo='original.jpg', source_photo='original.jpg' "
+            "WHERE id = ?",
+            (ids["item_id"],),
+        )
+        conn.commit()
+    from dao import shares as dao_shares
+    owner = _actor("owner@t1.example", tenant_id=ids["t1"],
+                   role="maintainer",
+                   memberships=((ids["t1"], "maintainer"),))
+    dao_shares.create(owner, target_kind="box",
+                      target_id=ids["box_id"],
+                      recipient_email="friend@example.com")
+    # Add a new item to the shared box AFTER the share exists.
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO items (box_id, name, photo, source_photo, tenant_id) "
+            "VALUES (?, 'Late arrival', 'fresh.jpg', 'fresh.jpg', ?)",
+            (ids["box_id"], ids["t1"]),
+        )
+        conn.commit()
+    rec = _actor("friend@example.com",
+                 shares=dao_shares.shares_for_email("friend@example.com"))
+    allowed = dao_shares.file_allowlist_for_actor(rec)
+    assert "original.jpg" in allowed
+    assert "fresh.jpg" in allowed
+
+
+def test_share_box_allowlist_drops_files_after_item_moves_out(
+    tmp_path, monkeypatch,
+):
+    """Per follows-on-move: when an item moves out of a shared
+    box, its file drops out of the allow-list on the next
+    request.  Mirrors the role-side rule from
+    test_item_share_follows_move_box_share_does_not."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    with app_mod.db() as conn:
+        conn.execute(
+            "UPDATE items SET photo='movable.jpg', source_photo='movable.jpg' "
+            "WHERE id = ?",
+            (ids["item_id"],),
+        )
+        cur = conn.execute(
+            "INSERT INTO boxes (name, location, notes, tenant_id) "
+            "VALUES ('Other', 'B', '', ?)",
+            (ids["t1"],),
+        )
+        other_box = cur.lastrowid
+        conn.commit()
+    from dao import shares as dao_shares
+    owner = _actor("owner@t1.example", tenant_id=ids["t1"],
+                   role="maintainer",
+                   memberships=((ids["t1"], "maintainer"),))
+    dao_shares.create(owner, target_kind="box",
+                      target_id=ids["box_id"],
+                      recipient_email="friend@example.com")
+    rec = _actor("friend@example.com",
+                 shares=dao_shares.shares_for_email("friend@example.com"))
+    assert "movable.jpg" in dao_shares.file_allowlist_for_actor(rec)
+    # Move the item to a different box.
+    with app_mod.db() as conn:
+        conn.execute(
+            "UPDATE items SET box_id = ? WHERE id = ?",
+            (other_box, ids["item_id"]),
+        )
+        conn.commit()
+    # Recompute — now the file is gone from the allow-list.
+    assert "movable.jpg" not in dao_shares.file_allowlist_for_actor(rec)
+
+
 def test_http_revoke_cuts_access(tmp_path, monkeypatch):
     app_mod, ids = _bootstrap(tmp_path, monkeypatch)
     owner_h = {"X-Forwarded-Email": "owner@t1.example"}

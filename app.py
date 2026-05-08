@@ -1436,17 +1436,25 @@ def _delete_thumb_if_exists(tenant_id: int, name: str) -> None:
 def _resolve_serve_tenant(request: Request, name: str) -> int | None:
     """Pick the tenant whose directory holds `name` for this actor.
 
-    Most requests resolve cleanly to ``actor.tenant_id`` — the file is
-    in the active tenant's directory.  Operators with no membership,
-    multi-tenant members, and share recipients need fallbacks: walk
-    every tenant the actor *might* see and pick the first that owns
-    the file.  See spec § "Sharing model".
+    Decision order (each layer has a different access basis):
 
-    Caveat: this widens read access to "any file in a tenant the
-    actor has any share-link into", not just the photos referenced
-    by the shared target.  In practice the URL space stays bound by
-    what the rendered pages embed; tightening to a per-target file
-    allow-list is deferred future work."""
+    1. **Active membership** — file lives in the actor's own
+       tenant directory.
+    2. **Multi-tenant membership** — file lives in another tenant
+       the actor is a member of (the switcher in roadmap step 15
+       chooses one as active; the rest still resolve here).
+    3. **Object share** — file is one of the photos / thumbs / box
+       art reachable via an active share pointed at the actor's
+       email.  Bound by :func:`dao.shares.file_allowlist_for_actor`,
+       which recomputes the set per request so a box-share that
+       gains items after creation covers the new photos.
+
+    A share-only recipient *cannot* fetch arbitrary files from a
+    share-tenant's directory by guessing names — only the
+    allow-listed set resolves.  Operators with no membership get
+    None by design (spec § "Operator surface" — no auto data
+    access).
+    """
     actor: Actor = request.state.actor
     if actor.tenant_id is not None:
         # Fast path: file lives in the active tenant's directory.
@@ -1457,13 +1465,21 @@ def _resolve_serve_tenant(request: Request, name: str) -> int | None:
         for tid, _role in actor.memberships:
             if tid != actor.tenant_id and _tenant_file(tid, name).exists():
                 return tid
-    # Share recipients with no active membership (or with one that
-    # didn't match above) — walk the unique tenant_ids carried on
-    # actor.shares.
-    share_tenants = {s["tenant_id"] for s in actor.shares}
-    for tid in share_tenants:
-        if _tenant_file(tid, name).exists():
-            return tid
+    # Share recipients: only files in the share allow-list are
+    # reachable, regardless of which tenant directory holds them.
+    # Compute once per request — the lookup hits the DB but is
+    # bounded by the actor's share count (typically <10).
+    if actor.shares:
+        # Cache on request.state so a page that fetches a dozen
+        # thumbs only pays for the lookup once.
+        cached = getattr(request.state, "_share_allowlist", None)
+        if cached is None:
+            cached = dao_shares.file_allowlist_for_actor(actor)
+            request.state._share_allowlist = cached
+        if name in cached:
+            for s in actor.shares:
+                if _tenant_file(s["tenant_id"], name).exists():
+                    return s["tenant_id"]
     if actor.is_operator:
         # Operators have no automatic data access through /admin (see
         # spec § "Operator surface"), but if a tenant maintainer has
