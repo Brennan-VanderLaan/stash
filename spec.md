@@ -835,13 +835,18 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 + 16 shipped + phase 11
-shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
-invites, per-tenant backup download, manual B2 upload from /admin,
-telemetry recording, and operator-dashboard bootstrap respectively).
-Out-of-order work is all bootstrap-the-move adjacent (or
-MCP-adjacent for phase 11) — moved up to unblock immediate use.
-See per-phase `[shipped]` / `[partial]` markers below.
+**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 shipped;
+phases 5, 7, 8, 9, 12 partially shipped (link-share invites,
+per-tenant backup download, manual B2 upload from /admin, telemetry
+recording, and operator-dashboard bootstrap respectively).
+Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
+moved up to unblock immediate use.  Pre-MCP security audit (in
+``docs/`` lineage via commit history) drove a pass that closes
+the audit's P0/P1 list: per-share file allow-list, healthz bypass,
+bearer auto-revoke on HTTP/URL-leak, operator suspend/resume,
+SameSite=strict, app-level security headers, and the comprehensive
+auth-coverage test suite (69 cases).  See per-phase `[shipped]` /
+`[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -946,10 +951,40 @@ See per-phase `[shipped]` / `[partial]` markers below.
      (backup_bytes).  `/usage` renders three meters + AI breakdown.
    * **[deferred]** Monthly cost rollup view, sparklines.
 
-10. **Quotas + enforcement + anti-abuse.** Soft caps in
-    router-prefix middleware. Banners on usage page. 429s on gated
-    surfaces. Tenant-creation throttle + email-domain blocklist +
-    first-interactive-session AI gate + inactivity lifecycle.
+10. **[shipped]** **Quotas + enforcement + anti-abuse.**
+    * `dao/quotas.py` — three caps per tenant
+      (``monthly_ai_calls``, ``monthly_upload_bytes``,
+      ``daily_ai_cost_micros``) with plan defaults (free vs pro)
+      + per-tenant overrides via the existing ``quotas`` table
+      (the daily-cost field rides in the JSON blob since it
+      arrived after the schema).  ``check_or_raise`` is the
+      pre-flight gate; route layer translates ``QuotaExceeded``
+      to 429 with cap + reset-window in the body.
+    * Enforced at every AI call site (``/ingest``,
+      ``queue_match``, ``generate_box_art``) and the upload
+      path (``save_photo_bytes``).  ``daily_ai_cost_micros`` is
+      the runaway-MCP guard — Gemini-art's high per-call cost
+      hits this cap fast even when the monthly call count is
+      well under.
+    * Soft warning band (80–99%): ``X-Quota-Warning`` response
+      header on every non-noisy response (skip thumbs / uploads
+      / static).  ``/usage`` meters render used/cap/% with a
+      banner in the warning + exceeded bands.
+    * Tenant-creation throttle: per-IP cap on
+      ``POST /admin/tenants`` (default 5/hour via
+      ``STASH_TENANT_CREATION_PER_HOUR``).  Counts against
+      ``audit_log.tenant.create`` rows tagged with the source
+      IP; missing IPs share an ``unknown`` bucket so a stripped
+      X-Forwarded-For doesn't bypass.
+    * Operator override editor: per-tenant inline form on
+      ``/admin`` lets an operator pin custom caps.
+      ``-1`` clears an override (revert to plan default).
+      Audit-logs ``quota.override``.
+    * **[deferred]** Email-domain blocklist (config plumbing
+      lives in ``deploy/.env.example`` since phase 1, no
+      enforcement yet); first-interactive-session AI gate
+      (waits for self-serve onboarding); inactivity lifecycle
+      (lives with phase 14).
 
 11. **[shipped]** **API tokens.** `/api/v1` router with bearer
     auth. Token mint / revoke surface in `/usage`.
