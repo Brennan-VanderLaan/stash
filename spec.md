@@ -835,8 +835,8 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 shipped; phases 5, 7, 8,
-9, 12 partially shipped (link-share invites, per-tenant backup
+**Status (2026-05-08).** Phases 1–4 + 6 + 16 shipped; phases 5, 7,
+8, 9, 12 partially shipped (link-share invites, per-tenant backup
 download, manual B2 upload from /admin, telemetry recording, and
 operator-dashboard bootstrap respectively).  Out-of-order work is
 all bootstrap-the-move adjacent — moved up to support an upcoming
@@ -985,9 +985,25 @@ move.  See per-phase `[shipped]` / `[partial]` markers below.
     link, sign out. Active tenant marked, others one click away.
     Stays consistent across pages.
 
-16. **Logging pass.** Layered `LoggerAdapter`s, request-id
-    middleware, structured JSON output. Backfill `audit_log` writes
-    on key actions.
+16. **[shipped]** **Logging pass.** Layered `LoggerAdapter`s,
+    request-id middleware, structured JSON output.  Backfill
+    `audit_log` writes on key actions.
+    * `obs.py` — per-request contextvars (`request_id`,
+      `actor_email`, `tenant_id`, `surface`), `get_logger(layer)`
+      that merges them into every record's `extra`, JSON +
+      pretty formatters toggled by `STASH_LOG_FORMAT` (default
+      pretty).  `STASH_LOG_LEVEL` for verbosity.
+    * `current_actor` middleware stamps a fresh request_id (or
+      trusts an inbound `X-Request-Id` capped at 64 chars), binds
+      the actor + tenant context, emits a per-request
+      `METHOD path -> status in Nms` line, sets `X-Request-Id`
+      on the response so a log-grep workflow correlates without
+      devtools digging.
+    * Audit-log backfill: every box / item / location / floor /
+      room / share / invite / backup / tenant mutation writes an
+      `audit_log` row inside the same transaction (via the
+      canonical `obs.write_audit`).  Rolled-back mutations never
+      leave orphan audit entries.
 
 17. **Second locale.** Pick a target language (likely Spanish or
     French based on demand), populate `locale/<lang>/messages.po`,
