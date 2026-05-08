@@ -1867,53 +1867,34 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
             conn.commit()
 
 
-def _ingest_jobs(conn):
-    return conn.execute(
-        "SELECT * FROM ingest_jobs WHERE status != 'done' "
-        "ORDER BY created_at DESC LIMIT 50"
-    ).fetchall()
-
-
-def _ingest_fingerprint(jobs) -> str:
-    import hashlib
-    payload = "|".join(
-        f"{j['id']}:{j['status']}:{j['item_count']}:{j['error']}" for j in jobs
-    )
-    return hashlib.sha1(payload.encode()).hexdigest()
-
-
 @app.get("/ingest", response_class=HTMLResponse)
 def ingest_form(request: Request):
-    with db() as conn:
-        jobs = _ingest_jobs(conn)
+    actor: Actor = request.state.actor
+    jobs = dao_ingest_jobs.list_active(actor)
+    fp = dao_ingest_jobs.fingerprint(actor)
     return templates.TemplateResponse(
         request, "ingest.html",
-        {"jobs": jobs, "fingerprint": _ingest_fingerprint(jobs)},
+        {"jobs": jobs, "fingerprint": fp["fingerprint"]},
     )
 
 
 @app.get("/ingest/state")
-def ingest_state():
+def ingest_state(request: Request):
     """Lightweight poll target so the ingest page can update its job list
     without a full meta-refresh — that one was nuking in-progress file
     picker selections and cancelling uploads mid-stream."""
-    with db() as conn:
-        jobs = _ingest_jobs(conn)
-    has_active = any(j["status"] in ("pending", "processing") for j in jobs)
-    return {
-        "fingerprint": _ingest_fingerprint(jobs),
-        "has_active": has_active,
-    }
+    actor: Actor = request.state.actor
+    return dao_ingest_jobs.fingerprint(actor)
 
 
 @app.get("/ingest/jobs", response_class=HTMLResponse)
 def ingest_jobs_fragment(request: Request):
     """HTML fragment of just the jobs list — the ingest page swaps this in
     when its fingerprint changes."""
-    with db() as conn:
-        jobs = _ingest_jobs(conn)
+    actor: Actor = request.state.actor
     return templates.TemplateResponse(
-        request, "_ingest_jobs.html", {"jobs": jobs},
+        request, "_ingest_jobs.html",
+        {"jobs": dao_ingest_jobs.list_active(actor)},
     )
 
 
@@ -1931,15 +1912,10 @@ async def ingest(
     for photo in valid:
         image_bytes = await photo.read()
         photo_name = save_photo_bytes(actor.tenant_id, image_bytes, photo.filename)
-
-        with db() as conn:
-            cur = conn.execute(
-                "INSERT INTO ingest_jobs (photo, status, tenant_id) VALUES (?, 'pending', ?)",
-                (photo_name, actor.tenant_id),
-            )
-            job_id = cur.lastrowid
-            conn.commit()
-
+        try:
+            job_id = dao_ingest_jobs.create(actor, photo_name)
+        except ForbiddenError:
+            raise HTTPException(403)
         background_tasks.add_task(process_ingest_job, job_id, photo_name, actor.tenant_id)
 
     return RedirectResponse("/ingest", status_code=303)
@@ -1948,21 +1924,13 @@ async def ingest(
 @app.post("/ingest/{job_id}/retry")
 def ingest_retry(request: Request, background_tasks: BackgroundTasks, job_id: int):
     actor: Actor = request.state.actor
-    with db() as conn:
-        row = conn.execute(
-            "SELECT photo, tenant_id FROM ingest_jobs WHERE id = ? AND status = 'failed'",
-            (job_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, "Job not found or not failed")
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        conn.execute(
-            "UPDATE ingest_jobs SET status = 'pending', error = NULL, "
-            "completed_at = NULL WHERE id = ?",
-            (job_id,),
-        )
-        conn.commit()
+    try:
+        row = dao_ingest_jobs.get_for_retry(actor, job_id)
+    except NotFoundError:
+        raise HTTPException(404, "Job not found or not failed")
+    except ForbiddenError:
+        raise HTTPException(403)
+    dao_ingest_jobs.reset_to_pending(actor, job_id)
     background_tasks.add_task(
         process_ingest_job, job_id, row["photo"], row["tenant_id"] or actor.tenant_id,
     )
@@ -1970,13 +1938,14 @@ def ingest_retry(request: Request, background_tasks: BackgroundTasks, job_id: in
 
 
 @app.post("/ingest/{job_id}/dismiss")
-def ingest_dismiss(job_id: int):
-    with db() as conn:
-        conn.execute(
-            "DELETE FROM ingest_jobs WHERE id = ? AND status IN ('failed', 'done')",
-            (job_id,),
-        )
-        conn.commit()
+def ingest_dismiss(request: Request, job_id: int):
+    actor: Actor = request.state.actor
+    try:
+        dao_ingest_jobs.dismiss(actor, job_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse("/ingest", status_code=303)
 
 
@@ -2144,18 +2113,15 @@ def queue_state(request: Request):
 @app.post("/queue/{pending_id}/delete")
 def queue_delete(request: Request, pending_id: int):
     actor: Actor = request.state.actor
-    with db() as conn:
-        row = conn.execute(
-            "SELECT photo, tenant_id FROM pending_items WHERE id = ?", (pending_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = row["tenant_id"] or actor.tenant_id
-        conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
-        conn.commit()
-        _delete_upload_if_orphan(conn, tenant_id, row["photo"])
+    try:
+        result = dao_pending.delete(actor, pending_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if result["photo"]:
+        with db() as conn:
+            _delete_upload_if_orphan(conn, actor.tenant_id, result["photo"])
     return RedirectResponse("/queue", status_code=303)
 
 
