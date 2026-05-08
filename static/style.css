@@ -96,7 +96,8 @@ header h1 a { color: var(--accent); text-decoration: none; }
   padding: 0.4rem 0 calc(0.4rem + var(--safe-bottom));
   z-index: 100;
 }
-.tab-bar a {
+.tab-bar a,
+.tab-bar button.tab-bar-more {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -108,10 +109,98 @@ header h1 a { color: var(--accent); text-decoration: none; }
   min-width: 48px;
   min-height: 44px;
   justify-content: center;
+  /* Reset button-specific browser defaults so the More tab
+     visually matches the <a> tabs around it. */
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 .tab-bar a.active { color: var(--accent); }
-.tab-bar a:hover { color: var(--accent); }
+.tab-bar a:hover, .tab-bar button.tab-bar-more:hover { color: var(--accent); }
+.tab-bar button.tab-bar-more[aria-expanded="true"] { color: var(--accent); }
 .tab-icon { font-size: 1.3rem; line-height: 1; }
+
+/* === "More" bottom-sheet drawer (mobile secondary nav) ===
+   Hidden by default.  Slides up from the bottom when the More
+   tab is tapped; backdrop dims the rest of the screen and is
+   itself a close affordance.  Auto-hidden on >=640px since the
+   header-nav exposes the full set there. */
+.more-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  visibility: hidden;
+}
+.more-sheet.is-open {
+  pointer-events: auto;
+  visibility: visible;
+}
+.more-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.more-sheet.is-open .more-sheet-backdrop { opacity: 1; }
+.more-sheet-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  /* Push content above the tab-bar + safe-area inset so a
+     tapped link is never under the fingerprint of the iPhone
+     home-indicator strip. */
+  padding: 0.5rem 0.75rem calc(0.75rem + var(--safe-bottom));
+  transform: translateY(100%);
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.more-sheet.is-open .more-sheet-panel { transform: translateY(0); }
+.more-sheet-handle {
+  width: 40px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 0.25rem auto 0.5rem;
+}
+.more-sheet-panel a,
+.more-sheet-panel button.more-sheet-close {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 0.5rem;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 1rem;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.more-sheet-panel a:last-of-type { border-bottom: 1px solid var(--border); }
+.more-sheet-panel a:hover { color: var(--accent); }
+.more-sheet-panel a .tab-icon { font-size: 1.25rem; }
+.more-sheet-panel button.more-sheet-close {
+  justify-content: center;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  border-bottom: 0;
+}
+@media (min-width: 640px) {
+  .more-sheet, .tab-bar button.tab-bar-more { display: none !important; }
+}
 
 /* === Main Content === */
 main {
@@ -1293,19 +1382,85 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 
 .label-card-thumb {
   position: relative;
-  width: 88px;
-  aspect-ratio: 8 / 2.5;
   border-radius: var(--radius-sm);
   background: white;
   overflow: hidden;
   border: 1px solid var(--border);
   display: block;
 }
+.label-card-thumb-landscape {
+  width: 96px;
+  aspect-ratio: 4 / 2;
+}
+.label-card-thumb-portrait {
+  width: 48px;
+  aspect-ratio: 2 / 4;
+}
 .label-card-thumb img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
+}
+
+/* Avery sheet-format picker — sits above the grid card. */
+.label-format-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.label-format-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+  max-width: 380px;
+}
+.label-format-label select {
+  font-size: 0.92rem;
+}
+
+/* Per-card landscape/portrait pill toggle. */
+.label-orient-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel);
+}
+.label-orient-segment {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0.25rem 0.45rem;
+  min-width: 30px;
+  font-family: inherit;
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1;
+}
+.label-orient-segment:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+.label-orient-segment.is-active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.label-orient-segment:hover:not(.is-active) {
+  color: var(--accent);
+}
+.label-orient-label {
+  font-weight: 600;
+  font-size: 0.7rem;
 }
 .label-card-meta { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .label-card-name {

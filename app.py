@@ -1004,6 +1004,16 @@ def migrate_db():
         # Per-box color override. Falls back to the room color when null,
         # so boxes can choose to break out from their room's hue.
         _add_column_if_missing(conn, "boxes", "color", "TEXT")
+        # Per-box label orientation (Avery shipping-label pivot).
+        # ``landscape`` = QR + text read left-to-right when the
+        # label sits with its long axis horizontal.  ``portrait``
+        # rotates the content 90° within the same physical cell
+        # for tall narrow box sides.  Default landscape — matches
+        # how 5523 sheets feed through a printer.
+        _add_column_if_missing(
+            conn, "boxes", "label_orientation",
+            "TEXT NOT NULL DEFAULT 'landscape'",
+        )
         # Token-revocation hardening (phase 11+).  Reason is a short
         # tag; suspended_at is a separate temporal field so an
         # operator can pause-and-resume without losing the original
@@ -3036,14 +3046,20 @@ def _attach_art_bytes(box_dict: dict) -> dict:
 
 @app.get("/boxes/{box_id}/label.svg")
 def box_label_svg(request: Request, box_id: int):
+    """Single-cell label SVG.  Respects the box's persisted
+    ``label_orientation`` and the format query param so the
+    /labels grid thumbnails match the print preview."""
     actor: Actor = request.state.actor
     try:
         box = dao_boxes.get_by_id(actor, box_id)
     except NotFoundError:
         raise HTTPException(404)
+    fmt = _resolve_label_format(request)
+    orientation = box.get("label_orientation") or "landscape"
     svg = labels.render_label_svg(
         box["id"], box["name"], box["notes"] or "", PUBLIC_URL,
         background_art=_box_art_bytes(box),
+        fmt=fmt, orientation=orientation,
     )
     return Response(
         content=svg,
@@ -3070,9 +3086,22 @@ def _selected_boxes(conn, actor: Actor, box_ids_raw: list[str]) -> list:
     ).fetchall()
 
 
+def _resolve_label_format(request: Request) -> labels.AveryFormat:
+    """Pull ``?format=…`` off the query string and resolve via
+    the registry; falls back to the default if missing or
+    unknown.  Used by every label route so the format choice is
+    honoured uniformly."""
+    return labels.get_format(request.query_params.get("format"))
+
+
 @app.get("/labels", response_class=HTMLResponse)
 def labels_page(request: Request):
+    """Per-tenant label-print surface.  Avery shipping-label
+    pivot — drop the PDF in the printer, hit print, done.  The
+    Cricut SVG round-trip is gone; we target Avery 5523 / 5160 /
+    5164 directly."""
     actor: Actor = request.state.actor
+    fmt = _resolve_label_format(request)
     with db() as conn:
         boxes = conn.execute(
             "SELECT * FROM boxes WHERE tenant_id = ? ORDER BY name",
@@ -3081,70 +3110,95 @@ def labels_page(request: Request):
     return templates.TemplateResponse(
         request, "labels.html",
         {
-            "boxes": boxes,
-            "labels_per_page": labels.LABELS_PER_PAGE,
+            "boxes": [dict(b) for b in boxes],
+            "fmt": fmt,
+            "all_formats": list(labels.AVERY_FORMATS.values()),
+            "labels_per_page": fmt.labels_per_page,
             "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
         },
     )
 
 
-@app.get("/labels/sheet.svg")
-def labels_sheet(request: Request):
+@app.post("/boxes/{box_id}/label-orientation")
+def set_box_label_orientation(
+    request: Request,
+    box_id: int,
+    orientation: str = Form(...),
+):
+    """Persist a box's label orientation.  Called via fetch from
+    the /labels page when the user toggles the L/P pill.  Returns
+    JSON for the AJAX path; falls back to a redirect for the
+    no-JS path."""
     actor: Actor = request.state.actor
-    box_ids_raw = request.query_params.getlist("box_ids")
-    with db() as conn:
-        boxes = _selected_boxes(conn, actor, box_ids_raw)
-    payload = [_attach_art_bytes(dict(b)) for b in boxes]
-    svg = labels.render_sheet_svg(payload, PUBLIC_URL)
-    return Response(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={"Content-Disposition": 'attachment; filename="stash-labels.svg"'},
+    try:
+        dao_boxes.set_label_orientation(actor, box_id, orientation)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "box_id": box_id, "orientation": orientation}
+    return RedirectResponse(
+        request.headers.get("referer") or "/labels", status_code=303,
     )
 
 
 @app.get("/labels/sheet.pdf")
 def labels_sheet_pdf(request: Request):
-    """Multi-page vector PDF — fits Avery label sheets directly and is the
-    Cricut/print-ready artifact. Each sheet is its own page."""
+    """Multi-page vector PDF — one Avery sheet per page.
+    *Primary* output path: drop the Avery sheet in the printer,
+    open the PDF, hit print.  Sharp because QR + text are vector,
+    not rasterised."""
     actor: Actor = request.state.actor
+    fmt = _resolve_label_format(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = _selected_boxes(conn, actor, box_ids_raw)
     payload = [_attach_art_bytes(dict(b)) for b in boxes]
     try:
-        pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL)
+        pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL, fmt=fmt)
     except ImportError:
-        # cairosvg + pypdf aren't installed in this environment (e.g. local
-        # dev without the deps yet). Fall back to a clear error rather than
-        # a 500.
         raise HTTPException(
             501, "PDF export requires cairosvg + pypdf — install them or "
-                 "use the SVG / Print buttons.",
+                 "use the Print button instead.",
         )
+    filename = f"stash-labels-{fmt.sku}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": 'attachment; filename="stash-labels.pdf"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )
 
 
 @app.get("/labels/print", response_class=HTMLResponse)
 def labels_print(request: Request):
-    """Browser-printable preview of all selected labels, paginated via CSS so
-    Cmd/Ctrl+P produces real multi-page output. Single-sheet SVGs get wrapped
-    in page-break-after divs — no PDF library needed for clean printing."""
+    """Browser-printable preview, paginated via CSS so Cmd/Ctrl+P
+    produces real multi-page output.  No PDF dep needed.  Each
+    sheet sits in its own page-break div so a single Print
+    dialog covers the whole batch."""
     actor: Actor = request.state.actor
+    fmt = _resolve_label_format(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = [_attach_art_bytes(dict(b)) for b in _selected_boxes(conn, actor, box_ids_raw)]
+        boxes = [
+            _attach_art_bytes(dict(b))
+            for b in _selected_boxes(conn, actor, box_ids_raw)
+        ]
     pages = []
-    for chunk_start in range(0, max(len(boxes), 1), labels.LABELS_PER_PAGE):
-        chunk = boxes[chunk_start:chunk_start + labels.LABELS_PER_PAGE]
-        pages.append(labels.render_single_sheet_svg(chunk, PUBLIC_URL))
+    for chunk_start in range(0, max(len(boxes), 1), fmt.labels_per_page):
+        chunk = boxes[chunk_start:chunk_start + fmt.labels_per_page]
+        pages.append(labels.render_single_sheet_svg(chunk, PUBLIC_URL, fmt=fmt))
     return templates.TemplateResponse(
         request, "labels_print.html",
-        {"sheet_svgs": pages, "label_count": len(boxes)},
+        {
+            "sheet_svgs": pages,
+            "label_count": len(boxes),
+            "fmt": fmt,
+        },
     )
 
 

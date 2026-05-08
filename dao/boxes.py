@@ -303,6 +303,40 @@ def delete(actor: Actor, box_id: int) -> dict:
     return {"name": box["name"], "tenant_id": box["tenant_id"], "photos": photos}
 
 
+def set_label_orientation(
+    actor: Actor, box_id: int, orientation: str,
+) -> None:
+    """Update the box's printed-label orientation (``landscape``
+    or ``portrait``).  Maintainer only.  Persisted on the box so
+    the next /labels render picks up the choice automatically."""
+    if orientation not in ("landscape", "portrait"):
+        raise ValueError(
+            f"orientation must be 'landscape' or 'portrait', "
+            f"got {orientation!r}",
+        )
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"box {box_id}")
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE boxes SET label_orientation = ?, "
+            "  updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND tenant_id = ?",
+            (orientation, box_id, actor.tenant_id),
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"box {box_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.label_orientation",
+            target_kind="box", target_id=box_id,
+            metadata={"orientation": orientation},
+        )
+        conn.commit()
+    _log.info("box.label_orientation id=%s orientation=%s",
+              box_id, orientation)
+
+
 def set_background_art(actor: Actor, box_id: int, art_filename: str) -> str | None:
     """Update boxes.background_art for the box.  Returns the previous
     filename so the caller can clean up the old on-disk blob."""

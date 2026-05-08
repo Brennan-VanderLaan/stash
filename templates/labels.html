@@ -5,25 +5,55 @@
 <div class="card">
   <div class="card-title card-title-tight">Print labels</div>
   <p class="text-sm text-muted">
-    Click any label to preview at full size. Toggle the checkbox to include or exclude it from the print sheet.
-    {% if art_enabled %}Generate a fun illustrated background for any box with Nano Banana 2.{% endif %}
+    Pick an Avery sheet, choose which boxes to print, and tap
+    <strong>Print labels</strong> or <strong>PDF</strong>.  Drop
+    the Avery sheet in your printer, hit print, done.  No Cricut.
+    {% if art_enabled %}
+      <br>Generate an illustrated background for any box with the
+      🎨 button.
+    {% endif %}
   </p>
+
+  <form id="format-form" method="get" action="/labels"
+        class="label-format-form">
+    <label class="label-format-label">
+      Sheet format
+      <select name="format" id="format-select">
+        {% for f in all_formats %}
+          <option value="{{ f.sku }}" {% if f.sku == fmt.sku %}selected{% endif %}>
+            Avery {{ f.sku }} — {{ f.description }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <noscript>
+      <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+    </noscript>
+  </form>
 </div>
 
 {% if boxes %}
-<form id="labels-form" action="/labels/print" method="get" data-art-enabled="{{ '1' if art_enabled else '0' }}">
+<form id="labels-form" action="/labels/print" method="get"
+      data-art-enabled="{{ '1' if art_enabled else '0' }}"
+      data-format="{{ fmt.sku }}">
+  <input type="hidden" name="format" value="{{ fmt.sku }}" id="hidden-format">
   <div class="card label-grid-card">
     <div class="label-grid">
       {% for b in boxes %}
-      <div class="label-card" data-box-id="{{ b.id }}" data-box-name="{{ b.name }}"
-           data-box-notes="{{ b.notes or '' }}" data-has-art="{{ '1' if b.background_art else '0' }}">
-        <input type="checkbox" name="box_ids" value="{{ b.id }}" id="lc-{{ b.id }}"
-               class="label-card-select" checked aria-label="Include {{ b.name }} on print sheet">
+      <div class="label-card" data-box-id="{{ b.id }}"
+           data-box-name="{{ b.name }}"
+           data-box-notes="{{ b.notes or '' }}"
+           data-has-art="{{ '1' if b.background_art else '0' }}"
+           data-orientation="{{ b.label_orientation or 'landscape' }}">
+        <input type="checkbox" name="box_ids" value="{{ b.id }}"
+               id="lc-{{ b.id }}" class="label-card-select" checked
+               aria-label="Include {{ b.name }} on print sheet">
         <label class="label-card-checkbox-affordance" for="lc-{{ b.id }}"
                aria-hidden="true" tabindex="-1"></label>
         <button type="button" class="label-card-trigger" data-open-preview>
-          <span class="label-card-thumb">
-            <img src="/boxes/{{ b.id }}/label.svg" alt="" loading="lazy" data-thumb>
+          <span class="label-card-thumb label-card-thumb-{{ b.label_orientation or 'landscape' }}">
+            <img src="/boxes/{{ b.id }}/label.svg?format={{ fmt.sku }}"
+                 alt="" loading="lazy" data-thumb>
           </span>
           <span class="label-card-meta">
             <span class="label-card-name">{{ b.name }}</span>
@@ -32,19 +62,37 @@
           </span>
         </button>
         <div class="label-card-actions">
+          {# Orientation toggle — pill with two segments.  Tap to
+             switch; persists via fetch to /boxes/<id>/label-orientation. #}
+          <div class="label-orient-toggle" role="group"
+               aria-label="Label orientation">
+            <button type="button" data-orient="landscape"
+                    class="label-orient-segment {% if (b.label_orientation or 'landscape') == 'landscape' %}is-active{% endif %}"
+                    title="Landscape (long side reads horizontally)">
+              <span aria-hidden="true">▭</span>
+              <span class="label-orient-label">L</span>
+            </button>
+            <button type="button" data-orient="portrait"
+                    class="label-orient-segment {% if b.label_orientation == 'portrait' %}is-active{% endif %}"
+                    title="Portrait (long side reads vertically)">
+              <span aria-hidden="true">▯</span>
+              <span class="label-orient-label">P</span>
+            </button>
+          </div>
           {% if art_enabled %}
-            <button type="button" class="btn btn-sm label-action {% if b.background_art %}label-action-regen{% else %}label-action-generate{% endif %}"
-                    data-art-action="generate" title="{% if b.background_art %}Regenerate art (Nano Banana 2){% else %}Generate art (Nano Banana 2){% endif %}">
+            <button type="button"
+                    class="btn btn-sm label-action {% if b.background_art %}label-action-regen{% else %}label-action-generate{% endif %}"
+                    data-art-action="generate"
+                    title="{% if b.background_art %}Regenerate art{% else %}Generate art{% endif %}">
               <span class="art-icon">{% if b.background_art %}↻{% else %}🎨{% endif %}</span>
             </button>
-            <button type="button" class="btn btn-ghost btn-sm label-action label-action-clear"
+            <button type="button"
+                    class="btn btn-ghost btn-sm label-action label-action-clear"
                     data-art-action="clear" title="Clear art"
                     {% if not b.background_art %}hidden{% endif %}>
               <span class="art-icon">✕</span>
             </button>
           {% endif %}
-          <a href="/boxes/{{ b.id }}/label.svg" class="btn btn-ghost btn-sm label-action"
-             title="Download single label" download>↓</a>
         </div>
       </div>
       {% endfor %}
@@ -54,24 +102,29 @@
   <div class="label-toolbar" id="label-toolbar">
     <div class="label-toolbar-summary">
       <strong id="label-count">{{ boxes | length }}</strong> selected ·
-      <span id="label-pages">{{ ((boxes | length + labels_per_page - 1) // labels_per_page) }}</span> page<span id="label-pages-s">s</span>
+      <span id="label-pages">{{ ((boxes | length + labels_per_page - 1) // labels_per_page) }}</span>
+      sheet<span id="label-pages-s">s</span> of Avery {{ fmt.sku }}
     </div>
     <div class="label-toolbar-actions">
-      <button type="button" class="btn btn-secondary btn-sm" id="toggle-all">Toggle all</button>
-      <a href="/labels/sheet.svg" class="btn btn-secondary btn-sm" id="download-svg" download
-         title="Single SVG with every sheet stacked — for Inkscape, Cricut as Cut Image, etc.">SVG</a>
-      <a href="/labels/sheet.pdf" class="btn btn-secondary btn-sm" id="download-pdf" download
-         title="Multi-page vector PDF — one Avery sheet per page, prints sharp, also opens in Cricut Design Space.">PDF</a>
-      <button type="submit" class="btn btn-primary" id="print-button" formaction="/labels/print" formtarget="_blank">
+      <button type="button" class="btn btn-secondary btn-sm" id="toggle-all">
+        Toggle all
+      </button>
+      <a href="/labels/sheet.pdf?format={{ fmt.sku }}"
+         class="btn btn-secondary btn-sm" id="download-pdf" download
+         title="Multi-page PDF, one Avery {{ fmt.sku }} sheet per page.  Open + print.">
+        PDF
+      </a>
+      <button type="submit" class="btn btn-primary" id="print-button"
+              formaction="/labels/print" formtarget="_blank">
         Print labels
       </button>
     </div>
   </div>
 </form>
 
-{# Modal preview, populated by JS on label-card click. Shared across all cards #}
 <dialog id="label-preview-modal" class="label-preview-modal">
-  <button type="button" class="label-preview-close" data-close-preview aria-label="Close">×</button>
+  <button type="button" class="label-preview-close" data-close-preview
+          aria-label="Close">×</button>
   <div class="label-preview-image-wrap">
     <img class="label-preview-image" alt="" data-modal-thumb>
   </div>
@@ -102,17 +155,29 @@
   const form = document.getElementById('labels-form');
   const checkboxes = form.querySelectorAll('input[name="box_ids"]');
   const labelsPerPage = {{ labels_per_page }};
+  const formatSku = form.dataset.format;
   const artEnabled = form.dataset.artEnabled === '1';
   const countEl = document.getElementById('label-count');
   const pagesEl = document.getElementById('label-pages');
   const pagesSEl = document.getElementById('label-pages-s');
   const printButton = document.getElementById('print-button');
-  const svgLink = document.getElementById('download-svg');
   const pdfLink = document.getElementById('download-pdf');
   const toggleAll = document.getElementById('toggle-all');
   const modal = document.getElementById('label-preview-modal');
+  const formatSelect = document.getElementById('format-select');
 
-  // ── Selection summary + URLs ──────────────────────────────────────
+  // Format dropdown: change the format query param + reload
+  // (no JS-only state here so a back/forward keeps the right
+  // grid).  The hidden ``format`` field on the print form
+  // already carries the right value into the print URL.
+  if (formatSelect) {
+    formatSelect.addEventListener('change', () => {
+      const params = new URLSearchParams();
+      params.set('format', formatSelect.value);
+      window.location.search = params.toString();
+    });
+  }
+
   function selectedIds() {
     return Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
   }
@@ -124,9 +189,10 @@
     pagesEl.textContent = pages;
     pagesSEl.textContent = pages === 1 ? '' : 's';
     printButton.disabled = n === 0;
-    const params = ids.map(id => 'box_ids=' + encodeURIComponent(id)).join('&');
-    svgLink.href = '/labels/sheet.svg' + (params ? '?' + params : '');
-    if (pdfLink) pdfLink.href = '/labels/sheet.pdf' + (params ? '?' + params : '');
+    const params = new URLSearchParams();
+    params.set('format', formatSku);
+    ids.forEach(id => params.append('box_ids', id));
+    if (pdfLink) pdfLink.href = '/labels/sheet.pdf?' + params.toString();
   }
   checkboxes.forEach(cb => cb.addEventListener('change', refreshSummary));
   toggleAll.addEventListener('click', () => {
@@ -136,32 +202,67 @@
   });
   refreshSummary();
 
-  // ── Per-card art generation (parallel-safe, AJAX) ─────────────────
-  // Each click fires its own fetch — no form submit, so multiple boxes
-  // can generate concurrently and each card shows its own spinner.
+  // ── Per-box orientation toggle (AJAX) ─────────────────────────────
   function bumpThumb(card) {
-    const thumbs = card.querySelectorAll('[data-thumb]');
-    const stamp = '?t=' + Date.now();
-    thumbs.forEach(img => {
-      const base = img.src.split('?')[0];
-      img.src = base + stamp;
-    });
-    // Modal thumbnail too if it's currently showing this card
+    const img = card.querySelector('[data-thumb]');
+    if (!img) return;
+    const base = img.src.split('?')[0];
+    img.src = base + '?format=' + formatSku + '&t=' + Date.now();
     if (modal.dataset.boxId === card.dataset.boxId) {
       const m = modal.querySelector('[data-modal-thumb]');
-      if (m) {
-        const base = m.src.split('?')[0];
-        m.src = base + stamp;
-      }
+      if (m) m.src = base + '?format=' + formatSku + '&t=' + Date.now();
     }
   }
 
+  function applyOrientation(card, orient) {
+    const thumbWrap = card.querySelector('.label-card-thumb');
+    if (thumbWrap) {
+      thumbWrap.classList.remove('label-card-thumb-landscape',
+                                 'label-card-thumb-portrait');
+      thumbWrap.classList.add('label-card-thumb-' + orient);
+    }
+    card.dataset.orientation = orient;
+    card.querySelectorAll('[data-orient]').forEach(seg => {
+      seg.classList.toggle('is-active', seg.dataset.orient === orient);
+    });
+    bumpThumb(card);
+  }
+
+  async function setOrientation(card, orient) {
+    const boxId = card.dataset.boxId;
+    const fd = new FormData();
+    fd.append('orientation', orient);
+    try {
+      const r = await fetch(`/boxes/${boxId}/label-orientation`, {
+        method: 'POST',
+        body: fd,
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      applyOrientation(card, orient);
+    } catch (err) {
+      alert(`Couldn't update orientation: ${err.message || err}`);
+    }
+  }
+
+  form.querySelectorAll('.label-card').forEach(card => {
+    card.querySelectorAll('[data-orient]').forEach(seg => {
+      seg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const orient = seg.dataset.orient;
+        if (card.dataset.orientation === orient) return;
+        setOrientation(card, orient);
+      });
+    });
+  });
+
+  // ── Per-card art generation (parallel-safe, AJAX) ─────────────────
   async function runArtAction(card, action, button) {
     const boxId = card.dataset.boxId;
     const url = action === 'generate'
       ? `/boxes/${boxId}/generate-art`
       : `/boxes/${boxId}/clear-art`;
-    setBusy(button, true, action);
+    setBusy(button, true);
     try {
       const r = await fetch(url, {
         method: 'POST',
@@ -179,11 +280,11 @@
     } catch (err) {
       alert(`Art ${action} failed: ${err.message || err}`);
     } finally {
-      setBusy(button, false, action);
+      setBusy(button, false);
     }
   }
 
-  function setBusy(button, busy, action) {
+  function setBusy(button, busy) {
     if (!button) return;
     if (busy) {
       button.classList.add('art-busy');
@@ -216,16 +317,11 @@
       }
       generateBtn.classList.toggle('label-action-regen', hasArt);
       generateBtn.classList.toggle('label-action-generate', !hasArt);
-      generateBtn.title = hasArt
-        ? 'Regenerate art (Nano Banana 2)'
-        : 'Generate art (Nano Banana 2)';
+      generateBtn.title = hasArt ? 'Regenerate art' : 'Generate art';
     }
-    if (clearBtn) {
-      clearBtn.hidden = !hasArt;
-    }
+    if (clearBtn) clearBtn.hidden = !hasArt;
   }
 
-  // Wire up card-level art buttons
   form.querySelectorAll('.label-card').forEach(card => {
     card.querySelectorAll('[data-art-action]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -238,7 +334,7 @@
   // ── Modal preview ─────────────────────────────────────────────────
   function openPreview(card) {
     modal.dataset.boxId = card.dataset.boxId;
-    const stamp = '?t=' + Date.now();
+    const stamp = '?format=' + formatSku + '&t=' + Date.now();
     modal.querySelector('[data-modal-thumb]').src =
       `/boxes/${card.dataset.boxId}/label.svg${stamp}`;
     modal.querySelector('[data-modal-name]').textContent = card.dataset.boxName;
@@ -246,7 +342,7 @@
     notesEl.textContent = card.dataset.boxNotes;
     notesEl.hidden = !card.dataset.boxNotes;
     modal.querySelector('[data-modal-download]').href =
-      `/boxes/${card.dataset.boxId}/label.svg`;
+      `/boxes/${card.dataset.boxId}/label.svg?format=${formatSku}`;
     syncModalArtControls();
     modal.showModal();
   }
@@ -266,17 +362,13 @@
       }
       if (label) label.textContent = hasArt ? 'Regenerate art' : 'Generate art';
     }
-    if (clearBtn) {
-      clearBtn.hidden = !hasArt;
-    }
+    if (clearBtn) clearBtn.hidden = !hasArt;
   }
 
   function currentModalCard() {
     return form.querySelector(`.label-card[data-box-id="${modal.dataset.boxId}"]`);
   }
 
-  // Card click → modal (but ignore clicks on the action buttons or
-  // the checkbox label itself, which have their own behavior).
   form.querySelectorAll('[data-open-preview]').forEach(trigger => {
     trigger.addEventListener('click', (e) => {
       e.preventDefault();
@@ -285,21 +377,17 @@
     });
   });
 
-  // Close affordances
   modal.querySelector('[data-close-preview]').addEventListener('click', () => modal.close());
   modal.addEventListener('click', (e) => {
-    // backdrop click
     if (e.target === modal) modal.close();
   });
 
-  // Modal art actions delegate to the same runArtAction
   if (artEnabled) {
     modal.querySelectorAll('[data-modal-action]').forEach(btn => {
       btn.addEventListener('click', () => {
         const card = currentModalCard();
         if (!card) return;
-        const action = btn.dataset.modalAction;
-        runArtAction(card, action, btn);
+        runArtAction(card, btn.dataset.modalAction, btn);
       });
     });
   }

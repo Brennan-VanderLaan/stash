@@ -1,47 +1,160 @@
-"""Generate SVG labels for boxes — individual and full-sheet grids."""
+"""Generate label SVGs for boxes — sized for printable Avery
+shipping-label sheets, not Cricut SVG cutting.
+
+The Avery pivot:
+
+We previously tried to feed Cricut Design Space the raw label SVG
++ a multi-page PDF.  Cricut's importer is hostile to embedded
+text + base64 imagery, and the round-trip through "Cut Image"
+loses sharpness.  Pivoting to Avery sheets means an honest workflow:
+download the PDF, drop the Avery sheet in the printer, hit print.
+
+Two axes of control:
+
+* **Format**: which Avery template the sheet targets.  Different
+  cell sizes + columns/rows.  Default is 5523 (2"×4", 10/sheet,
+  shipping-label-grade UltraHold) since that's the user's actual
+  SKU.  5160 (1"×2.625", 30/sheet) and 5164 (3.33"×4", 6/sheet)
+  cover address-label and bigger-shipping cases.
+* **Orientation**: per-box, ``landscape`` or ``portrait``.  The
+  cell footprint stays fixed (an Avery 5523 cell is always 2"×4");
+  what changes is the reading direction of the content within
+  the cell.  A ``portrait`` 2"×4" label has the QR + text rotated
+  90° so the long axis runs vertically — for slapping on the
+  narrow side of a tall box.
+
+All label content (QR code, name, notes, ID badge, optional
+background art) renders to fit the smaller of the two cell
+dimensions so a single ``_label_content`` shape can be rotated
+without overflowing.
+"""
+
+from __future__ import annotations
 
 import base64
+import dataclasses
 import io
-from pathlib import Path
-import qrcode
-import qrcode.image.svg
 from xml.etree import ElementTree as ET
 
+import qrcode
+import qrcode.image.svg
 
-LABEL_W_MM = 203.2   # 8 inches
-LABEL_H_MM = 63.5    # 2.5 inches
-QR_SIZE_MM = 50
-MARGIN_MM = 6
 
-# Sheet: letter-size, 1 column × 4 rows = 4 labels
-SHEET_W_MM = 215.9
-SHEET_H_MM = 279.4
-COLS = 1
-ROWS = 4
-LABELS_PER_PAGE = ROWS * COLS
-COL_GAP_MM = (SHEET_W_MM - COLS * LABEL_W_MM) / (COLS + 1)
-ROW_GAP_MM = (SHEET_H_MM - ROWS * LABEL_H_MM) / (ROWS + 1)
+# ── Avery format registry ──────────────────────────────────────────
 
-# Text layout — all units in mm (matches the viewBox)
-TEXT_X_MM = MARGIN_MM + QR_SIZE_MM + MARGIN_MM * 1.5
-NAME_FONT_MM = 10
-DESC_FONT_MM = 6
-ID_FONT_MM = 5
-CHARS_PER_MM = 1.7  # approximate sans-serif chars per mm at font-size=1mm
-# Reserve space on the right for the #ID badge so the name doesn't run into it.
-ID_BADGE_RESERVE_MM = 16
-TEXT_MAX_W_MM = LABEL_W_MM - TEXT_X_MM - MARGIN_MM - ID_BADGE_RESERVE_MM
+
+@dataclasses.dataclass(frozen=True)
+class AveryFormat:
+    """One Avery template = sheet dimensions + cell grid + cell
+    size.  All distances in millimetres so the SVG ``viewBox``
+    units are consistent across formats."""
+    sku: str            # e.g. ``"5523"``
+    description: str    # human-readable: ``"2\" × 4\", 10 per sheet"``
+    sheet_w_mm: float
+    sheet_h_mm: float
+    label_w_mm: float
+    label_h_mm: float
+    cols: int
+    rows: int
+    margin_top_mm: float
+    margin_left_mm: float
+    col_gap_mm: float
+    row_gap_mm: float
+
+    @property
+    def labels_per_page(self) -> int:
+        return self.cols * self.rows
+
+    def cell_xy(self, index: int) -> tuple[float, float]:
+        """Top-left corner of the ``index``-th cell on the sheet."""
+        col = index % self.cols
+        row = index // self.cols
+        x = self.margin_left_mm + col * (self.label_w_mm + self.col_gap_mm)
+        y = self.margin_top_mm + row * (self.label_h_mm + self.row_gap_mm)
+        return x, y
+
+
+# US Letter is 215.9 × 279.4 mm.  Each format below is a literal
+# transcription of the Avery template spec — verified against
+# Avery's printable PDF templates so a printed sheet lines up
+# without manual nudging.
+AVERY_FORMATS: dict[str, AveryFormat] = {
+    # 2" × 4", 10 per sheet, 2 cols × 5 rows.  WaterProof
+    # UltraHold — the SKU 5523 the user is targeting today.
+    # Same physical layout as 5163 / 5263 / 8163 / 18163.
+    "5523": AveryFormat(
+        sku="5523",
+        description='2" × 4" — 10 per sheet (shipping)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=101.6, label_h_mm=50.8,
+        cols=2, rows=5,
+        margin_top_mm=12.7,                 # 0.5"
+        margin_left_mm=4.76,                # ~0.1875"
+        col_gap_mm=4.76,                    # ~0.1875"
+        row_gap_mm=0,                       # rows touch
+    ),
+    # 1" × 2-5/8", 30 per sheet, 3 cols × 10 rows.  Address
+    # labels — useful for itemising small bins.
+    "5160": AveryFormat(
+        sku="5160",
+        description='1" × 2⅝" — 30 per sheet (address)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=66.7, label_h_mm=25.4,
+        cols=3, rows=10,
+        margin_top_mm=12.7,                 # 0.5"
+        margin_left_mm=4.76,                # ~0.1875"
+        col_gap_mm=3.05,                    # ~0.12"
+        row_gap_mm=0,
+    ),
+    # 3-1/3" × 4", 6 per sheet, 2 cols × 3 rows.  Bigger
+    # shipping label — for big tubs and totes.
+    "5164": AveryFormat(
+        sku="5164",
+        description='3⅓" × 4" — 6 per sheet (large shipping)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=101.6, label_h_mm=84.7,
+        cols=2, rows=3,
+        margin_top_mm=12.7,
+        margin_left_mm=4.76,
+        col_gap_mm=4.76,
+        row_gap_mm=0,
+    ),
+}
+
+DEFAULT_FORMAT_SKU = "5523"
+
+
+def get_format(sku: str | None) -> AveryFormat:
+    """Resolve a format SKU to the registry entry, falling back
+    to the default if unknown.  Templates use this to translate
+    a query-string ``?format=…`` into a real layout without
+    risking a KeyError on a mistyped SKU."""
+    if not sku:
+        return AVERY_FORMATS[DEFAULT_FORMAT_SKU]
+    return AVERY_FORMATS.get(sku, AVERY_FORMATS[DEFAULT_FORMAT_SKU])
+
+
+# ── Per-label content ──────────────────────────────────────────────
+
+
+# Internal layout reserves: relative to the *short* side of the
+# cell so we can rotate the same shape into a portrait orientation
+# without re-laying-out.  All sizes are fractions of ``min_dim``
+# (the shorter of cell width / height) so smaller cells get
+# proportionally smaller text.
+_QR_FRACTION = 0.85          # QR fills ~85% of the short side
+_MARGIN_FRACTION = 0.08
+_NAME_FONT_FRACTION = 0.22
+_DESC_FONT_FRACTION = 0.13
+_ID_FONT_FRACTION = 0.10
+_CHARS_PER_FONT_UNIT = 1.7   # rough sans-serif width / font-size
 
 
 def _qr_data_for_box(box_id: int, public_url: str) -> str:
-    """Build the URL the QR code resolves to.
-
-    With a public URL configured (production), phones scanning the code go
-    straight to the box detail page. Without one (local dev) we fall back to
-    the `stash:box:N` custom scheme — clearly broken for end users, which is
-    the point: it signals that STASH_PUBLIC_URL needs to be set before
-    printing labels for real use.
-    """
+    """URL the QR points at.  With STASH_PUBLIC_URL set, scanning
+    the printed code goes straight to the box detail page on
+    your phone.  Without it, the ``stash:box:N`` custom scheme
+    is a clear "you forgot to set PUBLIC_URL" signal."""
     if public_url:
         return f"{public_url.rstrip('/')}/boxes/{box_id}"
     return f"stash:box:{box_id}"
@@ -59,92 +172,171 @@ def _qr_svg_path(data: str) -> tuple[str, str]:
     return d, vb
 
 
-def _fit_font_size(text: str, max_width_mm: float, ideal_size_mm: float, min_size_mm: float = 3.5) -> float:
-    """Shrink font size if text would overflow, down to min_size_mm."""
-    text_width = len(text) / CHARS_PER_MM * ideal_size_mm
-    if text_width <= max_width_mm:
-        return ideal_size_mm
-    scaled = ideal_size_mm * max_width_mm / text_width
-    return max(scaled, min_size_mm)
+def _fit_font(text: str, max_width: float, ideal: float,
+              minimum: float | None = None) -> float:
+    """Shrink font size to fit width.  Returns the chosen size in
+    the same units as ``ideal`` + ``max_width``."""
+    if not text:
+        return ideal
+    if minimum is None:
+        minimum = ideal * 0.4
+    width = len(text) / _CHARS_PER_FONT_UNIT * ideal
+    if width <= max_width:
+        return ideal
+    return max(ideal * max_width / width, minimum)
 
 
-def _background_art_svg(art_bytes: bytes | None) -> str:
-    """Render a faded illustration as the background of a label's text area.
-
-    Embedded as base64 so a single SVG download is fully self-contained — no
-    broken refs after `mv` or `scp` to a label-printing machine. The art is
-    clipped to the right of the QR so the QR area stays pure white and the
-    QR remains scannable. Opacity is intentionally low to keep text legible.
-
-    Takes decrypted bytes rather than a path because, post-phase-2, the
-    on-disk blob is ciphertext.  app.py decrypts once and hands the
-    plaintext in here.
-    """
+def _background_art_inner(art_bytes: bytes | None,
+                          long_dim: float, short_dim: float,
+                          qr_size: float, margin: float) -> str:
+    """Background-art layer rendered to fit *behind* the text
+    portion of the cell (i.e. the area that's not occupied by
+    the QR code on the left).  Opacity intentionally low so the
+    text stays legible; clipped to keep QR contrast."""
     if not art_bytes:
         return ""
-    # Sniff JPEG magic; fallback to png. Box-art is generated as JPEG today
-    # but we accept both so a future generator change doesn't silently break.
     mime = "image/jpeg" if art_bytes[:3] == b"\xff\xd8\xff" else "image/png"
     b64 = base64.b64encode(art_bytes).decode("ascii")
-    art_x = MARGIN_MM + QR_SIZE_MM + MARGIN_MM
-    art_w = LABEL_W_MM - art_x - MARGIN_MM
-    art_h = LABEL_H_MM - MARGIN_MM * 2
-    art_y = MARGIN_MM
+    art_x = margin + qr_size + margin
+    art_w = long_dim - art_x - margin
+    art_h = short_dim - margin * 2
     return (
         f'<image href="data:{mime};base64,{b64}" '
-        f'x="{art_x}" y="{art_y}" width="{art_w}" height="{art_h}" '
-        f'preserveAspectRatio="xMidYMid slice" opacity="0.32"/>'
+        f'x="{art_x}" y="{margin}" width="{art_w}" height="{art_h}" '
+        f'preserveAspectRatio="xMidYMid slice" opacity="0.3"/>'
     )
 
 
-def _label_content(
+def _label_inner(
     box_id: int,
     name: str,
     description: str,
     public_url: str,
+    long_dim: float,
+    short_dim: float,
     background_art: bytes | None = None,
 ) -> str:
+    """SVG inside a cell, laid out as if the cell were
+    landscape-oriented (long_dim wide × short_dim tall).  The
+    sheet renderer rotates this content 90° around the cell
+    centre when the box's orientation is ``portrait``."""
+    margin = short_dim * _MARGIN_FRACTION
+    qr_size = short_dim * _QR_FRACTION
+    qr_y = (short_dim - qr_size) / 2
+    name_size = short_dim * _NAME_FONT_FRACTION
+    desc_size = short_dim * _DESC_FONT_FRACTION
+    id_size = short_dim * _ID_FONT_FRACTION
+
+    # Where the text starts horizontally + how wide it can be
+    # before it'd run into the corner ID badge.
+    text_x = margin + qr_size + margin
+    id_reserve = id_size * 5
+    text_max = long_dim - text_x - margin - id_reserve
+
+    name_size = _fit_font(name, text_max, name_size)
+    name_y = short_dim / 2 - (1 if description else 0)
+
     qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
     vb_w = float(qr_vb.split()[2])
     vb_h = float(qr_vb.split()[3])
 
-    qr_y = (LABEL_H_MM - QR_SIZE_MM) / 2
-    name_size = _fit_font_size(name, TEXT_MAX_W_MM, NAME_FONT_MM)
-    name_y = LABEL_H_MM / 2 - (2 if description else 0)
-
     parts = [
-        f'<rect width="{LABEL_W_MM}" height="{LABEL_H_MM}" rx="2" ry="2" '
-        f'fill="white" stroke="#bbb" stroke-width="0.3"/>',
+        f'<rect width="{long_dim}" height="{short_dim}" rx="1.5" ry="1.5" '
+        f'fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
-    art_svg = _background_art_svg(background_art)
-    if art_svg:
-        parts.append(art_svg)
+    art = _background_art_inner(background_art, long_dim, short_dim,
+                                qr_size, margin)
+    if art:
+        parts.append(art)
     parts.extend([
-        f'<g transform="translate({MARGIN_MM},{qr_y}) '
-        f'scale({QR_SIZE_MM / vb_w},{QR_SIZE_MM / vb_h})">',
+        f'<g transform="translate({margin},{qr_y}) '
+        f'scale({qr_size / vb_w},{qr_size / vb_h})">',
         f'  <path d="{qr_path}" fill="black"/>',
         f'</g>',
-        # Box ID badge in the top-right corner — small, monospace, easy to
-        # read across the room without scanning ("grab box 12").
-        f'<text x="{LABEL_W_MM - MARGIN_MM}" y="{MARGIN_MM + ID_FONT_MM * 0.8}" '
-        f'font-family="ui-monospace, Menlo, monospace" font-size="{ID_FONT_MM}" '
-        f'fill="#666" text-anchor="end">#{box_id}</text>',
-        f'<text x="{TEXT_X_MM}" y="{name_y}" '
-        f'font-family="sans-serif" font-size="{name_size}" font-weight="bold" '
-        f'fill="#111" dominant-baseline="central">'
-        f'{_escape(name)}</text>',
+        f'<text x="{long_dim - margin}" y="{margin + id_size * 0.9}" '
+        f'font-family="ui-monospace, Menlo, monospace" '
+        f'font-size="{id_size}" fill="#666" text-anchor="end">'
+        f'#{box_id}</text>',
+        f'<text x="{text_x}" y="{name_y}" '
+        f'font-family="sans-serif" font-size="{name_size}" '
+        f'font-weight="bold" fill="#111" '
+        f'dominant-baseline="central">{_escape(name)}</text>',
     ])
-
     if description:
-        desc_size = _fit_font_size(description, TEXT_MAX_W_MM, DESC_FONT_MM)
-        desc_y = name_y + name_size * 0.6 + desc_size + 1
+        desc_size = _fit_font(description, text_max, desc_size)
+        desc_y = name_y + name_size * 0.6 + desc_size + 0.5
         parts.append(
-            f'<text x="{TEXT_X_MM}" y="{desc_y}" '
+            f'<text x="{text_x}" y="{desc_y}" '
             f'font-family="sans-serif" font-size="{desc_size}" '
             f'fill="#666">{_escape(description)}</text>'
         )
-
     return "\n    ".join(parts)
+
+
+def _label_group(
+    fmt: AveryFormat,
+    box: dict,
+    public_url: str,
+) -> str:
+    """One cell's worth of SVG, sized to the format's cell
+    dimensions and rotated for the box's orientation."""
+    orientation = (box.get("label_orientation") or "landscape").lower()
+    name = box.get("name", "")
+    description = box.get("notes") or ""
+    art_bytes = box.get("art_bytes")
+    box_id = box["id"]
+
+    if orientation == "portrait":
+        # Lay content out as if the cell were rotated:
+        # long_dim = cell height, short_dim = cell width.  Then
+        # apply a 90° rotation around the cell centre so the
+        # rendered shape lines up with the physical cell.
+        long_dim = fmt.label_h_mm
+        short_dim = fmt.label_w_mm
+        inner = _label_inner(
+            box_id, name, description, public_url,
+            long_dim, short_dim, art_bytes,
+        )
+        # Rotate 90° clockwise around the cell's centre.  Translate
+        # → rotate → un-translate, all inside the parent cell's
+        # coordinate space.
+        cx = fmt.label_w_mm / 2
+        cy = fmt.label_h_mm / 2
+        # After rotation, the rendered shape's origin lands at
+        # (cx + long_dim/2, cy - short_dim/2) in the unrotated
+        # cell — we counter-translate so the shape's top-left
+        # corner ends up at (0, 0) of the cell.
+        return (
+            f'<g transform="rotate(90 {cx} {cy}) '
+            f'translate({cx - long_dim / 2},{cy - short_dim / 2})">'
+            f'{inner}</g>'
+        )
+
+    long_dim = fmt.label_w_mm
+    short_dim = fmt.label_h_mm
+    return _label_inner(
+        box_id, name, description, public_url,
+        long_dim, short_dim, art_bytes,
+    )
+
+
+def _empty_cell(fmt: AveryFormat) -> str:
+    """Dashed placeholder for unused cells on the last sheet —
+    purely visual so the print preview shows the grid alignment."""
+    return (
+        f'<rect width="{fmt.label_w_mm}" height="{fmt.label_h_mm}" '
+        f'rx="1.5" ry="1.5" fill="white" stroke="#ddd" '
+        f'stroke-width="0.25" stroke-dasharray="2,2"/>'
+    )
+
+
+# ── Sheet rendering ────────────────────────────────────────────────
+
+
+def page_count(num_boxes: int, fmt: AveryFormat) -> int:
+    if num_boxes <= 0:
+        return 1
+    return (num_boxes + fmt.labels_per_page - 1) // fmt.labels_per_page
 
 
 def render_label_svg(
@@ -153,105 +345,53 @@ def render_label_svg(
     description: str = "",
     public_url: str = "",
     background_art: bytes | None = None,
+    *,
+    fmt: AveryFormat | None = None,
+    orientation: str = "landscape",
 ) -> str:
-    inner = _label_content(box_id, box_name, description, public_url, background_art)
+    """Single-cell SVG, sized to the chosen format's cell.  Used
+    for the per-box label preview thumbnails on /labels and the
+    /boxes/{id}/label.svg download."""
+    fmt = fmt or AVERY_FORMATS[DEFAULT_FORMAT_SKU]
+    box = {
+        "id": box_id,
+        "name": box_name,
+        "notes": description,
+        "art_bytes": background_art,
+        "label_orientation": orientation,
+    }
+    inner = _label_group(fmt, box, public_url)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="{LABEL_W_MM}mm" height="{LABEL_H_MM}mm"
-     viewBox="0 0 {LABEL_W_MM} {LABEL_H_MM}">
+     width="{fmt.label_w_mm}mm" height="{fmt.label_h_mm}mm"
+     viewBox="0 0 {fmt.label_w_mm} {fmt.label_h_mm}">
   {inner}
-</svg>"""
-
-
-def _resolve_art_bytes(b: dict) -> bytes | None:
-    """Pull pre-decrypted background-art bytes off the box dict.  app.py
-    populates ``art_bytes`` for each box before calling the label
-    renderers — labels.py never reads ciphertext directly."""
-    return b.get("art_bytes")
-
-
-def page_count(num_boxes: int) -> int:
-    """Number of physical sheets needed to print `num_boxes` labels."""
-    if num_boxes <= 0:
-        return 1
-    return (num_boxes + LABELS_PER_PAGE - 1) // LABELS_PER_PAGE
-
-
-def render_sheet_svg(
-    boxes: list[dict],
-    public_url: str = "",
-    uploads_dir: Path | None = None,  # legacy; unused after phase 2
-) -> str:
-    """Render every box across as many sheets as needed, stacked vertically.
-
-    Earlier versions truncated to one sheet (4 labels) which made big batches
-    silently lose data. Now N pages stack into a single SVG so the download
-    contains everything; for ergonomic browser printing use the HTML print
-    page that wraps each sheet in a page-break-after div."""
-    pages = page_count(len(boxes))
-    total_h = pages * SHEET_H_MM
-    cells = [f'<rect width="{SHEET_W_MM}" height="{total_h}" fill="white"/>']
-
-    for page_idx in range(pages):
-        page_offset = page_idx * SHEET_H_MM
-        page_boxes = boxes[page_idx * LABELS_PER_PAGE:(page_idx + 1) * LABELS_PER_PAGE]
-        for i in range(LABELS_PER_PAGE):
-            col = i % COLS
-            row = i // COLS
-            x = COL_GAP_MM + col * (LABEL_W_MM + COL_GAP_MM)
-            y = page_offset + ROW_GAP_MM + row * (LABEL_H_MM + ROW_GAP_MM)
-
-            if i < len(page_boxes):
-                b = page_boxes[i]
-                inner = _label_content(
-                    b["id"], b["name"], b.get("notes") or "", public_url,
-                    _resolve_art_bytes(b),
-                )
-            else:
-                inner = (
-                    f'<rect width="{LABEL_W_MM}" height="{LABEL_H_MM}" rx="2" ry="2" '
-                    f'fill="white" stroke="#ddd" stroke-width="0.3" stroke-dasharray="2,2"/>'
-                )
-
-            cells.append(f'<g transform="translate({x},{y})">{inner}</g>')
-
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="{SHEET_W_MM}mm" height="{total_h}mm"
-     viewBox="0 0 {SHEET_W_MM} {total_h}">
-  {"".join(cells)}
 </svg>"""
 
 
 def render_single_sheet_svg(
     boxes: list[dict],
     public_url: str = "",
-    uploads_dir: Path | None = None,  # legacy; unused after phase 2
+    *,
+    fmt: AveryFormat | None = None,
 ) -> str:
-    """Render exactly one sheet (up to LABELS_PER_PAGE labels). Used by the print
-    page so each sheet sits in its own page-break div."""
-    cells = [f'<rect width="{SHEET_W_MM}" height="{SHEET_H_MM}" fill="white"/>']
-    for i in range(LABELS_PER_PAGE):
-        col = i % COLS
-        row = i // COLS
-        x = COL_GAP_MM + col * (LABEL_W_MM + COL_GAP_MM)
-        y = ROW_GAP_MM + row * (LABEL_H_MM + ROW_GAP_MM)
+    """One physical Avery sheet — dimensions + cell positions
+    pulled from ``fmt``."""
+    fmt = fmt or AVERY_FORMATS[DEFAULT_FORMAT_SKU]
+    cells = [
+        f'<rect width="{fmt.sheet_w_mm}" height="{fmt.sheet_h_mm}" '
+        f'fill="white"/>',
+    ]
+    for i in range(fmt.labels_per_page):
+        x, y = fmt.cell_xy(i)
         if i < len(boxes):
-            b = boxes[i]
-            inner = _label_content(
-                b["id"], b["name"], b.get("notes") or "", public_url,
-                _resolve_art_bytes(b),
-            )
+            inner = _label_group(fmt, boxes[i], public_url)
         else:
-            inner = (
-                f'<rect width="{LABEL_W_MM}" height="{LABEL_H_MM}" rx="2" ry="2" '
-                f'fill="white" stroke="#ddd" stroke-width="0.3" stroke-dasharray="2,2"/>'
-            )
+            inner = _empty_cell(fmt)
         cells.append(f'<g transform="translate({x},{y})">{inner}</g>')
-
     return f"""<svg xmlns="http://www.w3.org/2000/svg"
-     width="{SHEET_W_MM}mm" height="{SHEET_H_MM}mm"
-     viewBox="0 0 {SHEET_W_MM} {SHEET_H_MM}">
+     width="{fmt.sheet_w_mm}mm" height="{fmt.sheet_h_mm}mm"
+     viewBox="0 0 {fmt.sheet_w_mm} {fmt.sheet_h_mm}">
   {"".join(cells)}
 </svg>"""
 
@@ -259,43 +399,95 @@ def render_single_sheet_svg(
 def render_sheet_pdf(
     boxes: list[dict],
     public_url: str = "",
-    uploads_dir: Path | None = None,  # legacy; unused after phase 2
+    *,
+    fmt: AveryFormat | None = None,
 ) -> bytes:
-    """Render the same per-sheet layout as the print page, but as a real
-    multi-page vector PDF. cairosvg renders each sheet's SVG to a vector
-    PDF page, then pypdf merges them into one downloadable file.
+    """Multi-page PDF — one Avery sheet per page.  cairosvg
+    rasterises each sheet to a vector PDF page; pypdf merges
+    the pages into one downloadable artifact.
 
-    Why PDF: Cricut Design Space chokes on our SVGs (text, embedded
-    base64 art) and re-importing PNG-per-label is the user's documented
-    pain point. A printable PDF is the universal "open and print"
-    artifact — fits Avery sheets directly and prints sharp because the
-    QR + text are still vectors, not rasterized."""
+    This is the *primary* output path for printing — drop the
+    Avery sheet in the printer, open the PDF, hit print.  No
+    Cricut, no SVG-import dance."""
     import io as _io
     import cairosvg
     from pypdf import PdfWriter, PdfReader
 
+    fmt = fmt or AVERY_FORMATS[DEFAULT_FORMAT_SKU]
     if not boxes:
-        # Render an empty sheet rather than crashing on an empty selection
-        # so the user gets a friendly print-ready blank.
         boxes = []
 
-    pages = page_count(len(boxes))
+    pages = page_count(len(boxes), fmt)
     writer = PdfWriter()
     for page_idx in range(pages):
-        chunk = boxes[page_idx * LABELS_PER_PAGE:(page_idx + 1) * LABELS_PER_PAGE]
-        sheet_svg = render_single_sheet_svg(chunk, public_url, uploads_dir)
-        # Wrap to ensure the XML declaration is present — cairosvg prefers it.
+        chunk = boxes[
+            page_idx * fmt.labels_per_page:
+            (page_idx + 1) * fmt.labels_per_page
+        ]
+        sheet_svg = render_single_sheet_svg(chunk, public_url, fmt=fmt)
         if not sheet_svg.lstrip().startswith("<?xml"):
             sheet_svg = '<?xml version="1.0" encoding="UTF-8"?>\n' + sheet_svg
         pdf_bytes = cairosvg.svg2pdf(bytestring=sheet_svg.encode("utf-8"))
         reader = PdfReader(_io.BytesIO(pdf_bytes))
         for page in reader.pages:
             writer.add_page(page)
-
     out = _io.BytesIO()
     writer.write(out)
     return out.getvalue()
 
 
 def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+# ── Backwards-compat shims ─────────────────────────────────────────
+
+
+# Pre-Avery code referenced these constants directly.  Keep them
+# pointing at the new default format so any straggler import path
+# still works.
+LABEL_W_MM = AVERY_FORMATS[DEFAULT_FORMAT_SKU].label_w_mm
+LABEL_H_MM = AVERY_FORMATS[DEFAULT_FORMAT_SKU].label_h_mm
+SHEET_W_MM = AVERY_FORMATS[DEFAULT_FORMAT_SKU].sheet_w_mm
+SHEET_H_MM = AVERY_FORMATS[DEFAULT_FORMAT_SKU].sheet_h_mm
+LABELS_PER_PAGE = AVERY_FORMATS[DEFAULT_FORMAT_SKU].labels_per_page
+
+
+def render_sheet_svg(
+    boxes: list[dict],
+    public_url: str = "",
+    *,
+    fmt: AveryFormat | None = None,
+) -> str:
+    """All boxes, stacked across as many sheets as needed, in a
+    single SVG — for an "everything in one file" download.  The
+    HTML print page uses :func:`render_single_sheet_svg` per page
+    instead so each sheet sits in its own page-break div."""
+    fmt = fmt or AVERY_FORMATS[DEFAULT_FORMAT_SKU]
+    pages = page_count(len(boxes), fmt)
+    total_h = pages * fmt.sheet_h_mm
+    cells = [f'<rect width="{fmt.sheet_w_mm}" height="{total_h}" '
+             f'fill="white"/>']
+    for page_idx in range(pages):
+        y_offset = page_idx * fmt.sheet_h_mm
+        chunk = boxes[
+            page_idx * fmt.labels_per_page:
+            (page_idx + 1) * fmt.labels_per_page
+        ]
+        for i in range(fmt.labels_per_page):
+            x, y = fmt.cell_xy(i)
+            y += y_offset
+            if i < len(chunk):
+                inner = _label_group(fmt, chunk[i], public_url)
+            else:
+                inner = _empty_cell(fmt)
+            cells.append(f'<g transform="translate({x},{y})">{inner}</g>')
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="{fmt.sheet_w_mm}mm" height="{total_h}mm"
+     viewBox="0 0 {fmt.sheet_w_mm} {total_h}">
+  {"".join(cells)}
+</svg>"""

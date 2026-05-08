@@ -40,8 +40,79 @@
     <a href="/"><span class="tab-icon">📦</span>{{ _("Boxes") }}</a>
     <a href="/locations"><span class="tab-icon">🗺️</span>{{ _("Where") }}</a>
     <a href="/ingest"><span class="tab-icon">📷</span>{{ _("Ingest") }}</a>
-    <a href="/queue"><span class="tab-icon">📋</span>{{ _("Sort") }}</a>
     <a href="/search"><span class="tab-icon">🔍</span>{{ _("Search") }}</a>
+    {# "More" opens the secondary-nav sheet below.  ``button``
+       intentionally — a link would 404 if JS were off; the
+       button is a no-op without JS, which fails closed. #}
+    <button type="button" class="tab-bar-more" id="more-tab"
+            aria-expanded="false" aria-controls="more-sheet">
+      <span class="tab-icon">☰</span>{{ _("More") }}
+    </button>
   </nav>
+
+  {# Bottom-sheet drawer for the rest of the nav.  Hidden by
+     default; the More tab toggles aria-hidden + class.  Click
+     the backdrop or any link to dismiss.  No JS = the sheet
+     stays hidden, but the desktop header-nav at >=640px still
+     exposes everything, so nothing's actually unreachable. #}
+  <div class="more-sheet" id="more-sheet" aria-hidden="true">
+    <div class="more-sheet-backdrop" data-more-close></div>
+    <nav class="more-sheet-panel" aria-label="{{ _('More navigation') }}">
+      <div class="more-sheet-handle" aria-hidden="true"></div>
+      <a href="/queue"><span class="tab-icon">📋</span>{{ _("Sort queue") }}</a>
+      <a href="/labels"><span class="tab-icon">🏷️</span>{{ _("Labels") }}</a>
+      <a href="/tags"><span class="tab-icon">#️⃣</span>{{ _("Tags") }}</a>
+      <a href="/usage"><span class="tab-icon">⚙️</span>{{ _("Usage") }}</a>
+      {% if request.state.actor and request.state.actor.shares %}
+      <a href="/shared"><span class="tab-icon">🔗</span>{{ _("Shared with you") }}</a>
+      {% endif %}
+      <a href="/maintenance"><span class="tab-icon">🛠️</span>{{ _("Maintenance") }}</a>
+      {% if request.state.actor and request.state.actor.is_operator %}
+      <a href="/admin"><span class="tab-icon">🛡️</span>{{ _("Admin") }}</a>
+      {% endif %}
+      <button type="button" class="more-sheet-close" data-more-close>
+        {{ _("Close") }}
+      </button>
+    </nav>
+  </div>
+
+  <script>
+  (function() {
+    const trigger = document.getElementById('more-tab');
+    const sheet = document.getElementById('more-sheet');
+    if (!trigger || !sheet) return;
+    function open() {
+      sheet.setAttribute('aria-hidden', 'false');
+      sheet.classList.add('is-open');
+      trigger.setAttribute('aria-expanded', 'true');
+      document.body.style.overflow = 'hidden';
+    }
+    function close() {
+      sheet.setAttribute('aria-hidden', 'true');
+      sheet.classList.remove('is-open');
+      trigger.setAttribute('aria-expanded', 'false');
+      document.body.style.overflow = '';
+    }
+    trigger.addEventListener('click', () => {
+      if (sheet.classList.contains('is-open')) close();
+      else open();
+    });
+    sheet.querySelectorAll('[data-more-close]').forEach(el => {
+      el.addEventListener('click', close);
+    });
+    // Tapping a link inside the sheet should also close it
+    // before navigating — feels snappier on mobile.
+    sheet.querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', () => {
+        // Don't preventDefault — let the navigation happen.
+        sheet.classList.remove('is-open');
+      });
+    });
+    // Close on Escape for keyboard users.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && sheet.classList.contains('is-open')) close();
+    });
+  })();
+  </script>
 </body>
 </html>
