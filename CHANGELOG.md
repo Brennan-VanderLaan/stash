@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.8.1...v1.9.0) (2026-05-08)
+
+
+### Features
+
+* **admin:** last-activity columns, token filters, recent-activity feed ([2b27320](https://github.com/Brennan-VanderLaan/stash/commit/2b27320e173bee1abdd49a45d802452cc35769b9))
+
+
+### Bug Fixes
+
+* **labels:** center art behind text, upright preview, wrapped portrait text ([417a9b8](https://github.com/Brennan-VanderLaan/stash/commit/417a9b8a9a9f2e241301791739d30da48ab4fb59))
+
 ## [1.8.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.8.0...v1.8.1) (2026-05-08)
 
 
