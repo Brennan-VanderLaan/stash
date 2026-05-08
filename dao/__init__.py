@@ -31,6 +31,7 @@ from dao._base import (
     ForbiddenError,
     NotFoundError,
     require_membership,
+    require_operator,
     require_role,
 )
 
@@ -41,5 +42,6 @@ __all__ = [
     "ForbiddenError",
     "NotFoundError",
     "require_membership",
+    "require_operator",
     "require_role",
 ]

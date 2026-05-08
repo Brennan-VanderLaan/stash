@@ -24,6 +24,9 @@
       <a href="/tags">{{ _("Tags") }}</a>
       <a href="/usage">{{ _("Usage") }}</a>
       <a href="/maintenance">{{ _("Maintenance") }}</a>
+      {% if request.state.actor and request.state.actor.is_operator %}
+      <a href="/admin">{{ _("Admin") }}</a>
+      {% endif %}
     </nav>
     {% block header_actions %}{% endblock %}
   </header>

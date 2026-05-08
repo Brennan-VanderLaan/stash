@@ -122,6 +122,19 @@ def require_role(actor: Actor, minimum: str) -> None:
         )
 
 
+def require_operator(actor: Actor) -> None:
+    """Assert the actor carries the operator flag.  Spec § "Operator
+    surface": this gate guards `/admin` and the cross-tenant lifecycle
+    methods.  Operators can read counts and metadata, mutate
+    lifecycle, and mint invites into tenants they don't belong to —
+    they cannot read tenant *data* (boxes, items, photos), even
+    through the DAO."""
+    if not actor.is_operator:
+        raise ForbiddenError(
+            f"{actor.email} is not an operator on this deployment"
+        )
+
+
 # ── Connection ──────────────────────────────────────────────────────
 
 

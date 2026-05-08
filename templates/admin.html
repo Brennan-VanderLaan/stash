@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Admin · Stash{% endblock %}
+{% block content %}
+
+<div class="card maintenance-card">
+  <div class="card-title">Operator dashboard</div>
+  <p class="text-sm text-muted">
+    Signed in as <code>{{ current_email }}</code>.  This page lists
+    every tenant on the deployment by counts + metadata only — by
+    design, operators never see box / item / photo content here.
+    Reading tenant data requires an explicit maintainer invite from
+    the tenant.
+  </p>
+</div>
+
+{# ── Bootstrap a fresh tenant + first-maintainer invite ─────── #}
+<div class="card maintenance-card">
+  <div class="card-title">Create tenant + invite owner</div>
+  <p class="text-sm text-muted">
+    Spins up an empty tenant and mints a single-use invite for the
+    intended owner.  You stay an operator (no membership) — the
+    invitee becomes the sole maintainer when they accept.
+  </p>
+
+  {% if invite_url %}
+  <div class="notice notice-success">
+    <strong>Tenant created + invite minted.</strong>
+    Copy and send:
+    <input type="text" readonly value="{{ invite_url }}"
+           class="invite-url-input"
+           onclick="this.select()"
+           style="width:100%;margin-top:0.5rem;font-family:monospace;">
+  </div>
+  {% endif %}
+
+  <form method="post" action="/admin/tenants">
+    <label>
+      Tenant name
+      <input type="text" name="name" required placeholder="Sister"
+             autocomplete="off">
+    </label>
+    <label>
+      Invitee email
+      <input type="email" name="invitee_email" required
+             placeholder="them@example.com" autocomplete="off">
+    </label>
+    <label>
+      Role
+      <select name="role">
+        <option value="maintainer" selected>Maintainer (full owner)</option>
+        <option value="readonly">Read-only</option>
+      </select>
+    </label>
+    <label>
+      Plan
+      <select name="plan">
+        <option value="free" selected>Free</option>
+        <option value="pro">Pro</option>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">
+      Create + invite
+    </button>
+  </form>
+</div>
+
+{# ── Tenant roster ──────────────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">Tenants ({{ tenants | length }})</div>
+  {% if tenants %}
+  <table class="admin-tenant-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Plan</th>
+        <th>Members</th>
+        <th>Open invites</th>
+        <th>Boxes</th>
+        <th>Items</th>
+        <th>State</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tenants %}
+      <tr>
+        <td>{{ t.name }}</td>
+        <td>{{ t.plan }}</td>
+        <td>{{ t.member_count }}</td>
+        <td>{{ t.open_invites }}</td>
+        <td>{{ t.box_count }}</td>
+        <td>{{ t.item_count }}</td>
+        <td>
+          {% if t.deleted_at %}
+            <span class="text-muted">soft-deleted</span>
+          {% else %}
+            <span>active</span>
+          {% endif %}
+        </td>
+        <td>{{ t.created_at[:10] if t.created_at else '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No tenants yet.</p>
+  {% endif %}
+</div>
+
+<style>
+  .admin-tenant-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  .admin-tenant-table th,
+  .admin-tenant-table td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .admin-tenant-table th {
+    font-weight: 600;
+    color: var(--text-muted, #aaa);
+  }
+</style>
+
+{% endblock %}

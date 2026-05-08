@@ -7,7 +7,9 @@ trusts that resolution.
 
 from __future__ import annotations
 
-from dao._base import Actor, NotFoundError, db
+import json
+
+from dao._base import Actor, NotFoundError, db, require_operator
 
 
 def get_tenant(actor: Actor, tenant_id: int) -> dict:
@@ -55,3 +57,70 @@ def memberships_for_email(email: str) -> tuple[tuple[int, str], ...]:
             (email,),
         ).fetchall()
     return tuple((r["tenant_id"], r["role"]) for r in rows)
+
+
+# ── Operator surface (spec § "Operator surface") ────────────────────
+
+
+def list_all(actor: Actor) -> list[dict]:
+    """Operator-only roster of every tenant on the deployment with
+    member / box / item counts and lifecycle state.  Hard-rule from
+    the spec: operators see counts + metadata only, *never* the
+    contents (no box names, item names, or photos).  This method
+    obeys that — only aggregate counters and the tenant's own name
+    leave the DAO."""
+    require_operator(actor)
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.name, t.plan, t.created_at, "
+            "       t.deleted_at, t.hard_delete_after, "
+            "       (SELECT COUNT(*) FROM tenant_members "
+            "         WHERE tenant_id = t.id) AS member_count, "
+            "       (SELECT COUNT(*) FROM tenant_invites "
+            "         WHERE tenant_id = t.id "
+            "           AND consumed_at IS NULL) AS open_invites, "
+            "       (SELECT COUNT(*) FROM boxes "
+            "         WHERE tenant_id = t.id) AS box_count, "
+            "       (SELECT COUNT(*) FROM items "
+            "         WHERE tenant_id = t.id) AS item_count "
+            "FROM tenants t "
+            "ORDER BY t.created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_tenant(actor: Actor, name: str, *, plan: str = "free") -> int:
+    """Operator-driven tenant creation.  Returns the new id.
+
+    Spec § "Sign-up + onboarding" path #1 covers self-serve creation
+    by a freshly-signed-in user; that's a separate phase.  This
+    surface is for the operator-bootstrapping case (e.g. setting up
+    a friend on their own tenant) — and so the operator does NOT
+    automatically become a member.  The expectation is that they
+    immediately mint an invite for the intended owner; until that's
+    accepted, the new tenant has zero members."""
+    require_operator(actor)
+    name = name.strip()
+    if not name:
+        raise ValueError("tenant name required")
+    if plan not in ("free", "pro"):
+        raise ValueError(f"unknown plan {plan!r}")
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES (?, ?)",
+            (name, plan),
+        )
+        tenant_id = cur.lastrowid
+        # Audit-log the create — operators can later prove who set up
+        # which tenant when (and the lifecycle audit is the only
+        # cross-tenant view of operator activity that exists today).
+        conn.execute(
+            "INSERT INTO audit_log "
+            "(tenant_id, actor_email, action, target_kind, target_id, "
+            " metadata_json) "
+            "VALUES (?, ?, 'tenant.create', 'tenant', ?, ?)",
+            (tenant_id, actor.email, tenant_id,
+             json.dumps({"name": name, "plan": plan})),
+        )
+        conn.commit()
+    return tenant_id

@@ -3223,6 +3223,79 @@ def invite_accept(request: Request, token: str):
     return RedirectResponse("/", status_code=303)
 
 
+# ── /admin — operator dashboard (phase 12) ─────────────────────────
+#
+# Spec § "Operator surface".  Hard rule honoured here: operators see
+# counts + metadata + lifecycle controls, *never* tenant content.
+# `/admin` gates on `actor.is_operator`; routes raise 404 (not 403)
+# for non-operators so the surface's existence stays opaque to users.
+
+
+def _require_operator_route(actor: Actor) -> None:
+    """404 — not 403 — when a non-operator probes ``/admin``.  We
+    don't want a curious tenant maintainer to learn the operator
+    URL space exists; for them, ``/admin`` should look exactly like
+    any other unrouted path."""
+    if not actor.is_operator:
+        raise HTTPException(404)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(request: Request, invite_url: str = ""):
+    """Per-deployment tenant roster.  ``invite_url`` round-trips a
+    freshly-minted invite link from the create-tenant POST so the
+    operator can copy it without an email send."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    tenants = dao_tenants.list_all(actor)
+    return templates.TemplateResponse(
+        request, "admin.html",
+        {
+            "tenants": tenants,
+            "current_email": actor.email,
+            "invite_url": invite_url,
+            "public_url": PUBLIC_URL,
+        },
+    )
+
+
+@app.post("/admin/tenants")
+def admin_create_tenant_and_invite(
+    request: Request,
+    name: str = Form(...),
+    invitee_email: str = Form(...),
+    role: str = Form("maintainer"),
+    plan: str = Form("free"),
+):
+    """Bootstrap a fresh tenant + mint the first-maintainer invite
+    in one shot.  The operator never becomes a member; the invitee
+    will be the sole maintainer once they accept.  Until acceptance
+    the new tenant has zero members and shows ``open_invites=1``
+    on the dashboard."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Tenant name required")
+    try:
+        tenant_id = dao_tenants.create_tenant(actor, name, plan=plan)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    try:
+        invite = dao_invites.create(
+            actor, email=invitee_email, role=role, tenant_id=tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    url = f"{base}/invite/{invite['token']}"
+    from urllib.parse import urlencode
+    return RedirectResponse(
+        f"/admin?{urlencode({'invite_url': url})}",
+        status_code=303,
+    )
+
+
 @app.get("/maintenance", response_class=HTMLResponse)
 def maintenance(request: Request, cleaned: str = "", update: str = "", imported: str = ""):
     actor: Actor = request.state.actor

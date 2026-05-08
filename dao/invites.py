@@ -61,22 +61,51 @@ def create(
     email: str,
     role: str = "maintainer",
     expires_in_days: int = DEFAULT_EXPIRY_DAYS,
+    tenant_id: int | None = None,
 ) -> dict:
     """Mint a new invite token for ``email`` at ``role``.  Returns
     ``{"token": ..., "expires_at": ..., "email": ..., "role": ...}``.
 
-    Maintainer-only.  ``role`` is the role the *invitee* will be
-    granted, not the actor's — so a maintainer can invite a readonly
-    helper.  Off-palette roles raise ValueError so a typo doesn't
+    Default flow: a maintainer invites someone into their *own*
+    active tenant.  ``tenant_id`` is left as None and the actor's
+    tenant_id is used.
+
+    Operator flow: an operator passes ``tenant_id=X`` to mint an
+    invite into a tenant they don't belong to — the operator
+    bootstrap path for spec § "Operator surface" ("create tenant +
+    invite first maintainer").  This is the *only* operator
+    capability that touches a tenant_invites row, by design;
+    everything else stays inside the per-tenant maintainer surface.
+
+    ``role`` is the role the *invitee* will be granted, not the
+    actor's.  Off-palette roles raise ValueError so a typo doesn't
     silently mint a useless token."""
-    require_role(actor, "maintainer")
-    if actor.tenant_id is None:
-        raise ForbiddenError(f"{actor.email} has no active tenant")
     if role not in ("maintainer", "readonly"):
         raise ValueError(f"unknown role {role!r}")
     email = email.strip().lower()
     if "@" not in email:
         raise ValueError("invite email must contain '@'")
+
+    if tenant_id is None:
+        # Per-tenant maintainer path: actor must be a maintainer of
+        # their active tenant.
+        require_role(actor, "maintainer")
+        if actor.tenant_id is None:
+            raise ForbiddenError(f"{actor.email} has no active tenant")
+        target_tenant = actor.tenant_id
+    else:
+        # Cross-tenant path: operators may mint into any tenant; a
+        # maintainer of the named tenant may also mint into it (so
+        # an actor with multiple memberships isn't forced to hop the
+        # tenant switcher just to invite someone into a non-active
+        # membership).
+        target_tenant = tenant_id
+        membership_role = actor.has_membership(tenant_id)
+        if not actor.is_operator and membership_role != "maintainer":
+            raise ForbiddenError(
+                f"{actor.email} is not a maintainer of tenant {tenant_id}"
+            )
+
     token = secrets.token_urlsafe(24)
     expires_at = (_utcnow() + timedelta(days=expires_in_days)).isoformat()
     with db() as conn:
@@ -84,16 +113,17 @@ def create(
             "INSERT INTO tenant_invites "
             "(token, tenant_id, email, role, created_by_email, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (token, actor.tenant_id, email, role, actor.email, expires_at),
+            (token, target_tenant, email, role, actor.email, expires_at),
         )
-        _audit(conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+        _audit(conn, tenant_id=target_tenant, actor_email=actor.email,
                action="invite.send",
                metadata={"email": email, "role": role,
-                         "expires_at": expires_at})
+                         "expires_at": expires_at,
+                         "by_operator": bool(actor.is_operator and tenant_id is not None)})
         conn.commit()
     return {
         "token": token,
-        "tenant_id": actor.tenant_id,
+        "tenant_id": target_tenant,
         "email": email,
         "role": role,
         "expires_at": expires_at,
