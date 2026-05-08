@@ -2503,11 +2503,23 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     the box selection (very similar to the AI suggest path).  We
     re-read it from the row (rather than threading another param)
     so the retry handler doesn't have to re-discover state."""
+    _log = obs.get_logger("stash.ingest")
+    _log.info("ingest.worker.start job_id=%s tenant_id=%s photo=%s",
+              job_id, tenant_id, photo_name)
     dao_ingest_jobs.mark_processing(job_id)
-    target_box_id = dao_ingest_jobs.get_target_box_id(job_id)
     try:
+        # Re-reading the hint must live inside the try so a missing-
+        # column or other DB hiccup gets recorded as a failed job
+        # rather than wedging the row at "processing" forever (the
+        # symptom: photo uploaded, sits spinning, no logs after
+        # ``ingest.worker.start``).
+        target_box_id = dao_ingest_jobs.get_target_box_id(job_id)
         image_bytes = _bytes_for_vision(tenant_id, photo_name)
+        _log.info("ingest.worker.vision job_id=%s bytes=%s",
+                  job_id, len(image_bytes))
         detected = vision.detect_items(image_bytes, media_type="image/jpeg")
+        _log.info("ingest.worker.vision_done job_id=%s items=%s",
+                  job_id, len(detected))
         dao_usage.record(tenant_id, "ai", "gemini_detect")
         for item in detected:
             bbox = item.bbox or [None, None, None, None]
@@ -2520,8 +2532,15 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
                 suggested_box_id=target_box_id,
             )
         dao_ingest_jobs.mark_done(job_id, len(detected))
+        _log.info("ingest.worker.done job_id=%s items=%s",
+                  job_id, len(detected))
     except Exception as e:
-        dao_ingest_jobs.mark_failed(job_id, str(e))
+        _log.exception("ingest.worker.failed job_id=%s", job_id)
+        try:
+            dao_ingest_jobs.mark_failed(job_id, str(e))
+        except Exception:
+            _log.exception("ingest.worker.mark_failed_also_failed job_id=%s",
+                           job_id)
 
 
 @app.get("/ingest", response_class=HTMLResponse)
