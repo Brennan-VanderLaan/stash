@@ -331,13 +331,36 @@ async def security_headers(request: Request, call_next):
 # also need to be listed in OAUTH2_PROXY_SKIP_AUTH_ROUTES so the
 # proxy forwards the request to stash without a Google session
 # cookie check.  See deploy/docker-compose.yml + .env.example.
-_AUTH_BYPASS_PATHS = frozenset((
+_AUTH_BYPASS_EXACT = frozenset((
     "/healthz",
-    "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-authorization-server",
     "/oauth/token",
     "/oauth/register",
 ))
+
+# Prefix-based bypass: RFC 9728 protected-resource metadata can
+# live at the root or path-suffixed form (e.g.
+# ``/.well-known/oauth-protected-resource/mcp``); both have to
+# pass the wall.  Tightly scoped to one prefix so adding a new
+# bypass surface remains a deliberate code change.
+_AUTH_BYPASS_PREFIXES = (
+    "/.well-known/oauth-protected-resource",
+)
+
+
+def _path_bypasses_auth(path: str) -> bool:
+    if path in _AUTH_BYPASS_EXACT:
+        return True
+    return any(path.startswith(p) for p in _AUTH_BYPASS_PREFIXES)
+
+
+# Backwards-compatible alias preserved for the auth-coverage
+# pinning test in tests/test_auth_coverage.py.  Kept as a
+# frozenset so the test's set-equality assertion remains
+# meaningful even with the new prefix surface.
+_AUTH_BYPASS_PATHS = frozenset(
+    list(_AUTH_BYPASS_EXACT) + list(_AUTH_BYPASS_PREFIXES)
+)
 
 
 @app.middleware("http")
@@ -346,7 +369,7 @@ async def current_actor(request: Request, call_next):
     # auth wall entirely.  Container HEALTHCHECKs and external
     # probes hit /healthz without any identity headers; the route's
     # response carries no tenant data, so a bypass is safe.
-    if request.url.path in _AUTH_BYPASS_PATHS:
+    if _path_bypasses_auth(request.url.path):
         return await call_next(request)
 
     # Stamp a fresh request_id first so every log line emitted under
@@ -3995,10 +4018,20 @@ def _public_url(request: Request) -> str:
 
 @app.get("/.well-known/oauth-protected-resource")
 def well_known_protected_resource(request: Request):
-    """RFC 9728 Protected Resource Metadata for /mcp.  Discovered
-    via the WWW-Authenticate header on a /mcp 401, or by an MCP
-    client probing the well-known root.  Public — anyone can
-    fetch it (no tenant data leaks)."""
+    """RFC 9728 Protected Resource Metadata at the root path.
+    Public — anyone can fetch it (no tenant data leaks)."""
+    return dao_oauth.protected_resource_metadata(_public_url(request))
+
+
+@app.get("/.well-known/oauth-protected-resource/{rest:path}")
+def well_known_protected_resource_suffix(request: Request, rest: str):
+    """RFC 9728 Section 3.1 also allows the path-suffixed form
+    ``/.well-known/oauth-protected-resource/<resource-path>`` (e.g.
+    ``/.well-known/oauth-protected-resource/mcp``).  Some clients —
+    notably claude.ai's web custom-connector — probe this form
+    first and only fall back to the root URI if it 404s.  Serving
+    both saves a discovery round-trip + keeps a strict client
+    happy."""
     return dao_oauth.protected_resource_metadata(_public_url(request))
 
 
@@ -4013,6 +4046,41 @@ def well_known_authorization_server(request: Request):
 # ── OAuth 2.1 flow endpoints (phase 19) ─────────────────────────────
 
 
+def _validate_oauth_param(name: str, value: str, *, max_len: int) -> None:
+    """Generic length guard for OAuth query/form params.  The spec
+    doesn't pin exact upper bounds; these caps are sized for "more
+    than any legitimate client needs, much less than a memory-bloat
+    payload"."""
+    if value and len(value) > max_len:
+        raise HTTPException(
+            400,
+            f"OAuth {name} parameter exceeds {max_len} characters",
+        )
+
+
+def _append_query(redirect_uri: str, params: dict) -> str:
+    """Compose a redirect URL by adding ``params`` to whatever
+    query string the registered ``redirect_uri`` may already
+    carry.  RFC 6749 §3.1.2 explicitly allows query components
+    on the registered URI; the previous naive
+    ``f"{uri}?{urlencode(params)}"`` produced ``...?a=b?code=…``
+    when the registered URI was ``...?session=xyz``.
+
+    Splits via ``urlparse``, merges + re-encodes the query, puts
+    the URI back together with ``urlunparse`` so any registered
+    fragment (rare) survives unchanged."""
+    from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+    parsed = urlparse(redirect_uri)
+    existing = parse_qsl(parsed.query, keep_blank_values=True)
+    # Add ours after the registered query; on key collision the
+    # OAuth-protocol field wins (we set it second, and dict-form
+    # would overwrite anyway).  Pass through ``parse_qsl``'s
+    # list-of-pairs to preserve ordering for any client that
+    # asserts on it.
+    merged = existing + [(k, v) for k, v in params.items() if v is not None]
+    return urlunparse(parsed._replace(query=urlencode(merged)))
+
+
 def _oauth_redirect_with_error(redirect_uri: str, *, error: str,
                                error_description: str = "",
                                state: str = "") -> RedirectResponse:
@@ -4020,14 +4088,13 @@ def _oauth_redirect_with_error(redirect_uri: str, *, error: str,
     client's redirect_uri with ``error``/``error_description``/
     ``state`` query params.  Spec § 4.1.2.1 — never display the
     error to the user, the client surfaces it."""
-    from urllib.parse import urlencode
     params = {"error": error}
     if error_description:
         params["error_description"] = error_description
     if state:
         params["state"] = state
     return RedirectResponse(
-        f"{redirect_uri}?{urlencode(params)}", status_code=303,
+        _append_query(redirect_uri, params), status_code=303,
     )
 
 
@@ -4055,6 +4122,14 @@ def oauth_authorize_get(
         # needs to invite them to a tenant first.
         raise HTTPException(403, "No tenant membership; ask an operator to invite you.")
 
+    # Defensive length caps.  Spec doesn't mandate exact upper
+    # bounds; these are sized for "more than any legitimate
+    # client needs, less than a memory-bloat payload".
+    _validate_oauth_param("state", state, max_len=512)
+    _validate_oauth_param("scope", scope, max_len=256)
+    _validate_oauth_param("code_challenge", code_challenge, max_len=128)
+    _validate_oauth_param("resource", resource, max_len=2048)
+
     # Validate response_type early — this is the only one we
     # support and a misconfigured client should hit a clean error.
     if response_type != "code":
@@ -4077,10 +4152,23 @@ def oauth_authorize_get(
             f"client {client_id!r}",
         )
 
+    canonical_resource = f"{_public_url(request)}/mcp"
     # Default the resource to /mcp on this deployment if the
     # client didn't specify (most MCP clients will, but be lenient).
     if not resource:
-        resource = f"{_public_url(request)}/mcp"
+        resource = canonical_resource
+    elif resource.rstrip("/") != canonical_resource.rstrip("/"):
+        # Spec §"Resource Parameter Implementation": the
+        # ``resource`` MUST identify the MCP server the client
+        # intends to use the token with.  Issuing tokens for
+        # arbitrary resources isn't useful (the audience-bound
+        # token won't authenticate anywhere on this stash) and
+        # bloats DB rows.  Refuse explicitly.
+        raise HTTPException(
+            400,
+            f"resource {resource!r} is not served by this deployment "
+            f"(expected {canonical_resource!r})",
+        )
 
     # Memberships dropdown: every tenant the user can grant
     # access to.  We surface the tenant name (not just id) so
@@ -4165,12 +4253,11 @@ def oauth_authorize_post(
         role=role,
     )
 
-    from urllib.parse import urlencode
     params = {"code": code}
     if state:
         params["state"] = state
     return RedirectResponse(
-        f"{redirect_uri}?{urlencode(params)}", status_code=303,
+        _append_query(redirect_uri, params), status_code=303,
     )
 
 
@@ -4288,6 +4375,29 @@ async def oauth_register(request: Request):
             status_code=403,
             media_type="application/json",
         )
+    # Per-IP throttle: defends against a malicious or runaway
+    # client looping registrations.  Caddy stamps the real client
+    # IP on ``X-Forwarded-For``; ``request.client.host`` is the
+    # fallback for direct deploys.  Same shape as the
+    # tenant-creation throttle in dao.quotas.
+    client_ip = (
+        (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
+    try:
+        dao_oauth.check_dcr_rate(client_ip)
+    except dao_quotas.QuotaExceeded as exc:
+        return Response(
+            content=json.dumps({
+                "error": "too_many_requests",
+                "error_description":
+                    f"DCR rate limit hit ({exc.used} ≥ {exc.cap} per "
+                    f"hour from this IP).  Wait for the window reset.",
+            }),
+            status_code=429,
+            media_type="application/json",
+        )
+
     body = await request.json()
     name = (body.get("client_name") or "Unregistered MCP client").strip()
     redirect_uris = body.get("redirect_uris") or []
@@ -4311,6 +4421,7 @@ async def oauth_register(request: Request):
             redirect_uris=redirect_uris,
             is_public=is_public,
             registered_by_email="<dcr>",
+            client_ip=client_ip,
         )
     except ValueError as exc:
         return Response(

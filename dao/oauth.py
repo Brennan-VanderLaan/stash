@@ -102,12 +102,56 @@ def _iso(dt: datetime) -> str:
 # ── Client registration ────────────────────────────────────────────
 
 
+_MAX_CLIENT_NAME_LEN = 100
+_MAX_REDIRECT_URI_LEN = 2048
+_MAX_REDIRECT_URIS = 10
+
+
+# Per-IP DCR throttle: defends against a malicious or runaway
+# client looping registrations (each row is cheap, but unbounded
+# growth is unbounded growth).  Default 20/hour matches the
+# tenant-creation throttle's spirit; configurable.
+import os as _os
+DCR_PER_HOUR = int(_os.environ.get("STASH_OAUTH_DCR_PER_HOUR", "20"))
+
+
+def check_dcr_rate(client_ip: str) -> None:
+    """Raise :class:`QuotaExceeded`-shaped error if the IP has
+    DCR'd more than ``DCR_PER_HOUR`` clients in the current hour.
+    Counts against ``audit_log.oauth.client.register`` rows
+    bucketed by the source IP stored in metadata."""
+    if not client_ip:
+        client_ip = "unknown"
+    from datetime import datetime, timezone
+    hour_start = datetime.now(timezone.utc).replace(
+        minute=0, second=0, microsecond=0,
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action = 'oauth.client.register' "
+            "  AND created_at >= ? "
+            "  AND COALESCE("
+            "        json_extract(metadata_json, '$.ip'), 'unknown'"
+            "      ) = ?",
+            (hour_start, client_ip),
+        ).fetchone()
+    if row["n"] >= DCR_PER_HOUR:
+        # Late-import the typed exception so we don't drag
+        # dao.quotas into the import graph for a single class.
+        from dao.quotas import QuotaExceeded
+        raise QuotaExceeded(
+            "oauth", "dcr_rate", int(row["n"]), DCR_PER_HOUR,
+        )
+
+
 def register_client(
     *,
     name: str,
     redirect_uris: list[str],
     is_public: bool = True,
     registered_by_email: str = "<dcr>",
+    client_ip: str = "",
 ) -> dict:
     """Mint a new OAuth client.  Used by both the operator
     pre-registration path and the public DCR endpoint.
@@ -116,11 +160,26 @@ def register_client(
     omits ``client_secret`` — PKCE is the auth mechanism on the
     /token call.  For confidential clients we mint a one-time
     secret (shown once, hashed in storage)."""
-    if not name or not name.strip():
+    name = (name or "").strip()
+    if not name:
         raise ValueError("client name required")
+    # Defensive cap so a malicious DCR payload can't bloat the
+    # consent page or audit-log metadata with a multi-MB name.
+    if len(name) > _MAX_CLIENT_NAME_LEN:
+        raise ValueError(
+            f"client name must be {_MAX_CLIENT_NAME_LEN} characters or fewer",
+        )
     if not redirect_uris:
         raise ValueError("at least one redirect_uri required")
+    if len(redirect_uris) > _MAX_REDIRECT_URIS:
+        raise ValueError(
+            f"at most {_MAX_REDIRECT_URIS} redirect_uris allowed per client",
+        )
     for uri in redirect_uris:
+        if len(uri) > _MAX_REDIRECT_URI_LEN:
+            raise ValueError(
+                f"redirect_uri must be {_MAX_REDIRECT_URI_LEN} chars or fewer",
+            )
         # Strict form: HTTPS or localhost.  Spec § Communication
         # Security: "All redirect URIs MUST be either localhost or
         # use HTTPS."
@@ -144,22 +203,25 @@ def register_client(
             "(client_id, client_secret_hash, name, redirect_uris, "
             " is_public, registered_by_email) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (client_id, client_secret_hash, name.strip(),
+            (client_id, client_secret_hash, name,
              json.dumps(redirect_uris), 1 if is_public else 0,
              registered_by_email),
         )
         # Audit-log every registration so an operator can spot
         # spammy DCR floods.  tenant_id NULL — clients are
-        # cross-tenant by nature.
+        # cross-tenant by nature.  ``ip`` is what
+        # :func:`check_dcr_rate` buckets on, so it has to be
+        # present in the metadata for the throttle to count.
         obs.write_audit(
             conn, tenant_id=None, actor_email=registered_by_email,
             action="oauth.client.register",
             target_kind="oauth_client",
             metadata={
                 "client_id": client_id,
-                "name": name.strip(),
+                "name": name,
                 "is_public": is_public,
                 "redirect_uris": redirect_uris,
+                "ip": client_ip or "unknown",
             },
         )
         conn.commit()
@@ -169,7 +231,7 @@ def register_client(
     )
     out = {
         "client_id": client_id,
-        "name": name.strip(),
+        "name": name,
         "redirect_uris": redirect_uris,
         "is_public": is_public,
     }
@@ -332,6 +394,12 @@ def consume_authorization_code(
     * unknown / consumed / expired code
     * client_id / redirect_uri mismatch
     * PKCE verifier doesn't match the stored challenge
+
+    Race-safe: the consume is an atomic UPDATE-WHERE-NOT-CONSUMED
+    with a rowcount guard so two concurrent /token calls with the
+    same code can't both pass.  The previous SELECT-then-UPDATE
+    shape lost the race in WAL mode and let a single code mint
+    two access+refresh pairs (P0 finding from the OAuth audit).
     """
     with db() as conn:
         row = conn.execute(
@@ -366,12 +434,18 @@ def consume_authorization_code(
         if not secrets.compare_digest(row["code_challenge"], expected):
             raise ValueError("invalid_grant: PKCE verification failed")
 
-        # Mark consumed before returning — single-use.
-        conn.execute(
+        # Atomic single-use guard.  ``WHERE consumed_at IS NULL``
+        # means only the first racer wins; the second sees
+        # rowcount=0 and gets the replay-rejection path even if
+        # it passed the SELECT-then-validate above.
+        cur = conn.execute(
             "UPDATE oauth_authorization_codes "
-            "SET consumed_at = CURRENT_TIMESTAMP WHERE code = ?",
+            "SET consumed_at = CURRENT_TIMESTAMP "
+            "WHERE code = ? AND consumed_at IS NULL",
             (code,),
         )
+        if cur.rowcount == 0:
+            raise ValueError("invalid_grant: code already consumed")
         conn.commit()
 
     return {
@@ -466,13 +540,20 @@ def consume_refresh_token(
     resource) so the caller can issue a fresh pair.
 
     Raises ValueError on any of: unknown / consumed / expired /
-    wrong client_id."""
+    wrong client_id.
+
+    Race-safe: single-use guard rides on the UPDATE rowcount,
+    same shape as :func:`consume_authorization_code`.  Spec § 4.3.1
+    mandates rotation; without the atomic check two concurrent
+    refreshes could both succeed.
+    """
+    rt_hash = _hash(refresh_token)
     with db() as conn:
         row = conn.execute(
             "SELECT oauth_client_id, tenant_id, user_email, role, "
             "       scope, resource, expires_at, consumed_at "
             "FROM oauth_refresh_tokens WHERE token_hash = ?",
-            (_hash(refresh_token),),
+            (rt_hash,),
         ).fetchone()
         if row is None:
             raise ValueError("invalid_grant: unknown refresh_token")
@@ -492,11 +573,24 @@ def consume_refresh_token(
             raise ValueError("invalid_grant: refresh_token expired")
         if row["oauth_client_id"] != client_id:
             raise ValueError("invalid_grant: client_id mismatch")
-        conn.execute(
+        cur = conn.execute(
             "UPDATE oauth_refresh_tokens "
-            "SET consumed_at = CURRENT_TIMESTAMP WHERE token_hash = ?",
-            (_hash(refresh_token),),
+            "SET consumed_at = CURRENT_TIMESTAMP "
+            "WHERE token_hash = ? AND consumed_at IS NULL",
+            (rt_hash,),
         )
+        if cur.rowcount == 0:
+            # Another concurrent caller won the race; same
+            # replay-rejection path.
+            obs.write_audit(
+                conn, tenant_id=row["tenant_id"],
+                actor_email=row["user_email"],
+                action="oauth.refresh.replay",
+                target_kind="oauth_client",
+                metadata={"client_id": client_id, "race": True},
+            )
+            conn.commit()
+            raise ValueError("invalid_grant: refresh_token already used")
         conn.commit()
     return {
         "tenant_id": row["tenant_id"],

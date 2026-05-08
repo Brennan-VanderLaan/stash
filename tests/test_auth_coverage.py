@@ -194,14 +194,18 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         # Static files: not exempt — auth wall fires for them too.
         r = c.get("/static/style.css", follow_redirects=False)
         assert r.status_code in (401, 403)
-    # Pin the exact bypass set.
-    assert app_mod._AUTH_BYPASS_PATHS == frozenset((
+    # Pin the exact bypass set — split into exact + prefix forms
+    # to support RFC 9728 path-suffixed protected-resource
+    # metadata (``/.well-known/oauth-protected-resource/mcp``).
+    assert app_mod._AUTH_BYPASS_EXACT == frozenset((
         "/healthz",
-        "/.well-known/oauth-protected-resource",
         "/.well-known/oauth-authorization-server",
         "/oauth/token",
         "/oauth/register",
     ))
+    assert app_mod._AUTH_BYPASS_PREFIXES == (
+        "/.well-known/oauth-protected-resource",
+    )
 
 
 # ── Cross-tenant isolation ──────────────────────────────────────────

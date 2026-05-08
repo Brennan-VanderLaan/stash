@@ -514,6 +514,226 @@ def test_mcp_401_carries_www_authenticate_resource_metadata(
     assert "mcp" in www
 
 
+def test_protected_resource_metadata_path_suffixed(tmp_path, monkeypatch):
+    """RFC 9728 §3.1 allows path-suffixed metadata at
+    ``/.well-known/oauth-protected-resource/<path>``.  claude.ai
+    probes this form first; serving it saves a discovery
+    round-trip.  The body is identical to the root form."""
+    app_mod, _ = _bootstrap(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        root = c.get("/.well-known/oauth-protected-resource").json()
+        suffixed = c.get(
+            "/.well-known/oauth-protected-resource/mcp",
+        ).json()
+    assert root == suffixed
+
+
+def test_authorization_code_consume_is_race_safe(tmp_path, monkeypatch):
+    """Audit P0 #1 regression: two concurrent /token exchanges
+    with the same code must not both succeed.  Drive both
+    through the same code at the DAO layer so the test is
+    deterministic — the atomic UPDATE rowcount guard is what
+    makes this pass."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        redirect_uri = "https://app.test/cb"
+        client_id = _register_client(c, redirect_uri)
+        verifier, challenge = _pkce_pair()
+        r = c.post(
+            "/oauth/authorize",
+            data={
+                "decision": "approve", "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "scope": "mcp",
+                "resource": "https://stash.example.com/mcp",
+                "tenant_id": str(ids["t1"]),
+            },
+            follow_redirects=False,
+        )
+        from urllib.parse import urlparse, parse_qs
+        code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+
+    # First exchange wins; second must fail with invalid_grant.
+    from dao import oauth as dao_oauth
+    ctx = dao_oauth.consume_authorization_code(
+        code=code, client_id=client_id,
+        redirect_uri="https://app.test/cb",
+        code_verifier=verifier,
+    )
+    assert ctx["tenant_id"] == ids["t1"]
+    import pytest
+    with pytest.raises(ValueError) as exc:
+        dao_oauth.consume_authorization_code(
+            code=code, client_id=client_id,
+            redirect_uri="https://app.test/cb",
+            code_verifier=verifier,
+        )
+    assert "already consumed" in str(exc.value)
+
+
+def test_refresh_token_consume_is_race_safe(tmp_path, monkeypatch):
+    """Audit P0 #2 regression: two concurrent refresh exchanges
+    with the same token must not both rotate.  Atomic UPDATE
+    rowcount guard at the DAO layer."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        body = _full_flow(c, ids)
+    refresh = body["refresh_token"]
+    client_id = body["_client_id"]
+    from dao import oauth as dao_oauth
+    # First wins.
+    ctx = dao_oauth.consume_refresh_token(
+        refresh_token=refresh, client_id=client_id,
+    )
+    assert ctx["tenant_id"] == ids["t1"]
+    # Second must fail.
+    import pytest
+    with pytest.raises(ValueError) as exc:
+        dao_oauth.consume_refresh_token(
+            refresh_token=refresh, client_id=client_id,
+        )
+    assert "already used" in str(exc.value)
+
+
+def test_redirect_uri_with_existing_query_string(tmp_path, monkeypatch):
+    """Audit P0 #3 regression: a registered redirect_uri that
+    carries its own query string (RFC 6749 §3.1.2 explicitly
+    allows it) must compose cleanly with the OAuth response
+    params — single ``?`` separator, query merged."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        redirect_uri = "https://app.test/cb?session=preexisting"
+        client_id = _register_client(c, redirect_uri)
+        verifier, challenge = _pkce_pair()
+        r = c.post(
+            "/oauth/authorize",
+            data={
+                "decision": "approve", "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "state": "ABC",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "scope": "mcp",
+                "resource": "https://stash.example.com/mcp",
+                "tenant_id": str(ids["t1"]),
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    # Single ``?`` separator — the registered query merges with
+    # the OAuth response params, doesn't double-up.
+    assert loc.count("?") == 1
+    from urllib.parse import urlparse, parse_qs
+    qs = parse_qs(urlparse(loc).query)
+    assert qs["session"] == ["preexisting"]
+    assert qs["state"] == ["ABC"]
+    assert "code" in qs
+
+
+def test_dcr_rejects_oversized_client_name(tmp_path, monkeypatch):
+    """Audit P1 #4 regression: client_name > 100 chars rejected
+    so a malicious DCR payload can't bloat the consent UI."""
+    app_mod, _ = _bootstrap(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        r = c.post(
+            "/oauth/register",
+            json={
+                "client_name": "x" * 200,
+                "redirect_uris": ["https://app.test/cb"],
+            },
+        )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_client_metadata"
+
+
+def test_authorize_rejects_oversized_state(tmp_path, monkeypatch):
+    """Audit P1 #5 regression: ``state`` > 512 chars is
+    rejected.  A 1MB state would otherwise round-trip through
+    the consent template + the redirect bounce."""
+    app_mod, _ = _bootstrap(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        client_id = _register_client(c, "https://app.test/cb")
+        _, challenge = _pkce_pair()
+        r = c.get(
+            "/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": "https://app.test/cb",
+                "state": "x" * 1024,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            },
+        )
+    assert r.status_code == 400
+
+
+def test_authorize_rejects_resource_for_other_deployment(
+    tmp_path, monkeypatch,
+):
+    """Audit P1 #6 regression: ``resource`` MUST identify this
+    deployment's /mcp.  An MCP client requesting a token bound
+    to a different audience gets 400."""
+    app_mod, _ = _bootstrap(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        client_id = _register_client(c, "https://app.test/cb")
+        _, challenge = _pkce_pair()
+        r = c.get(
+            "/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": "https://app.test/cb",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "resource": "https://elsewhere.example.com/mcp",
+            },
+        )
+    assert r.status_code == 400
+    assert "served by this deployment" in r.text
+
+
+def test_dcr_rate_limit_blocks_after_n_per_hour(tmp_path, monkeypatch):
+    """Audit P1 #7 regression: per-IP cap on /oauth/register
+    counts against audit-logged registrations from the same IP
+    within the current hour.  Defaults to 20/hour; we tighten
+    it via env to make the test fast."""
+    monkeypatch.setenv("STASH_OAUTH_DCR_PER_HOUR", "2")
+    app_mod, _ = _bootstrap(tmp_path, monkeypatch)
+    # Reload the module so it picks up the new env value.
+    import importlib
+    from dao import oauth as dao_oauth
+    importlib.reload(dao_oauth)
+
+    # Seed two register-audits from a single IP so the third
+    # attempt from that IP hits the cap.
+    with app_mod.db() as conn:
+        for i in range(2):
+            conn.execute(
+                "INSERT INTO audit_log "
+                "(tenant_id, actor_email, action, target_kind, "
+                " metadata_json) "
+                "VALUES (NULL, '<dcr>', 'oauth.client.register', "
+                "        'oauth_client', ?)",
+                ('{"ip":"203.0.113.42"}',),
+            )
+        conn.commit()
+    import pytest
+    from dao.quotas import QuotaExceeded
+    with pytest.raises(QuotaExceeded):
+        dao_oauth.check_dcr_rate("203.0.113.42")
+    # Different IP is fine.
+    dao_oauth.check_dcr_rate("203.0.113.99")
+
+
 def test_authorize_post_deny_redirects_with_error(tmp_path, monkeypatch):
     """User denying consent → redirect to the client's
     redirect_uri with ``error=access_denied`` per spec §4.1.2.1."""

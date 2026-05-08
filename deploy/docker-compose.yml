@@ -67,17 +67,17 @@ services:
       # * ``^/oauth/(token|register)$`` — server-to-server OAuth endpoints
       #   (phase 19).  /authorize is browser-driven and stays gated.
       # * ``^/\.well-known/oauth-`` — RFC 8414 + 9728 discovery; public.
+      #   Both root + path-suffixed forms (``oauth-protected-resource/mcp``)
+      #   match the prefix anchor, so a single regex covers both.
       # * ``^/healthz$`` — container liveness probe.
       # Each of these is also gated at the stash layer (current_actor
       # middleware) — this list just lets the request through the
       # outer Google-cookie wall.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: |-
-        ^/api/v1/
-        ^/mcp$
-        ^/oauth/token$
-        ^/oauth/register$
-        ^/\.well-known/oauth-
-        ^/healthz$
+      #
+      # Env-var form requires COMMA separator — a YAML ``|-`` block
+      # would be parsed as one giant regex with embedded newlines,
+      # which is what bit a previous version of this file.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
