@@ -921,27 +921,6 @@ def parse_tag_input(raw: str) -> list[tuple[str, str | None]]:
     return results
 
 
-def set_item_tags(conn, tenant_id: int, item_id: int, tag_entries: list[tuple[str, str | None]]) -> None:
-    for tag_name, value in tag_entries:
-        tag_id = ensure_tag(conn, tenant_id, tag_name)
-        conn.execute(
-            "INSERT OR REPLACE INTO item_tags (item_id, tag_id, value, tenant_id) "
-            "VALUES (?, ?, ?, ?)",
-            (item_id, tag_id, value, tenant_id),
-        )
-
-
-def get_item_tags(conn, item_id: int) -> list[dict]:
-    return [
-        dict(r) for r in conn.execute(
-            "SELECT t.id AS tag_id, t.name, it.value "
-            "FROM item_tags it JOIN tags t ON t.id = it.tag_id "
-            "WHERE it.item_id = ? ORDER BY t.name",
-            (item_id,),
-        ).fetchall()
-    ]
-
-
 def format_tag(name: str, value: str | None) -> str:
     return f"{name}:{value}" if value else name
 
