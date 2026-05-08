@@ -83,10 +83,18 @@ services:
       STASH_PUBLIC_URL: https://${DOMAIN}
       WATCHTOWER_URL: http://watchtower:8080
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN}
-      # Defense-in-depth gate. The proxy's emails.txt is the first layer; this
-      # is the second.  Stash refuses to boot if neither is set — see .env.
+      # Encryption at rest.  Required — stash refuses to boot without it.
+      # Wraps every tenant's DEK; back the value up separately from the
+      # data backups (see .env for generation + caveats).
+      STASH_KEK: ${STASH_KEK}
+      # Multi-tenancy gates. The proxy's emails.txt is the first layer; the
+      # tenant_members table (seeded from STASH_BOOTSTRAP_MEMBER_EMAIL on
+      # first migration, or the legacy STASH_ALLOWED_EMAILS fallback) is
+      # the second.  Operators get /admin via STASH_OPERATOR_EMAILS but
+      # cannot read tenant data through that route by design.
+      STASH_BOOTSTRAP_MEMBER_EMAIL: ${STASH_BOOTSTRAP_MEMBER_EMAIL}
+      STASH_OPERATOR_EMAILS: ${STASH_OPERATOR_EMAILS}
       STASH_ALLOWED_EMAILS: ${STASH_ALLOWED_EMAILS}
-      FULLY_PUBLIC: ${FULLY_PUBLIC}
     volumes:
       - stash-data:/data
     networks:

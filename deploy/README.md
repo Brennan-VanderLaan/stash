@@ -138,12 +138,24 @@ $EDITOR .env
 #       openssl rand -base64 32 | tr -- '+/' '-_'
 #   - WATCHTOWER_TOKEN — generate with:
 #       openssl rand -hex 32
+#   - STASH_KEK — REQUIRED. Wraps every tenant's per-tenant DEK; on-disk
+#     photos are AES-256-GCM ciphertext under it.  Generate with:
+#       python3 -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+#     Back the value up to a DIFFERENT bucket / vendor than the data
+#     backups.  Losing the KEK = total data loss.
+#   - STASH_BOOTSTRAP_MEMBER_EMAIL — your Google email.  On first
+#     upgrade, the multi-tenancy migration creates a "Personal" tenant
+#     with this email as sole maintainer.  Falls back to the first
+#     entry of STASH_ALLOWED_EMAILS if unset.
+#   - STASH_OPERATOR_EMAILS (optional) — operator accounts that can
+#     hit /admin once that surface ships.  No automatic data access.
 
 # Allowlist the Google emails that can sign in. Both files matter:
-#   * emails.txt        — read by oauth2-proxy (one address per line)
-#   * STASH_ALLOWED_EMAILS in .env — read by stash itself (comma-separated)
-# Stash refuses to start if STASH_ALLOWED_EMAILS is empty (set FULLY_PUBLIC=true
-# only if you knowingly want to disable the app-level gate).
+#   * emails.txt — read by oauth2-proxy (one address per line)
+#   * tenant_members table (seeded from STASH_BOOTSTRAP_MEMBER_EMAIL on
+#     first run; updated through the in-app invite flow afterwards) —
+#     read by stash itself
+# Add your own email to emails.txt to get past oauth2-proxy.
 cp emails.example.txt emails.txt
 $EDITOR emails.txt
 #   one email per line — anyone not listed gets a "not authorized" page
