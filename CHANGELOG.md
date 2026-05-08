@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.6.1...v1.7.0) (2026-05-08)
+
+
+### Features
+
+* **oauth:** OAuth 2.1 authorization server for MCP discovery ([382a35f](https://github.com/Brennan-VanderLaan/stash/commit/382a35fa0b2094e9b29ce7e220a74a0c962ab6a8))
+
 ## [1.6.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.6.0...v1.6.1) (2026-05-08)
 
 
