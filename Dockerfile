@@ -37,6 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Source files in roughly stable→volatile order so a frequent CHANGELOG bump
 # doesn't invalidate the python file layer.
 COPY app.py labels.py vault.py vision.py ./
+COPY dao/ ./dao/
 COPY templates/ ./templates/
 COPY static/ ./static/
 COPY CHANGELOG.md ./
