@@ -218,3 +218,146 @@ def _audit_export(tenant_id: int, actor_email: str, manifest: dict) -> None:
             (tenant_id, actor_email, tenant_id, json.dumps(summary)),
         )
         conn.commit()
+
+
+# ── B2 (S3-compatible) upload ───────────────────────────────────────
+
+
+# Spec § "Backups · Off-site DR via Backblaze B2" — phase 8.
+#
+# Configuration lives in the standard env-var quartet:
+#   B2_KEY_ID, B2_APPLICATION_KEY, B2_ENDPOINT, B2_BUCKET
+# Plus the spec's hard rule: ``KEK lives in a *separate* bucket
+# (and ideally vendor) than the data``.  This module never reads
+# STASH_KEK — only the encrypted blob.  The KEK travels through
+# a separate operator-managed channel.
+#
+# Tonight we ship the upload helper + a manual /admin trigger.
+# Scheduled nightly runs land with the cron/scheduler decision
+# (deferred — see roadmap markers in spec.md).
+
+
+class B2NotConfiguredError(RuntimeError):
+    """Raised when the B2 env vars aren't set.  Routes catch this
+    and surface "configure B2 first" to the operator instead of
+    500'ing on a missing credential."""
+
+
+def _b2_config() -> dict[str, str]:
+    """Read the B2 quartet from env, raise if any are missing.
+    Returns a dict suitable for ``boto3.client('s3', ...)``.
+
+    The endpoint URL is a full URL like
+    ``https://s3.us-west-002.backblazeb2.com`` — B2 is region-
+    keyed and the account dashboard exposes the right one."""
+    cfg = {}
+    for var in ("B2_KEY_ID", "B2_APPLICATION_KEY",
+                "B2_ENDPOINT", "B2_BUCKET"):
+        val = os.environ.get(var, "").strip()
+        if not val:
+            raise B2NotConfiguredError(
+                f"B2 backup is not configured: missing {var}.  "
+                "See deploy/.env.example for the env-var quartet."
+            )
+        cfg[var] = val
+    return cfg
+
+
+def _make_b2_client():
+    """Build a boto3 S3 client pointed at B2.  Lazy-imported so the
+    rest of the module stays usable when boto3 isn't installed
+    (local test runs)."""
+    cfg = _b2_config()
+    import boto3  # noqa: PLC0415 — intentional lazy import
+    return boto3.client(
+        "s3",
+        endpoint_url=cfg["B2_ENDPOINT"],
+        aws_access_key_id=cfg["B2_KEY_ID"],
+        aws_secret_access_key=cfg["B2_APPLICATION_KEY"],
+    )
+
+
+# Test seam: tests substitute this to skip the real boto3 import.
+# The route always calls through ``_make_b2_client`` which the test
+# fixture monkeypatches.
+_B2_CLIENT_FACTORY = _make_b2_client
+
+
+def upload_tenant_to_b2(actor: Actor) -> dict:
+    """Build the per-tenant zip and upload it to B2 keyed at
+    ``s3://<bucket>/<tenant_id>/<YYYY-MM-DD>.zip``.  Returns a
+    dict suitable for the audit-log payload + the route's redirect
+    flash:
+
+    * ``key`` — the S3 key the object landed at.
+    * ``bucket`` — the B2 bucket name.
+    * ``size`` — uploaded byte count.
+    * ``sha256`` — sha256 of the zip (matches the X-Backup-Sha256
+      header from the download path).
+
+    Maintainer-only.  Operators trigger this surface via /admin
+    for any tenant; that path threads through a synthetic
+    maintainer-equivalent actor — see app.py."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError("no active tenant")
+    cfg = _b2_config()  # raises early if mis-configured
+
+    zip_bytes, manifest = build_tenant_zip(actor)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = f"{actor.tenant_id}/{today}.zip"
+
+    client = _B2_CLIENT_FACTORY()
+    client.put_object(
+        Bucket=cfg["B2_BUCKET"],
+        Key=key,
+        Body=zip_bytes,
+        ContentType="application/zip",
+        Metadata={
+            "stash-format-version": str(manifest["format_version"]),
+            "stash-tenant-id": str(actor.tenant_id),
+            "stash-zip-sha256": manifest["zip_sha256"],
+            "stash-exported-by": actor.email,
+        },
+    )
+
+    summary = {
+        "bucket": cfg["B2_BUCKET"],
+        "key": key,
+        "size": len(zip_bytes),
+        "sha256": manifest["zip_sha256"],
+    }
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO audit_log "
+            "(tenant_id, actor_email, action, target_kind, target_id, "
+            " metadata_json) "
+            "VALUES (?, ?, 'backup.b2_upload', 'tenant', ?, ?)",
+            (actor.tenant_id, actor.email, actor.tenant_id,
+             json.dumps(summary)),
+        )
+        conn.commit()
+    # Backup-bytes telemetry for the /usage meter.
+    from dao import usage as dao_usage
+    dao_usage.record(
+        actor.tenant_id, "backup", "backup_bytes",
+        units=len(zip_bytes),
+    )
+    return summary
+
+
+def upload_tenant_to_b2_as_operator(operator_email: str, tenant_id: int) -> dict:
+    """Operator-driven variant for the manual /admin trigger.
+    Doesn't require an Actor since the operator isn't a tenant
+    member — synthesises a one-shot maintainer-shaped Actor for
+    the underlying ``upload_tenant_to_b2`` call so the role gate
+    + audit trail still record consistently."""
+    op_actor = Actor(
+        email=operator_email,
+        tenant_id=tenant_id,
+        role="maintainer",  # synthetic, scoped to this call only
+        is_operator=True,
+        memberships=((tenant_id, "maintainer"),),
+        shares=(),
+    )
+    return upload_tenant_to_b2(op_actor)

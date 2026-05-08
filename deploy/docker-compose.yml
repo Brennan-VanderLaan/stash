@@ -95,6 +95,15 @@ services:
       STASH_BOOTSTRAP_MEMBER_EMAIL: ${STASH_BOOTSTRAP_MEMBER_EMAIL}
       STASH_OPERATOR_EMAILS: ${STASH_OPERATOR_EMAILS}
       STASH_ALLOWED_EMAILS: ${STASH_ALLOWED_EMAILS}
+      # Off-site backup target (Backblaze B2, S3-compatible API).  When
+      # unset the /admin "Upload to B2" button is hidden; the in-app
+      # /usage/backup download still works.  See .env.example for the
+      # generate-credentials walk-through and the hard rule about the
+      # KEK living in a separate bucket from the data.
+      B2_KEY_ID: ${B2_KEY_ID:-}
+      B2_APPLICATION_KEY: ${B2_APPLICATION_KEY:-}
+      B2_ENDPOINT: ${B2_ENDPOINT:-}
+      B2_BUCKET: ${B2_BUCKET:-}
     volumes:
       - stash-data:/data
     networks:

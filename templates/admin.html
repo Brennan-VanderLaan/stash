@@ -11,6 +11,11 @@
     Reading tenant data requires an explicit maintainer invite from
     the tenant.
   </p>
+  {% if backup_status %}
+  <div class="notice notice-success">
+    <strong>Backup:</strong> {{ backup_status }}
+  </div>
+  {% endif %}
 </div>
 
 {# ── Bootstrap a fresh tenant + first-maintainer invite ─────── #}
@@ -79,6 +84,7 @@
         <th>Items</th>
         <th>State</th>
         <th>Created</th>
+        <th>Backup</th>
       </tr>
     </thead>
     <tbody>
@@ -98,6 +104,19 @@
           {% endif %}
         </td>
         <td>{{ t.created_at[:10] if t.created_at else '' }}</td>
+        <td>
+          {% if b2_configured %}
+          <form method="post" action="/admin/tenants/{{ t.id }}/backup"
+                style="display:inline;">
+            <button type="submit" class="btn btn-link btn-sm"
+                    onclick="return confirm('Upload {{ t.name }} backup to B2 now?');">
+              Upload to B2
+            </button>
+          </form>
+          {% else %}
+          <span class="text-muted text-sm">B2 not configured</span>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

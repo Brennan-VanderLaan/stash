@@ -22,3 +22,9 @@ Babel
 # wrapped by a STASH_KEK env var; see spec § "Encryption at rest" and
 # vault.py for the key-handling story.
 cryptography
+# S3-compatible client for the B2 nightly DR target.  Spec § "Backups ·
+# Off-site DR via Backblaze B2" picks B2 over S3 for cost and the spec
+# explicitly notes the SDK choice: S3-compatible API via boto3 to avoid
+# a bespoke B2 SDK.  Lives behind a factory in dao/backups so a unit
+# test can swap in a stub without hitting the real network.
+boto3

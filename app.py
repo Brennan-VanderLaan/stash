@@ -3418,13 +3418,26 @@ def _require_operator_route(actor: Actor) -> None:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request, invite_url: str = ""):
+def admin_dashboard(
+    request: Request,
+    invite_url: str = "",
+    backup_status: str = "",
+):
     """Per-deployment tenant roster.  ``invite_url`` round-trips a
     freshly-minted invite link from the create-tenant POST so the
-    operator can copy it without an email send."""
+    operator can copy it without an email send.  ``backup_status``
+    surfaces the result of a manually-triggered B2 upload."""
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
+    # Detect B2 configuration so the page can hide the upload
+    # buttons when the env vars aren't set rather than letting the
+    # operator click into an error.
+    try:
+        dao_backups._b2_config()
+        b2_configured = True
+    except dao_backups.B2NotConfiguredError:
+        b2_configured = False
     return templates.TemplateResponse(
         request, "admin.html",
         {
@@ -3432,7 +3445,35 @@ def admin_dashboard(request: Request, invite_url: str = ""):
             "current_email": actor.email,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
+            "b2_configured": b2_configured,
+            "backup_status": backup_status,
         },
+    )
+
+
+@app.post("/admin/tenants/{tenant_id}/backup")
+def admin_backup_to_b2(request: Request, tenant_id: int):
+    """Operator-triggered B2 upload of a tenant's backup zip.
+    Manual surface only — the nightly cron lands later (roadmap
+    markers in spec.md).  Builds the zip, uploads, audits, redirects
+    back to /admin with a backup_status flag for the flash."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        result = dao_backups.upload_tenant_to_b2_as_operator(
+            actor.email, tenant_id,
+        )
+    except dao_backups.B2NotConfiguredError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        # Anything from boto3 (auth, network, bucket) — fail loud
+        # rather than silently leaving the audit trail short.
+        raise HTTPException(502, f"B2 upload failed: {exc}")
+    from urllib.parse import urlencode
+    flash = f"uploaded {result['key']} ({result['size']} bytes)"
+    return RedirectResponse(
+        f"/admin?{urlencode({'backup_status': flash})}",
+        status_code=303,
     )
 
 
