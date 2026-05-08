@@ -158,17 +158,24 @@ def get_target_box_id(job_id: int) -> int | None:
 
 
 def get_for_retry(actor: Actor, job_id: int) -> dict:
+    """Pull the bits the retry path needs.  Accepts ``failed`` or
+    ``processing`` rows: ``processing`` is included because a
+    worker that hung mid-call (e.g. a Gemini timeout the network
+    layer never returned from) leaves the row stuck — Retry must
+    be able to abandon-and-respawn it without forcing the user
+    through a server restart."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         raise NotFoundError(f"job {job_id}")
     with db() as conn:
         row = conn.execute(
             "SELECT photo, tenant_id, target_box_id FROM ingest_jobs "
-            "WHERE id = ? AND tenant_id = ? AND status = 'failed'",
+            "WHERE id = ? AND tenant_id = ? "
+            "  AND status IN ('failed', 'processing')",
             (job_id, actor.tenant_id),
         ).fetchone()
     if row is None:
-        raise NotFoundError(f"job {job_id} (or not in failed state)")
+        raise NotFoundError(f"job {job_id} (or not retry-able)")
     return dict(row)
 
 
@@ -186,14 +193,20 @@ def reset_to_pending(actor: Actor, job_id: int) -> None:
 
 
 def dismiss(actor: Actor, job_id: int) -> None:
-    """Drop a failed-or-done job from the list."""
+    """Drop a job from the list.  Accepts every terminal-or-stuck
+    state: ``failed``, ``done``, AND ``processing``.  Including
+    ``processing`` is the escape hatch for jobs whose worker
+    hung — without it the row sits forever and the user has no
+    UI affordance to clear it (they'd have to restart the server
+    so the orphan-sweep on boot picks it up)."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         raise NotFoundError(f"job {job_id}")
     with db() as conn:
         conn.execute(
             "DELETE FROM ingest_jobs "
-            "WHERE id = ? AND tenant_id = ? AND status IN ('failed', 'done')",
+            "WHERE id = ? AND tenant_id = ? "
+            "  AND status IN ('failed', 'done', 'processing')",
             (job_id, actor.tenant_id),
         )
         conn.commit()

@@ -72,13 +72,107 @@ def test_ingest_retry_failed_job(client):
 
 
 def test_ingest_retry_rejects_non_failed_job(client):
-    """Can't retry a job that isn't in failed state."""
+    """Can't retry a job that's already done.  ``processing`` rows
+    *are* retryable now (see test_ingest_retry_unwedges_processing
+    below) — that's the escape hatch for a hung worker."""
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
     ]):
         client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    # After the upload the job is 'done' — retry must reject.
     r = client.post("/ingest/1/retry", follow_redirects=False)
     assert r.status_code == 404
+
+
+def test_ingest_retry_unwedges_processing(client):
+    """A job stuck in 'processing' (worker hung mid-call) must be
+    retryable from the UI.  Without this the user has to restart
+    the server to clear the row — the orphan-sweep on boot is the
+    fallback, not the primary recovery path.
+
+    We upload a photo so the encrypted blob exists, then flip the
+    job back to 'processing' before retry to simulate a hung
+    worker."""
+    with patch("app.vision.detect_items", side_effect=RuntimeError("transient")):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+        )
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE ingest_jobs SET status='processing', error=NULL "
+            "WHERE id = 1",
+        )
+        conn.commit()
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="recovered", description="d"),
+    ]):
+        r = client.post("/ingest/1/retry", follow_redirects=False)
+    assert r.status_code == 303
+    assert "recovered" in client.get("/queue").text
+
+
+def test_ingest_dismiss_processing_job(client):
+    """Stuck processing jobs can also be dismissed outright."""
+    with patch("app.vision.detect_items", side_effect=RuntimeError("nope")):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+        )
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE ingest_jobs SET status='processing', error=NULL "
+            "WHERE id = 1",
+        )
+        conn.commit()
+    r = client.post("/ingest/1/dismiss", follow_redirects=False)
+    assert r.status_code == 303
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM ingest_jobs WHERE id = 1",
+        ).fetchone()
+    assert row is None
+
+
+def test_ingest_orphan_sweep_clears_processing_on_boot(tmp_path, monkeypatch):
+    """Restarting the server must auto-clear any 'processing' rows
+    from the previous process — they're orphaned by definition
+    (BackgroundTasks die with their parent process)."""
+    import base64, secrets, sys, importlib
+    monkeypatch.setenv("STASH_DB", str(tmp_path / "stash.db"))
+    monkeypatch.setenv("STASH_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv(
+        "STASH_KEK", base64.b64encode(secrets.token_bytes(32)).decode(),
+    )
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app as app_module
+    importlib.reload(app_module)
+
+    # Seed a stuck row + a tenant.
+    with app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('T', 'pro')",
+        )
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO ingest_jobs (photo, status, tenant_id) "
+            "VALUES ('stuck.jpg', 'processing', ?)",
+            (tid,),
+        )
+        conn.commit()
+
+    # Reload — boot-time sweep should clear the row to 'failed'.
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app as app_reloaded
+    importlib.reload(app_reloaded)
+    with app_reloaded.db() as conn:
+        row = conn.execute(
+            "SELECT status, error FROM ingest_jobs"
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert "orphaned" in row["error"]
 
 
 def test_ingest_dismiss_failed_job(client):

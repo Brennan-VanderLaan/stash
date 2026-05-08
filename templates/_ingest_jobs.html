@@ -17,13 +17,18 @@
         <span class="text-sm text-muted">Queued</span>
       {% endif %}
     </div>
-    {% if j.status == 'failed' %}
+    {# Retry + Dismiss are also surfaced on ``processing`` rows so
+       a worker that hung (e.g. Gemini timeout that never raised)
+       has a UI escape hatch.  Without this the user can't clear
+       the row without a server restart. #}
+    {% if j.status in ['failed', 'processing'] %}
     <form method="post" action="/ingest/{{ j.id }}/retry">
       <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
     </form>
     {% endif %}
-    {% if j.status in ['failed', 'done'] %}
-    <form method="post" action="/ingest/{{ j.id }}/dismiss">
+    {% if j.status in ['failed', 'done', 'processing'] %}
+    <form method="post" action="/ingest/{{ j.id }}/dismiss"
+          onsubmit="return confirm('Dismiss this job? The photo file is kept, but the row + any pending items it produced are dropped.');">
       <button type="submit" class="btn btn-ghost btn-icon" title="Dismiss">×</button>
     </form>
     {% endif %}

@@ -5273,3 +5273,21 @@ async def maintenance_import(file: UploadFile = File(...)):
 # helper-use never trips someone up.
 init_db()
 migrate_db()
+# Any ingest_jobs row in 'processing' at boot can only be orphaned —
+# our worker runs in-process (FastAPI BackgroundTasks), so a row
+# carrying that state across a restart means the previous process
+# died (or hung indefinitely) before completing it.  Flip them to
+# 'failed' so the UI surfaces a Retry / Dismiss button instead of
+# a permanent spinner.
+with db() as _conn:
+    _orphaned = _conn.execute(
+        "UPDATE ingest_jobs SET status='failed', "
+        "  error='worker orphaned (process restart) — retry to re-run', "
+        "  completed_at=CURRENT_TIMESTAMP "
+        "WHERE status='processing'"
+    ).rowcount
+    _conn.commit()
+if _orphaned:
+    obs.get_logger("stash.ingest").warning(
+        "ingest.orphan_sweep cleared=%s", _orphaned,
+    )

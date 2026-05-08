@@ -27,9 +27,26 @@ def get_anthropic() -> anthropic.Anthropic:
 
 
 def get_gemini() -> genai.Client:
+    """Construct (or return cached) Gemini client.
+
+    A request-level timeout is required: a hung Gemini call wedges
+    the ingest worker indefinitely (no exception, no log) which
+    leaves the user staring at a "processing" job that never
+    finishes.  Default: 120 s — long enough for a normal flash
+    detect on a slow link, short enough that a stuck call gets
+    converted to a failed-job row the user can retry.
+
+    Override via ``STASH_GEMINI_TIMEOUT_MS`` for environments
+    that genuinely need longer (e.g. spotty rural connectivity).
+    """
     global _gemini_client
     if _gemini_client is None:
-        _gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        from google.genai import types as _genai_types
+        timeout_ms = int(os.environ.get("STASH_GEMINI_TIMEOUT_MS", "120000"))
+        _gemini_client = genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY"),
+            http_options=_genai_types.HttpOptions(timeout=timeout_ms),
+        )
     return _gemini_client
 
 
