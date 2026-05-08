@@ -170,7 +170,7 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
             "SELECT COUNT(*) FROM boxes WHERE tenant_id = ?",
             (tenant_id,),
         ).fetchone()[0]
-    return {
+    out = {
         "since": since,
         "ai_calls": _units(per_surface, "ai"),
         "ai_cost_micros": _cost(per_surface, "ai"),
@@ -182,6 +182,21 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
         "item_count": item_count,
         "box_count": box_count,
     }
+    # Cap + percent + band per surface — the /usage meters render
+    # these directly.  Imports lazily to avoid a circular import
+    # at module load (dao.quotas reads usage_events).
+    from dao import quotas as dao_quotas
+    caps = dao_quotas.get_caps(tenant_id)
+    today_usage = dao_quotas.usage_for_tenant(tenant_id)
+    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+                "daily_ai_cost_micros"):
+        cap = caps.get(key)
+        used = today_usage.get(key, 0)
+        out[f"{key}_cap"] = cap
+        out[f"{key}_used"] = used
+        out[f"{key}_percent"] = dao_quotas.percent(used, cap)
+        out[f"{key}_band"] = dao_quotas.warning_band(used, cap)
+    return out
 
 
 def _units(per_surface: dict, surface: str) -> int:
@@ -195,7 +210,7 @@ def _cost(per_surface: dict, surface: str) -> int:
 
 
 def _empty_summary() -> dict:
-    return {
+    out = {
         "since": _month_start_utc(),
         "ai_calls": 0, "ai_cost_micros": 0,
         "upload_bytes": 0, "upload_cost_micros": 0,
@@ -204,3 +219,10 @@ def _empty_summary() -> dict:
         "item_count": 0,
         "box_count": 0,
     }
+    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+                "daily_ai_cost_micros"):
+        out[f"{key}_cap"] = None
+        out[f"{key}_used"] = 0
+        out[f"{key}_percent"] = 0
+        out[f"{key}_band"] = None
+    return out

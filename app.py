@@ -21,6 +21,7 @@ from dao import invites as dao_invites
 from dao import items as dao_items
 from dao import locations as dao_locations
 from dao import pending_items as dao_pending
+from dao import quotas as dao_quotas
 from dao import rooms as dao_rooms
 from dao import shares as dao_shares
 from dao import tags as dao_tags
@@ -511,13 +512,49 @@ async def current_actor(request: Request, call_next):
         # per page render and the per-request log is more useful for
         # the mutation-and-render surface.
         path = request.url.path
-        if not (path.startswith("/thumbs/") or path.startswith("/uploads/")
-                or path.startswith("/static/")):
+        is_noisy_path = (
+            path.startswith("/thumbs/")
+            or path.startswith("/uploads/")
+            or path.startswith("/static/")
+        )
+        if not is_noisy_path:
             _LOG_ROUTE.info(
                 "%s %s -> %d in %dms",
                 request.method, path, status, duration_ms,
             )
+            # Soft-quota warning header (phase 10): ≥80% on any cap
+            # surfaces here.  Skip the noisy paths so we don't pay
+            # the readback per thumbnail.
+            actor_post = getattr(request.state, "actor", None)
+            if (response is not None and actor_post is not None
+                    and actor_post.tenant_id is not None):
+                _stamp_quota_warning_header(actor_post.tenant_id, response)
         obs.reset_tokens(*actor_tokens, rid_token)
+
+
+def _stamp_quota_warning_header(tenant_id: int, response: Response) -> None:
+    """Stamp ``X-Quota-Warning`` on the response when any cap is in
+    the 80–99% band.  No-op outside that band so quiet sessions
+    don't carry an empty header.  Cheap enough for the per-request
+    path: two SUM queries against an indexed table."""
+    try:
+        caps = dao_quotas.get_caps(tenant_id)
+        used = dao_quotas.usage_for_tenant(tenant_id)
+    except Exception:  # noqa: BLE001 — telemetry never fails the response
+        return
+    warnings: list[str] = []
+    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+                "daily_ai_cost_micros"):
+        cap = caps.get(key)
+        if not cap:
+            continue
+        band = dao_quotas.warning_band(used.get(key, 0), cap)
+        if band == "warning":
+            warnings.append(
+                f"{key}={dao_quotas.percent(used.get(key, 0), cap)}%"
+            )
+    if warnings:
+        response.headers["X-Quota-Warning"] = ", ".join(warnings)
 
 
 def _static_version() -> str:
@@ -1204,6 +1241,22 @@ def save_photo_bytes(tenant_id: int, data: bytes, filename: str) -> str:
     """
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Upload too large")
+    # Per-tenant monthly-byte cap (phase 10).  Pre-flight check so
+    # a quota-exceeded upload doesn't burn the encode pass before
+    # rejecting.  We use the post-encode count for billing later
+    # but the raw size is a safe upper bound for the gate.
+    try:
+        dao_quotas.check_or_raise(
+            tenant_id, "upload",
+            units_about_to_record=len(data),
+        )
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"Upload would exceed monthly cap "
+            f"({exc.used} > {exc.cap} bytes).  "
+            "Quota resets on the 1st of next UTC month.",
+        )
     from PIL import Image, ImageOps
     import io as _io
     try:
@@ -2323,6 +2376,24 @@ async def ingest(
         raise HTTPException(400, "Photo required")
     actor: Actor = request.state.actor
 
+    # Pre-flight AI quota check — block obvious overages here
+    # rather than burning the encode + per-photo background-job
+    # spawn before rejecting.  Approximate cost: one gemini_detect
+    # per photo.
+    detect_cost = dao_usage._cost_for("ai", "gemini_detect", 1)
+    try:
+        dao_quotas.check_or_raise(
+            actor.tenant_id, "ai",
+            units_about_to_record=len(valid),
+            cost_about_to_record=detect_cost * len(valid),
+        )
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).  "
+            "Resets at the start of the next window.",
+        )
+
     for photo in valid:
         image_bytes = await photo.read()
         photo_name = save_photo_bytes(actor.tenant_id, image_bytes, photo.filename)
@@ -2430,6 +2501,18 @@ def queue_match(request: Request, pending_id: int):
         raise HTTPException(404)
     boxes = dao_boxes.list_for_picker(actor)
 
+    try:
+        dao_quotas.check_or_raise(
+            actor.tenant_id, "ai",
+            cost_about_to_record=dao_usage._cost_for(
+                "ai", "anthropic_match", 1,
+            ),
+        )
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).",
+        )
     suggestion = vision.suggest_box(row["name"], row["description"] or "", boxes)
     dao_usage.record(actor.tenant_id, "ai", "anthropic_match")
 
@@ -2940,6 +3023,20 @@ def generate_box_art(
     except NotFoundError:
         raise HTTPException(404)
     tenant_id = box["tenant_id"]
+    try:
+        dao_quotas.check_or_raise(
+            actor.tenant_id, "ai",
+            cost_about_to_record=dao_usage._cost_for(
+                "ai", "gemini_art", 1,
+            ),
+        )
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).  "
+            "Generated art is the most expensive AI surface; consider "
+            "raising the daily cost cap or waiting for the window reset.",
+        )
     # Newest 12 items, by created_at DESC, for the prompt.  list_for_box
     # returns oldest-first so we reverse + slice here.
     items = list(reversed(dao_items.list_for_box(actor, box_id)))[:12]
