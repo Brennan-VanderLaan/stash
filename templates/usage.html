@@ -141,6 +141,72 @@
   {% endif %}
 </div>
 
+{# ── API tokens ─────────────────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("API tokens") }} ({{ api_tokens | length }})</div>
+  <p class="text-sm text-muted">
+    {{ _("Bearer tokens for /api/v1.  Each token grants the named role on this tenant.  Plaintext is shown ONCE on mint and never again — the DB only carries a SHA-256 hash, so you can't recover a lost token.") }}
+  </p>
+
+  {% if api_token_plaintext %}
+  <div class="notice notice-success">
+    <strong>{{ _("Token minted.") }}</strong>
+    {{ _("Copy now — this is the only time it'll show:") }}
+    <input type="text" readonly value="{{ api_token_plaintext }}"
+           class="invite-url-input"
+           onclick="this.select()"
+           style="width:100%;margin-top:0.5rem;font-family:monospace;">
+  </div>
+  {% endif %}
+
+  <form method="post" action="/usage/api-tokens">
+    <label>
+      {{ _("Token name") }}
+      <input type="text" name="name" required
+             placeholder="MCP server" autocomplete="off">
+    </label>
+    <label>
+      {{ _("Role") }}
+      <select name="role">
+        <option value="maintainer" selected>{{ _("Maintainer") }}</option>
+        <option value="readonly">{{ _("Read-only") }}</option>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">
+      {{ _("Mint token") }}
+    </button>
+  </form>
+
+  {% if api_tokens %}
+  <div class="section-label" style="margin-top:1rem;">
+    {{ _("Active tokens") }}
+  </div>
+  <ul class="allowed-emails">
+    {% for tok in api_tokens %}
+    <li>
+      <code>{{ tok.name }}</code>
+      <span class="text-muted text-sm">
+        — {{ tok.role }} ·
+        {% if tok.last_used_at %}
+          {{ _("last used") }} {{ tok.last_used_at[:10] }}
+        {% else %}
+          {{ _("never used") }}
+        {% endif %}
+      </span>
+      <form method="post"
+            action="/usage/api-tokens/{{ tok.id }}/revoke"
+            style="display:inline;">
+        <button type="submit" class="btn btn-link btn-sm"
+                onclick="return confirm('{{ _('Revoke this token? Anything using it will start failing immediately.') }}');">
+          {{ _("Revoke") }}
+        </button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
 {# ── Outbound object shares ───────────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">{{ _("Boxes and items I've shared") }} ({{ outbound_shares | length }})</div>
