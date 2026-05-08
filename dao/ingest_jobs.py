@@ -35,18 +35,43 @@ def fingerprint(actor: Actor) -> dict:
     }
 
 
-def create(actor: Actor, photo_filename: str) -> int:
+def create(
+    actor: Actor,
+    photo_filename: str,
+    *,
+    target_box_id: int | None = None,
+) -> int:
     """Insert a fresh pending job for a just-uploaded photo.  Returns
-    the job id so the caller can hand it to the background worker."""
+    the job id so the caller can hand it to the background worker.
+
+    ``target_box_id`` is the packing-session hint from /ingest's
+    box picker — when set, the worker will write each pending_item
+    with ``suggested_box_id = target_box_id`` so the sort queue
+    pre-fills the box selection (very similar to the existing AI
+    suggest flow).  We validate the box belongs to the actor's
+    tenant here so a forged hidden form field can't pre-dispose
+    items into another tenant's box.  ``None`` is the no-session
+    default and means "no hint, run normal AI suggest path"."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         from dao._base import ForbiddenError
         raise ForbiddenError(f"{actor.email} has no active tenant")
+    if target_box_id is not None:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM boxes WHERE id = ? AND tenant_id = ?",
+                (target_box_id, actor.tenant_id),
+            ).fetchone()
+        if row is None:
+            # Crash toward happy path: an invalid hint becomes "no
+            # hint" rather than a 500.  The user still gets to sort
+            # the items normally; only the pre-fill is lost.
+            target_box_id = None
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO ingest_jobs (photo, status, tenant_id) "
-            "VALUES (?, 'pending', ?)",
-            (photo_filename, actor.tenant_id),
+            "INSERT INTO ingest_jobs (photo, status, tenant_id, target_box_id) "
+            "VALUES (?, 'pending', ?, ?)",
+            (photo_filename, actor.tenant_id, target_box_id),
         )
         conn.commit()
     return cur.lastrowid
@@ -94,20 +119,42 @@ def insert_pending_item(
     description: str,
     photo: str,
     bbox: tuple[int | None, int | None, int | None, int | None],
+    suggested_box_id: int | None = None,
 ) -> int:
     """Background-worker hook: insert a pending_item row keyed to the
     job's tenant.  Bypasses actor.role gating because the worker
     runs out-of-band — its role check happened when the operator
-    submitted the upload."""
+    submitted the upload.
+
+    ``suggested_box_id`` is the packing-session hint — when set,
+    pre-fills the sort queue's box selection so the user just
+    confirms the auto-detected name + crop instead of also
+    picking a box.  The column is shared with the AI suggest
+    flow on purpose: they're both "where should this go" hints
+    and the sort UI already renders ``suggested_box_id`` as the
+    pre-filled selection."""
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO pending_items "
-            "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, description, photo, *bbox, job_tenant_id),
+            "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, "
+            " tenant_id, suggested_box_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, description, photo, *bbox, job_tenant_id, suggested_box_id),
         )
         conn.commit()
     return cur.lastrowid
+
+
+def get_target_box_id(job_id: int) -> int | None:
+    """Worker hook: read the packing-session hint stamped onto the
+    job by ``create``.  No actor — the worker runs out-of-band, the
+    role + tenant check already happened at create time."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT target_box_id FROM ingest_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    return row["target_box_id"] if row else None
 
 
 def get_for_retry(actor: Actor, job_id: int) -> dict:
@@ -116,7 +163,7 @@ def get_for_retry(actor: Actor, job_id: int) -> dict:
         raise NotFoundError(f"job {job_id}")
     with db() as conn:
         row = conn.execute(
-            "SELECT photo, tenant_id FROM ingest_jobs "
+            "SELECT photo, tenant_id, target_box_id FROM ingest_jobs "
             "WHERE id = ? AND tenant_id = ? AND status = 'failed'",
             (job_id, actor.tenant_id),
         ).fetchone()

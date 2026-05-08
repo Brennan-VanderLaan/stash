@@ -54,7 +54,11 @@
     </div>
     {% endif %}
 
-    {% if p.suggestion_reason %}
+    {# Banner shows for both AI-suggested items (carry a reason) and
+       packing-session items (suggested_box_id set without a reason).
+       The dropdown's selected option already reflects the hint, but
+       the banner makes the source explicit. #}
+    {% if p.suggestion_reason or p.suggested_box_name or p.suggested_new_box_name %}
     <div class="suggestion">
       {% if p.suggested_box_name %}
         → <strong>{{ p.suggested_box_name }}</strong>
@@ -62,7 +66,11 @@
         → new box <strong>{{ p.suggested_new_box_name }}</strong>
         <span class="text-sm text-muted">(create it first)</span>
       {% endif %}
+      {% if p.suggestion_reason %}
       <span class="text-sm text-muted"> — {{ p.suggestion_reason }}</span>
+      {% else %}
+      <span class="text-sm text-muted"> — packing session</span>
+      {% endif %}
     </div>
     {% endif %}
 

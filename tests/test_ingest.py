@@ -95,6 +95,151 @@ def test_ingest_requires_photo(client):
     assert r.status_code in (400, 422)
 
 
+# ── Packing-session hint (target_box_id) ──────────────────────────
+
+
+def test_ingest_packing_session_pre_fills_pending_items(client):
+    """Hero workflow: user picks "I'm packing Box X" on /ingest,
+    uploads a photo, AI detects items.  Each pending_item lands in
+    the queue with ``suggested_box_id = target_box_id`` so the
+    sort UI's box dropdown is pre-selected — same surface as the
+    existing AI suggest, just driven by user intent at upload
+    time instead of a follow-up AI call."""
+    client.post("/boxes", data={"name": "Holiday Decor"})
+    detected = [
+        DetectedItem(name="ornament", description="red glass ball"),
+        DetectedItem(name="garland", description="silver tinsel"),
+    ]
+    with patch("app.vision.detect_items", return_value=detected):
+        r = client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"target_box_id": "1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+
+    with client.app_module.db() as conn:
+        rows = conn.execute(
+            "SELECT name, suggested_box_id FROM pending_items "
+            "WHERE tenant_id = ? ORDER BY id",
+            (client.test_tenant_id,),
+        ).fetchall()
+    assert len(rows) == 2
+    assert all(row["suggested_box_id"] == 1 for row in rows)
+
+    # Sort UI renders the pre-selected option as <option ... selected>.
+    queue = client.get("/queue").text
+    assert 'value="1" selected' in queue
+    assert "packing session" in queue
+
+
+def test_ingest_packing_session_records_target_on_job(client):
+    """Even if vision detects zero items, the target_box_id is
+    persisted on the ingest_jobs row so the retry path can replay
+    it without losing the hint."""
+    client.post("/boxes", data={"name": "Garage"})
+    with patch("app.vision.detect_items", return_value=[]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"target_box_id": "1"},
+        )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT target_box_id FROM ingest_jobs WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["target_box_id"] == 1
+
+
+def test_ingest_no_session_leaves_suggested_box_unset(client):
+    """No target_box_id on the form means no hint; pending_items
+    keep ``suggested_box_id = NULL`` and the queue dropdown stays
+    on its default placeholder option."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d"),
+    ]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+        )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT suggested_box_id FROM pending_items "
+            "WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["suggested_box_id"] is None
+
+
+def test_ingest_invalid_target_box_id_silently_drops(client):
+    """A garbled or non-existent target_box_id degrades to "no
+    hint" rather than 500ing — design rule: crash toward happy
+    path.  The user still gets the items in the sort queue with
+    no pre-fill; only the hint is lost."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d"),
+    ]):
+        r = client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"target_box_id": "9999"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT suggested_box_id FROM pending_items "
+            "WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["suggested_box_id"] is None
+
+
+def test_ingest_cross_tenant_target_box_id_silently_drops(client):
+    """A tenant-A user posting tenant-B's box id as target_box_id
+    must not pre-dispose tenant-A's items into tenant-B's box.
+    The DAO validates membership before persisting; mismatch
+    becomes "no hint"."""
+    # Stand up a second tenant with its own box.
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('OtherTenant', 'pro')",
+        )
+        other_tid = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO boxes (name, tenant_id) VALUES ('OtherBox', ?)",
+            (other_tid,),
+        )
+        other_box_id = cur.lastrowid
+        conn.commit()
+
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="leak attempt", description="d"),
+    ]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"target_box_id": str(other_box_id)},
+        )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT suggested_box_id FROM pending_items "
+            "WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["suggested_box_id"] is None
+
+
+def test_ingest_page_renders_box_picker(client):
+    client.post("/boxes", data={"name": "PickerBox"})
+    page = client.get("/ingest").text
+    assert 'id="ingest-target-box"' in page
+    assert "PickerBox" in page
+    assert 'name="target_box_id"' in page
+
+
 def test_match_existing_box(client):
     client.post("/boxes", data={"name": "Kitchen utensils"})
     with patch("app.vision.detect_items", return_value=[

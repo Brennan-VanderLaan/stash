@@ -1015,6 +1015,19 @@ def migrate_db():
             conn, "boxes", "label_orientation",
             "TEXT NOT NULL DEFAULT 'landscape'",
         )
+        # Packing-session hint (carried from /ingest's box picker).
+        # The session lives entirely in the page form — leave the
+        # /ingest page or reload it and there's no session to clean
+        # up — so the only persistence is this per-job hint that
+        # threads through to ``pending_items.suggested_box_id`` when
+        # the worker creates pending items.  Pre-fills the sort
+        # queue's box selection so accepting a packing-session item
+        # is one tap; user still gets the sort review pass to
+        # accept/reject AI names + crops.
+        _add_column_if_missing(
+            conn, "ingest_jobs", "target_box_id",
+            "INTEGER REFERENCES boxes(id) ON DELETE SET NULL",
+        )
         # Token-revocation hardening (phase 11+).  Reason is a short
         # tag; suspended_at is a separate temporal field so an
         # operator can pause-and-resume without losing the original
@@ -2482,8 +2495,16 @@ def _bytes_for_vision(tenant_id: int, photo_name: str) -> bytes:
 def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     """Background worker: vision pass → insert pending items → mark job done.
     Runs after the request scope closes, so it routes through the no-actor
-    DAO entry points instead of going through Actor-gated mutations."""
+    DAO entry points instead of going through Actor-gated mutations.
+
+    If the originating /ingest request stamped a packing-session
+    ``target_box_id`` onto the job, every pending_item we create gets
+    ``suggested_box_id = target_box_id`` so the sort UI pre-fills
+    the box selection (very similar to the AI suggest path).  We
+    re-read it from the row (rather than threading another param)
+    so the retry handler doesn't have to re-discover state."""
     dao_ingest_jobs.mark_processing(job_id)
+    target_box_id = dao_ingest_jobs.get_target_box_id(job_id)
     try:
         image_bytes = _bytes_for_vision(tenant_id, photo_name)
         detected = vision.detect_items(image_bytes, media_type="image/jpeg")
@@ -2496,6 +2517,7 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
                 description=item.description,
                 photo=photo_name,
                 bbox=tuple(bbox),
+                suggested_box_id=target_box_id,
             )
         dao_ingest_jobs.mark_done(job_id, len(detected))
     except Exception as e:
@@ -2504,12 +2526,21 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
 
 @app.get("/ingest", response_class=HTMLResponse)
 def ingest_form(request: Request):
+    """Ingest page.  The packing-session "I'm packing Box X" picker
+    is a plain ``<select>`` on the form — leaving the page or
+    reloading drops the selection (state is inherent to the UI),
+    which keeps the model from drifting into stale-session bugs."""
     actor: Actor = request.state.actor
     jobs = dao_ingest_jobs.list_active(actor)
     fp = dao_ingest_jobs.fingerprint(actor)
+    boxes = dao_boxes.list_for_picker(actor) if actor.tenant_id else []
     return templates.TemplateResponse(
         request, "ingest.html",
-        {"jobs": jobs, "fingerprint": fp["fingerprint"]},
+        {
+            "jobs": jobs,
+            "fingerprint": fp["fingerprint"],
+            "boxes": boxes,
+        },
     )
 
 
@@ -2538,11 +2569,24 @@ async def ingest(
     request: Request,
     background_tasks: BackgroundTasks,
     photos: list[UploadFile] = File(...),
+    target_box_id: str = Form(""),
 ):
+    """Photo upload + worker dispatch.  ``target_box_id`` is the
+    packing-session hint from the box picker — empty string means
+    "no session", otherwise the integer is validated against the
+    actor's tenant inside ``dao_ingest_jobs.create`` and a forged
+    cross-tenant id silently degrades to no hint (crash toward
+    happy path)."""
     valid = [p for p in photos if p and p.filename]
     if not valid:
         raise HTTPException(400, "Photo required")
     actor: Actor = request.state.actor
+
+    target_id: int | None
+    try:
+        target_id = int(target_box_id) if target_box_id.strip() else None
+    except ValueError:
+        target_id = None
 
     # Pre-flight AI quota check — block obvious overages here
     # rather than burning the encode + per-photo background-job
@@ -2566,10 +2610,14 @@ async def ingest(
         image_bytes = await photo.read()
         photo_name = save_photo_bytes(actor.tenant_id, image_bytes, photo.filename)
         try:
-            job_id = dao_ingest_jobs.create(actor, photo_name)
+            job_id = dao_ingest_jobs.create(
+                actor, photo_name, target_box_id=target_id,
+            )
         except ForbiddenError:
             raise HTTPException(403)
-        background_tasks.add_task(process_ingest_job, job_id, photo_name, actor.tenant_id)
+        background_tasks.add_task(
+            process_ingest_job, job_id, photo_name, actor.tenant_id,
+        )
 
     return RedirectResponse("/ingest", status_code=303)
 

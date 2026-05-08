@@ -7,14 +7,45 @@
   <p class="text-sm text-muted mb-2">
     Snap a photo — Claude spots every item and queues them for sorting.
   </p>
+
+  {# ── Packing-session picker ───────────────────────────────────
+     Per the design, state lives entirely in the page: leaving or
+     reloading drops the selection.  The select drives a hidden
+     ``target_box_id`` input on each upload form via JS so both
+     "Take photo" and "Select from gallery" carry the hint.  The
+     sort queue then pre-fills the box selection so accepting a
+     packing-session item is one tap.  No server-side session
+     table, no stale-state cleanup. #}
+  {% if boxes %}
+  <label class="ingest-packing-row">
+    <span class="ingest-packing-label">Packing into</span>
+    <select id="ingest-target-box" autocomplete="off">
+      <option value="">— No session (sort manually) —</option>
+      {% for b in boxes %}
+      <option value="{{ b.id }}">
+        {{ b.name }}{% if b.location_name %} · {{ b.location_name }}{% if b.room_name %} / {{ b.room_name }}{% endif %}{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+  <div id="ingest-packing-banner" class="ingest-packing-banner" hidden>
+    <span>Packing into <strong data-banner-name></strong></span>
+    <button type="button" class="btn btn-link btn-sm" data-banner-clear>
+      End session
+    </button>
+  </div>
+  {% endif %}
+
   <div class="btn-row">
     <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
+      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
       <label class="btn btn-primary btn-block">
         Take photo
         <input type="file" name="photos" accept="image/*" capture="environment" hidden data-auto-submit>
       </label>
     </form>
     <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
+      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
       <label class="btn btn-secondary btn-block">
         Select from gallery
         <input type="file" name="photos" accept="image/*" multiple hidden data-auto-submit>
@@ -27,8 +58,72 @@
   {% include "_ingest_jobs.html" %}
 </div>
 
+<style>
+  .ingest-packing-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 0.75rem;
+  }
+  .ingest-packing-label {
+    font-size: 0.85rem;
+    color: var(--text-muted, #aaa);
+  }
+  .ingest-packing-row select {
+    width: 100%;
+  }
+  .ingest-packing-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    background: rgba(63, 169, 245, 0.12);
+    border: 1px solid rgba(63, 169, 245, 0.4);
+    border-radius: 0.4rem;
+    font-size: 0.9rem;
+  }
+</style>
+
 <script>
 (function() {
+  // ── Packing-session picker → hidden inputs ───────────────────────
+  // The select is the single source of truth; both upload forms
+  // mirror its value into a hidden field so each form carries the
+  // hint regardless of which button the user taps.  No server-
+  // side session — leaving or reloading the page drops state.
+  const targetSelect = document.getElementById('ingest-target-box');
+  const banner = document.getElementById('ingest-packing-banner');
+  const bannerName = banner ? banner.querySelector('[data-banner-name]') : null;
+  const bannerClear = banner ? banner.querySelector('[data-banner-clear]') : null;
+  const mirrors = document.querySelectorAll('[data-target-box-mirror]');
+
+  function syncTarget() {
+    if (!targetSelect) return;
+    const v = targetSelect.value || '';
+    mirrors.forEach(el => { el.value = v; });
+    if (banner) {
+      if (v) {
+        const opt = targetSelect.options[targetSelect.selectedIndex];
+        if (bannerName) bannerName.textContent = opt ? opt.text.trim() : '';
+        banner.hidden = false;
+      } else {
+        banner.hidden = true;
+      }
+    }
+  }
+  if (targetSelect) {
+    targetSelect.addEventListener('change', syncTarget);
+    syncTarget();
+  }
+  if (bannerClear && targetSelect) {
+    bannerClear.addEventListener('click', () => {
+      targetSelect.value = '';
+      syncTarget();
+    });
+  }
+
   // ── Auto-submit file pickers without nuking the page ─────────────
   // The forms set hidden=true on inputs and used onchange="this.form.submit()"
   // before. With the JS poller below we don't need the meta-refresh that
@@ -38,6 +133,9 @@
     input.addEventListener('change', () => {
       if (input.files && input.files.length > 0) {
         uploading = true;
+        // Re-sync just before submit in case the select changed
+        // after the page first loaded.
+        syncTarget();
         input.form.submit();
       }
     });
