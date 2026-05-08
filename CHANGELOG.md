@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.1.1...v1.2.0) (2026-05-08)
+
+
+### Features
+
+* **invites:** link-share tenant invites without an email provider ([93a0faf](https://github.com/Brennan-VanderLaan/stash/commit/93a0faf8951db9ddf72e4201f890e4f693c3ad1b))
+* **telemetry:** per-tenant usage_events + /usage meters ([bf11b7e](https://github.com/Brennan-VanderLaan/stash/commit/bf11b7ed426208aaf95528fe503df55c1f27528f))
+
 ## [1.1.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.1.0...v1.1.1) (2026-05-08)
 
 
