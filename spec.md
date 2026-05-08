@@ -975,6 +975,50 @@ no 403/404.
   but assert tenant_id is preserved and rows of other tenants don't
   leak.
 
+## Commit message conventions
+
+Every commit follows [Conventional Commits](https://www.conventionalcommits.org/) —
+that's what release-please reads to build the CHANGELOG and decide
+version bumps.  Format:
+
+```
+<type>(<scope>): <subject>
+
+[optional body]
+
+[optional footer]
+```
+
+**Types we use** (anything else is ignored by release-please and
+disappears from the changelog):
+
+- `feat` — new user-facing functionality.
+- `fix` — bug fix.
+- `docs` — spec / README / comment-only changes.
+- `test` — test-only changes.
+- `refactor` — internal restructuring with no behaviour change.
+- `chore` — release commits, dependency bumps, CI tweaks.
+
+**Scopes are optional but conventional ones in this project include:**
+`tenancy`, `crypto`, `db`, `i18n`, `maintenance`, `security`,
+`queue`, `index`.  Pick one if it exists, omit if the change is
+genuinely cross-cutting.
+
+**Breaking changes** get one of (or both):
+
+- `!` after the type / scope: `feat(tenancy)!: ...`.
+- A `BREAKING CHANGE: <description>` footer.
+
+release-please bumps minor in the 0.x series and major in 1.x+ for
+either form.
+
+**Multi-step work that lands as several commits** (e.g. a phased
+roadmap step) — every individual commit gets a real conventional
+type.  Subjects like `phaseN(M/N): ...` aren't recognised types, so
+release-please drops them on the floor and the work disappears from
+the changelog.  We learned this the hard way once; the lesson lives
+here so we don't repeat it.
+
 ## Open decisions
 
 - **Free-tier numerical caps.** Initial values: 100 MB photo storage,
