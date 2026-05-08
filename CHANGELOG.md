@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.8.0...v1.8.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **labels:** portrait rendering + persistence + cleaner tile ([f0425f0](https://github.com/Brennan-VanderLaan/stash/commit/f0425f0007287871da75309cf7e9c1d5ebf24b12))
+
 ## [1.8.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.2...v1.8.0) (2026-05-08)
 
 
