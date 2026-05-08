@@ -12,6 +12,7 @@ import labels
 import vault
 import vision
 from dao import Actor, ConflictError, ForbiddenError, NotFoundError
+from dao import backups as dao_backups
 from dao import boxes as dao_boxes
 from dao import floors as dao_floors
 from dao import ingest_jobs as dao_ingest_jobs
@@ -3171,6 +3172,37 @@ def usage_page(request: Request, invite_url: str = ""):
             "usage": summary,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
+        },
+    )
+
+
+@app.get("/usage/backup")
+def usage_backup(request: Request):
+    """Per-tenant backup zip download.  Maintainer-only — readonly
+    members can't trigger backups (spec § "Roles · Operations
+    matrix").  See :mod:`dao.backups` for the zip shape + the
+    "without STASH_KEK this is useless" caveat."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None:
+        raise HTTPException(403, "No active tenant")
+    try:
+        zip_bytes, manifest = dao_backups.build_tenant_zip(actor)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except NotFoundError:
+        raise HTTPException(404)
+    safe_name = "".join(
+        c if c.isalnum() or c in "-_" else "-" for c in manifest["tenant_name"]
+    )[:40] or f"tenant-{actor.tenant_id}"
+    stamp = manifest["exported_at"][:10].replace("-", "")
+    filename = f"stash-{safe_name}-{stamp}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Backup-Format-Version": str(manifest["format_version"]),
+            "X-Backup-Sha256": manifest["zip_sha256"],
         },
     )
 

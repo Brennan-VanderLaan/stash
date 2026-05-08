@@ -57,6 +57,20 @@
   {% endif %}
 </div>
 
+{# ── Backup ───────────────────────────────────────────────────── #}
+{% if is_maintainer %}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Backup") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Downloads a zip of just this tenant's DB rows + photos. The blobs are encrypted; the zip is useless without your STASH_KEK — keep them stored separately.") }}
+  </p>
+  <a href="/usage/backup" class="btn btn-primary btn-block"
+     download>
+    {{ _("Download backup") }}
+  </a>
+</div>
+{% endif %}
+
 {# ── Members ──────────────────────────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">{{ _("Members") }} ({{ members | length }})</div>
