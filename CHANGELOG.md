@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.2...v1.8.0) (2026-05-08)
+
+
+### Features
+
+* **labels:** pivot to Avery shipping-label sheets + mobile More tab ([9ea6625](https://github.com/Brennan-VanderLaan/stash/commit/9ea66250a421aa75e1705b66d7eabd3039350ffc))
+
 ## [1.7.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.1...v1.7.2) (2026-05-08)
 
 
