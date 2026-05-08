@@ -29,9 +29,9 @@ This module is the second half.  Edge cases all live here:
 
 from __future__ import annotations
 
-import json
 from typing import Iterable
 
+import obs
 from dao._base import (
     Actor,
     ForbiddenError,
@@ -41,19 +41,26 @@ from dao._base import (
 )
 
 
+_log = obs.get_logger("dao.shares")
+
+
 # ── Audit helper ────────────────────────────────────────────────────
 
 
 def _audit(conn, *, tenant_id: int, actor_email: str, action: str,
            target_kind: str, target_id: int,
            metadata: dict | None = None) -> None:
-    conn.execute(
-        "INSERT INTO audit_log "
-        "(tenant_id, actor_email, action, target_kind, target_id, "
-        " metadata_json) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (tenant_id, actor_email, action, target_kind, target_id,
-         json.dumps(metadata or {})),
+    """Module-local audit wrapper that pins target_kind explicitly
+    (shares record against either a box or an item, so the column
+    can't default the way it does in dao/invites.py)."""
+    obs.write_audit(
+        conn,
+        tenant_id=tenant_id,
+        actor_email=actor_email,
+        action=action,
+        target_kind=target_kind,
+        target_id=target_id,
+        metadata=metadata,
     )
 
 

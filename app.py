@@ -25,8 +25,10 @@ from dao import shares as dao_shares
 from dao import tags as dao_tags
 from dao import tenants as dao_tenants
 from dao import usage as dao_usage
+import obs
 
 load_dotenv()
+obs.setup_logging()
 
 ROOT = Path(__file__).parent
 DB_PATH = Path(os.environ.get("STASH_DB", ROOT / "stash.db"))
@@ -188,54 +190,100 @@ def _invite_token_in_path(path: str) -> str | None:
     return None
 
 
+_LOG_ROUTE = obs.get_logger("route")
+
+
 @app.middleware("http")
 async def current_actor(request: Request, call_next):
+    # Stamp a fresh request_id first so every log line emitted under
+    # this request — including the 403 + invite-bypass paths below —
+    # carries it.  Trust an inbound X-Request-Id when present (lets
+    # an upstream proxy correlate access logs with our records), but
+    # cap length so a hostile header can't bloat memory.
+    incoming = (request.headers.get("X-Request-Id") or "").strip()[:64]
+    request_id = incoming if incoming else obs.new_request_id()
+    request.state.request_id = request_id
+    rid_token = obs.bind_request_id(request_id)
+
+    import time as _time
+    started = _time.monotonic()
+
     email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
     is_operator = bool(email) and email in _OPERATOR_EMAILS
 
     memberships = dao_tenants.memberships_for_email(email) if email else ()
     shares = dao_shares.shares_for_email(email) if email else ()
 
-    # Invite-bypass: a signed-in email with no current membership is
-    # still allowed onto /invite/<token> so they can land on the
-    # redemption page.  The redemption itself only succeeds if the
-    # token is valid + un-consumed (DAO enforces).  Spec § "Sign-up +
-    # onboarding" path #2 — "sign-in following an invite link".
-    if not memberships and not is_operator and email and not shares:
-        token = _invite_token_in_path(request.url.path)
-        if token and dao_invites.get_by_token(token) is not None:
-            request.state.actor = Actor(
-                email=email,
-                tenant_id=None,
-                role=None,
-                is_operator=False,
-                memberships=(),
-                shares=(),
+    actor_tokens: tuple = ()
+    response: Response | None = None
+    try:
+        # Invite-bypass: a signed-in email with no current membership
+        # is still allowed onto /invite/<token> so they can land on
+        # the redemption page.  The redemption itself only succeeds
+        # if the token is valid + un-consumed (DAO enforces).  Spec §
+        # "Sign-up + onboarding" path #2 — "sign-in following an
+        # invite link".
+        if not memberships and not is_operator and email and not shares:
+            token = _invite_token_in_path(request.url.path)
+            if token and dao_invites.get_by_token(token) is not None:
+                request.state.actor = Actor(
+                    email=email, tenant_id=None, role=None,
+                    is_operator=False, memberships=(), shares=(),
+                )
+                actor_tokens = obs.bind_actor(email, None)
+                _LOG_ROUTE.info(
+                    "auth.invite_bypass path=%s", request.url.path,
+                )
+                response = await call_next(request)
+                return response
+
+        # Share-only access: an email with no membership but at least
+        # one active share is allowed in.  Their actor has tenant_id
+        # + role None; the routes that handle share-target pages
+        # consult ``shares`` directly via the DAO's effective-role
+        # helpers.
+        if not memberships and not is_operator and not shares:
+            _LOG_ROUTE.warning(
+                "auth.denied email=%r path=%s",
+                email or "<missing>", request.url.path,
             )
-            return await call_next(request)
+            response = Response(
+                "Forbidden — your email is not a member of any tenant on this stash.",
+                status_code=403,
+                media_type="text/plain",
+            )
+            return response
 
-    # Share-only access: an email with no membership but at least
-    # one active share is allowed in.  Their actor has tenant_id +
-    # role None (no active tenant context); the routes that handle
-    # share-target pages consult the ``shares`` tuple directly via
-    # :func:`dao.shares.effective_role_for_*`.
-    if not memberships and not is_operator and not shares:
-        return Response(
-            "Forbidden — your email is not a member of any tenant on this stash.",
-            status_code=403,
-            media_type="text/plain",
+        active_tenant_id, active_role = (
+            memberships[0] if memberships else (None, None)
         )
-
-    active_tenant_id, active_role = memberships[0] if memberships else (None, None)
-    request.state.actor = Actor(
-        email=email,
-        tenant_id=active_tenant_id,
-        role=active_role,
-        is_operator=is_operator,
-        memberships=memberships,
-        shares=shares,
-    )
-    return await call_next(request)
+        request.state.actor = Actor(
+            email=email, tenant_id=active_tenant_id, role=active_role,
+            is_operator=is_operator, memberships=memberships,
+            shares=shares,
+        )
+        actor_tokens = obs.bind_actor(email, active_tenant_id)
+        response = await call_next(request)
+        return response
+    finally:
+        # Stamp the request id on the response so a log-grep-and-go
+        # workflow ("user said request 1a2b failed") works without
+        # them digging through devtools.
+        if response is not None:
+            response.headers["X-Request-Id"] = request_id
+        duration_ms = int((_time.monotonic() - started) * 1000)
+        status = response.status_code if response is not None else 500
+        # Skip the noisy /thumbs and /uploads paths — they fire many
+        # per page render and the per-request log is more useful for
+        # the mutation-and-render surface.
+        path = request.url.path
+        if not (path.startswith("/thumbs/") or path.startswith("/uploads/")
+                or path.startswith("/static/")):
+            _LOG_ROUTE.info(
+                "%s %s -> %d in %dms",
+                request.method, path, status, duration_ms,
+            )
+        obs.reset_tokens(*actor_tokens, rid_token)
 
 
 def _static_version() -> str:
@@ -572,8 +620,7 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
     encrypted/relocated/orphaned/failed counts after.  When the
     function is a no-op (no flat-root files left to process) it stays
     quiet."""
-    import logging
-    log = logging.getLogger("stash.migrate")
+    log = obs.get_logger("migrate")
 
     if not UPLOAD_DIR.exists():
         return

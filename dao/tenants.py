@@ -7,9 +7,11 @@ trusts that resolution.
 
 from __future__ import annotations
 
-import json
-
+import obs
 from dao._base import Actor, NotFoundError, db, require_operator
+
+
+_log = obs.get_logger("dao.tenants")
 
 
 def get_tenant(actor: Actor, tenant_id: int) -> dict:
@@ -114,13 +116,16 @@ def create_tenant(actor: Actor, name: str, *, plan: str = "free") -> int:
         # Audit-log the create — operators can later prove who set up
         # which tenant when (and the lifecycle audit is the only
         # cross-tenant view of operator activity that exists today).
-        conn.execute(
-            "INSERT INTO audit_log "
-            "(tenant_id, actor_email, action, target_kind, target_id, "
-            " metadata_json) "
-            "VALUES (?, ?, 'tenant.create', 'tenant', ?, ?)",
-            (tenant_id, actor.email, tenant_id,
-             json.dumps({"name": name, "plan": plan})),
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=actor.email,
+            action="tenant.create",
+            target_kind="tenant",
+            target_id=tenant_id,
+            metadata={"name": name, "plan": plan},
         )
         conn.commit()
+    _log.info("tenant.create id=%s name=%r plan=%s",
+              tenant_id, name, plan)
     return tenant_id

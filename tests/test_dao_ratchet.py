@@ -57,10 +57,14 @@ def test_no_conn_execute_outside_app_or_dao():
     * ``dao/`` — by definition.
     * ``vault.py`` — per-tenant DEK plumbing for encryption-at-rest;
       operates pre-DAO and on its own ``tenant_dek`` table.
+    * ``obs.py`` — the canonical ``write_audit`` helper.  Cross-cuts
+      every DAO module; lives outside ``dao/`` because it's an
+      observability concern, not a tenant-scoped query.
     * ``tests/`` — fixtures sometimes seed tables directly.
     """
     repo = Path(__file__).resolve().parent.parent
-    allowed_top = {"app.py", "dao", "tests", ".venv", "venv", "vault.py"}
+    allowed_top = {"app.py", "dao", "tests", ".venv", "venv",
+                   "vault.py", "obs.py"}
     bad: list[str] = []
     for py in repo.rglob("*.py"):
         rel = py.relative_to(repo)

@@ -40,7 +40,11 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import obs
 from dao._base import Actor, NotFoundError, db, require_role
+
+
+_log = obs.get_logger("dao.backups")
 
 
 # Every table that holds tenant-owned data.  Order doesn't matter
@@ -210,14 +214,20 @@ def _audit_export(tenant_id: int, actor_email: str, manifest: dict) -> None:
         "zip_sha256": manifest["zip_sha256"],
     }
     with db() as conn:
-        conn.execute(
-            "INSERT INTO audit_log "
-            "(tenant_id, actor_email, action, target_kind, target_id, "
-            " metadata_json) "
-            "VALUES (?, ?, 'backup.export', 'tenant', ?, ?)",
-            (tenant_id, actor_email, tenant_id, json.dumps(summary)),
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=actor_email,
+            action="backup.export",
+            target_kind="tenant",
+            target_id=tenant_id,
+            metadata=summary,
         )
         conn.commit()
+    _log.info(
+        "backup.export tenant_id=%s sha256=%s bytes=%d",
+        tenant_id, manifest["zip_sha256"], manifest["zip_bytes"],
+    )
 
 
 # ── B2 (S3-compatible) upload ───────────────────────────────────────
@@ -328,15 +338,20 @@ def upload_tenant_to_b2(actor: Actor) -> dict:
         "sha256": manifest["zip_sha256"],
     }
     with db() as conn:
-        conn.execute(
-            "INSERT INTO audit_log "
-            "(tenant_id, actor_email, action, target_kind, target_id, "
-            " metadata_json) "
-            "VALUES (?, ?, 'backup.b2_upload', 'tenant', ?, ?)",
-            (actor.tenant_id, actor.email, actor.tenant_id,
-             json.dumps(summary)),
+        obs.write_audit(
+            conn,
+            tenant_id=actor.tenant_id,
+            actor_email=actor.email,
+            action="backup.b2_upload",
+            target_kind="tenant",
+            target_id=actor.tenant_id,
+            metadata=summary,
         )
         conn.commit()
+    _log.info(
+        "backup.b2_upload bucket=%s key=%s bytes=%d",
+        cfg["B2_BUCKET"], key, len(zip_bytes),
+    )
     # Backup-bytes telemetry for the /usage meter.
     from dao import usage as dao_usage
     dao_usage.record(

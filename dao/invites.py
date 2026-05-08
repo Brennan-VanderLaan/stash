@@ -19,6 +19,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import obs
 from dao._base import (
     Actor,
     ForbiddenError,
@@ -26,6 +27,9 @@ from dao._base import (
     db,
     require_role,
 )
+
+
+_log = obs.get_logger("dao.invites")
 
 
 # Default expiry on a freshly-minted invite.  30 days is enough that a
@@ -40,15 +44,17 @@ def _utcnow() -> datetime:
 
 def _audit(conn, *, tenant_id: int | None, actor_email: str, action: str,
            target_id: int | None = None, metadata: dict | None = None) -> None:
-    """One-line audit-log helper — kept module-local because the
-    audit_log table itself isn't exposed via a DAO module yet (it's
-    write-mostly with operator-only reads in phase 12)."""
-    conn.execute(
-        "INSERT INTO audit_log "
-        "(tenant_id, actor_email, action, target_kind, target_id, metadata_json) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (tenant_id, actor_email, action, "invite", target_id,
-         json.dumps(metadata or {})),
+    """Module-local convenience wrapper around the canonical
+    :func:`obs.write_audit`.  Pins ``target_kind`` to ``invite``
+    since every caller in this module records against an invite."""
+    obs.write_audit(
+        conn,
+        tenant_id=tenant_id,
+        actor_email=actor_email,
+        action=action,
+        target_kind="invite",
+        target_id=target_id,
+        metadata=metadata,
     )
 
 
