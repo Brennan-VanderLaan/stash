@@ -835,11 +835,12 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-07).** Phases 1–4 shipped, plus the link-share
-slice of phase 5, the recording slice of phase 9, and the
-bootstrap slice of phase 12 (out of order — moved up to support an
-upcoming move).  See per-phase `[shipped]` / `[partial]` markers
-below.
+**Status (2026-05-08).** Phases 1–4 + 6 shipped; phases 5, 7, 8,
+9, 12 partially shipped (link-share invites, per-tenant backup
+download, manual B2 upload from /admin, telemetry recording, and
+operator-dashboard bootstrap respectively).  Out-of-order work is
+all bootstrap-the-move adjacent — moved up to support an upcoming
+move.  See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -889,21 +890,49 @@ below.
      `/usage` page round-trips the link into `?invite_url=…` so
      it's one tap to copy.
 
-6. **Object shares.** `share` action on box / item detail pages.
-   "Shared with you" view at `/shared`. Revocation UI. Edge cases
-   from the spec wired explicitly: cascade on add, share-follows on
-   item move, dedupe for tenant members, paused on
-   granting-tenant-soft-delete.
+6. **[shipped]** **Object shares.** `share` action on box / item
+   detail pages.  "Shared with you" view at `/shared`.  Revocation
+   UI.  All four edge cases wired:
+   * Cascade-on-add: a box share grants the same role on every
+     item currently and eventually in the box.
+   * Follows-on-move: per-item shares stick to the item across
+     box moves; per-box shares scope by box, so an item moving
+     out loses access via the box share.
+   * Dedupe with membership: ``max(membership_role, share_role)``
+     so a readonly share never narrows a maintainer membership.
+   * Paused on soft-delete: a soft-deleted granting tenant
+     filters out of the recipient's view + access checks; resumes
+     on reactivate.
+   Recipient surface is read-only (`/shared/box/{id}`,
+   `/shared/item/{id}`) for tonight; maintainer-role write paths
+   for share recipients are deferred.
 
-7. **Per-tenant backup + restore + verifiability + pre-migration
-   snapshot.** Move `/maintenance/export` and `/maintenance/import`
-   into per-tenant `/usage/backup`. Operator keeps the global DR
-   variant. Add the weekly verification job and the
-   pre-migration snapshot wrapper.
+7. **[partial]** **Per-tenant backup + restore + verifiability +
+   pre-migration snapshot.**
+   * **[shipped]** `dao/backups.py` builds a per-tenant zip
+     (filtered DB rows + `uploads/{tid}/` slice + manifest).
+     Filtering via `src.backup(dst)` then DELETE-then-VACUUM so
+     schema fidelity is exact.  Maintainer-only download at
+     `/usage/backup`.  Audit-logs `backup.export` per pull.  The
+     operator-side full-DB DR variant stays at `/maintenance/export`.
+   * **[deferred]** Per-tenant *import* / restore, the weekly
+     verification job, and the pre-migration snapshot wrapper.
 
-8. **B2 nightly DR.** Per-tenant backup uploads. KEK lives in a
-   *separate* bucket (and ideally vendor) than the data. Configurable
-   retention.
+8. **[partial]** **B2 nightly DR.** Per-tenant backup uploads.
+   KEK lives in a *separate* bucket (and ideally vendor) than the
+   data. Configurable retention.
+   * **[shipped]** boto3 S3-compatible upload helper keyed at
+     `s3://<bucket>/<tenant_id>/<YYYY-MM-DD>.zip`.  Manual
+     "Upload to B2" button per tenant on `/admin`; 503s cleanly
+     when env vars aren't set.  `B2_KEY_ID` / `B2_APPLICATION_KEY`
+     / `B2_ENDPOINT` / `B2_BUCKET` documented in
+     `deploy/.env.example` with the loud KEK-separate-bucket
+     warning.  Audit-log + `usage_events.backup_bytes` recorded
+     per upload.
+   * **[deferred]** Nightly scheduler (in-process APScheduler vs
+     sidecar — pending an ops-side decision), retention pruner,
+     KEK-separate-bucket bootstrap helper, weekly verification
+     restore job (cross-cuts with phase 7's verification piece).
 
 9. **[partial]** **Telemetry.** Wrap the AI clients (Gemini,
    Anthropic) and the upload path to write `usage_events`. No
@@ -912,10 +941,9 @@ below.
    * **[shipped]** `dao/usage.py` (`record` + `summary`).  Hooks at
      `save_photo_bytes` (post-encode bytes), `process_ingest_job`
      (gemini_detect), `queue_match` (anthropic_match),
-     `generate_box_art` (gemini_art).  `/usage` renders three
-     meters + AI breakdown.
-   * **[deferred]** Backup-bytes recording (waits for phase 7),
-     monthly cost rollup view, sparklines.
+     `generate_box_art` (gemini_art), and the B2 upload path
+     (backup_bytes).  `/usage` renders three meters + AI breakdown.
+   * **[deferred]** Monthly cost rollup view, sparklines.
 
 10. **Quotas + enforcement + anti-abuse.** Soft caps in
     router-prefix middleware. Banners on usage page. 429s on gated
