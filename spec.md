@@ -471,22 +471,69 @@ boxes when you're packing.
 #### Transport
 
 The endpoint is a **single HTTP route at `/mcp`** speaking the
-MCP "Streamable HTTP" transport (spec rev 2025-03-26):
+MCP Streamable HTTP transport, spec rev **2025-11-25**
+([modelcontextprotocol.io/specification/2025-11-25/basic/transports][mcp-transport]):
 
-- `POST /mcp` — JSON-RPC requests with optional response
-  streaming via SSE in the same response when the tool needs
-  it.  Stash's tools are atomic so most calls finish without
-  the SSE branch.
-- Auth: `Authorization: Bearer stash_<...>` — same surface as
-  `/api/v1`.  No bearer ⇒ JSON-RPC error with
-  `code = -32001` ("auth required"); invalid bearer ⇒ same.
-- Required headers: `MCP-Protocol-Version: 2025-03-26`.  Older
-  versions are rejected explicitly so a stale client doesn't
-  silently miss new tool args.
-- Session lifecycle: every connection is stateless from
-  stash's side — the bearer is the session.  No `Mcp-Session-Id`
-  cookie, no resumption.  Clients that want long-running
-  state hold it themselves.
+[mcp-transport]: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+
+- ``POST /mcp`` — body is a single JSON-RPC request,
+  notification, or response.  Server picks the response shape
+  per call:
+  * For requests, ``Content-Type: application/json`` (a single
+    response object) or ``text/event-stream`` (SSE stream when
+    the tool wants to push intermediate messages).  Stash's
+    tools are atomic so most calls return JSON; SSE is the
+    optional path.
+  * For notifications + responses, ``HTTP 202 Accepted`` with
+    no body.
+- ``GET /mcp`` — opens an SSE stream for server-initiated
+  messages without a preceding client request.  Stash has no
+  server-push use cases in v1, so this returns ``405 Method
+  Not Allowed``.
+- ``DELETE /mcp`` — client-initiated session termination.
+  Stash deliberately opts out of MCP's session-id surface
+  (rationale below); ``DELETE`` returns ``405``.
+- Required headers on every non-initialize request:
+  * ``Authorization: Bearer stash_<...>`` — same surface as
+    ``/api/v1``.  Phase 11's auto-revoke guards (HTTPS gate,
+    URL/header leak scanner) cover this endpoint without
+    modification.
+  * ``MCP-Protocol-Version: 2025-11-25``.  The 2025-11-25 spec
+    says a server *may* fall back to ``2025-03-26`` when the
+    header is absent; stash chooses *not* to — missing or
+    different versions get ``400 Bad Request`` so a stale
+    client breaks loudly rather than silently missing new
+    tool semantics.
+  * ``Accept: application/json, text/event-stream`` — required
+    by the spec on every POST so the server can pick the
+    response shape per call.  Stash returns ``400`` if either
+    is missing.
+- ``Origin`` header validation (spec §"Security Warning"):
+  stash MUST ``403`` a request whose ``Origin`` is set and
+  not in the deployment's allow-list.  This is the
+  DNS-rebinding mitigation — without it, a malicious page can
+  drive a localhost MCP from the user's browser.  Allow-list
+  is ``STASH_PUBLIC_URL`` by default plus a comma-separated
+  ``STASH_MCP_ALLOWED_ORIGINS`` for dev clients (Claude
+  Desktop loopback, IDE hosts, etc.).
+- Auth shape:
+  * Missing/invalid/revoked/suspended bearer ⇒ ``401`` with a
+  JSON-RPC ``error`` body (``code = -32001``, "auth required").
+  The connection ends; the client is expected to re-auth.
+  * Tool-level failures (404/400/409/429) ride inside
+  successful ``200 OK`` responses with ``isError: true``,
+  per the error mapping below.  This keeps a single
+  hallucinated id from killing the agent's session.
+- Session lifecycle: stash deliberately opts out of MCP's
+  ``MCP-Session-Id`` surface.  We do not return one from
+  ``initialize``, do not require one on subsequent requests,
+  do not implement resumability via ``Last-Event-ID``.  The
+  bearer is the session.  Rationale: every tool call is
+  short, atomic, and stateless on the server side; per-session
+  state would re-introduce a per-connection footprint we
+  don't otherwise carry, and we'd inherit the spec's
+  hijacking-mitigation overhead for no current benefit.
+  When we ship long-running tools (deferred), we revisit.
 
 #### Auth + multi-tenant
 
@@ -658,8 +705,12 @@ REST layer → MCP error contract:
   keeps the old form for two minor versions.
 - Resource URIs are stable forever; the JSON shape they return
   follows the same versioning rule.
-- The MCP protocol version (`MCP-Protocol-Version`) is pinned;
-  bumping it requires a code change + a release note.
+- The MCP protocol version is pinned to ``2025-11-25``.
+  Bumping it requires a code change (header allow-list +
+  whatever transport semantics shift between revs) + a release
+  note.  The previous rev (``2025-03-26``) is **not** accepted
+  by stash; even though the spec lets servers fall back, we
+  hard-fail to keep tool semantics straight.
 
 #### Open questions
 
