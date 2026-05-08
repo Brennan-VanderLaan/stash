@@ -835,12 +835,13 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 + 16 shipped; phases 5, 7,
-8, 9, 12 partially shipped (link-share invites, per-tenant backup
-download, manual B2 upload from /admin, telemetry recording, and
-operator-dashboard bootstrap respectively).  Out-of-order work is
-all bootstrap-the-move adjacent — moved up to support an upcoming
-move.  See per-phase `[shipped]` / `[partial]` markers below.
+**Status (2026-05-08).** Phases 1–4 + 6 + 16 shipped + phase 11
+shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
+invites, per-tenant backup download, manual B2 upload from /admin,
+telemetry recording, and operator-dashboard bootstrap respectively).
+Out-of-order work is all bootstrap-the-move adjacent (or
+MCP-adjacent for phase 11) — moved up to unblock immediate use.
+See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -950,8 +951,26 @@ move.  See per-phase `[shipped]` / `[partial]` markers below.
     surfaces. Tenant-creation throttle + email-domain blocklist +
     first-interactive-session AI gate + inactivity lifecycle.
 
-11. **API tokens.** `/api/v1` router with bearer auth. Token mint /
-    revoke surface in `/usage`. Token traffic counts toward quotas.
+11. **[shipped]** **API tokens.** `/api/v1` router with bearer
+    auth. Token mint / revoke surface in `/usage`.
+    * `dao/api_tokens.py` — mint / authenticate / list / revoke.
+      Token shape ``stash_<43 url-safe chars>``; only the SHA-256
+      hash lands in the DB (plaintext shown ONCE at mint).
+    * `current_actor` middleware short-circuits to bearer when
+      `Authorization: Bearer` is present; valid token →
+      synthetic Actor with `tenant_id`, `role`, no operator
+      flag, no shares.  Per-request log line records
+      `api_token=<id>` so agent traffic is greppable.
+    * `/api/v1` (api.py): `/me`, `/boxes`, `/boxes/{id}`,
+      `/boxes/{id}/items`, `/items` (search), `/items/{id}`,
+      POST `/items/{id}/move`, `/locations`, `/rooms`, `/tags`.
+      Tenant-scoping holds across every endpoint.
+    * `/usage` carries a maintainer-only "API tokens" card with
+      a one-tap copy block on mint + per-row revoke.
+    * Audit log: `api_token.create` + `api_token.revoke` rows.
+    * **[deferred]** Quota enforcement on token traffic (waits
+      for phase 10), scoped tokens (read-only / ai-only via the
+      `scopes` JSON column already present in the schema).
 
 12. **[partial]** **Operator dashboard.** `/admin` surface with
     cross-tenant metadata, lifecycle controls (soft-delete /
