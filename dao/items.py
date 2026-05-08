@@ -204,6 +204,58 @@ def create(
     return new_id
 
 
+def update(
+    actor: Actor,
+    item_id: int,
+    *,
+    name: str | None = None,
+    notes: str | None = None,
+) -> bool:
+    """Sparse update of an item's metadata.  Returns True if any
+    column was actually changed; False on a no-op (so a route can
+    skip the audit-log entry when nothing happened).
+
+    Maintainer only.  Photo + source_photo + tags have their own
+    DAO methods; this is just the textual fields."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"item {item_id}")
+    if name is None and notes is None:
+        return False
+    fields: list[str] = []
+    params: list = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name.strip())
+    if notes is not None:
+        fields.append("notes = ?")
+        params.append(notes.strip())
+    params.extend([item_id, actor.tenant_id])
+    with db() as conn:
+        cur = conn.execute(
+            f"UPDATE items SET {', '.join(fields)} "
+            f"WHERE id = ? AND tenant_id = ?",
+            params,
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"item {item_id}")
+        obs.write_audit(
+            conn,
+            tenant_id=actor.tenant_id,
+            actor_email=actor.email,
+            action="item.update",
+            target_kind="item",
+            target_id=item_id,
+            metadata={
+                "name_changed": name is not None,
+                "notes_changed": notes is not None,
+            },
+        )
+        conn.commit()
+    _log.info("item.update id=%s", item_id)
+    return True
+
+
 def replace_photo(actor: Actor, item_id: int, new_photo: str) -> dict:
     """Atomically swap an item's photo + source_photo to a new
     filename.  Returns ``{"box_id": ..., "old_photo": ..., "old_source": ...}``

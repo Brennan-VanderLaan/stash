@@ -81,7 +81,7 @@ def record(
     operator-cross-tenant calls that don't belong to anybody)."""
     if tenant_id is None:
         return
-    if surface not in ("ai", "upload", "backup", "core"):
+    if surface not in ("ai", "upload", "backup", "core", "mcp"):
         raise ValueError(f"unknown surface {surface!r}")
     if cost_micros is None:
         cost_micros = _cost_for(surface, kind, units)

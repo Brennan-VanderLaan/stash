@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import secrets
@@ -103,6 +104,17 @@ templates = Jinja2Templates(directory=ROOT / "templates")
 # request.state.actor by the time it fires.
 import api as _api_module  # noqa: E402  (must follow `app = FastAPI()`)
 app.include_router(_api_module.router)
+
+# /mcp — Model Context Protocol Streamable HTTP endpoint (phase 18).
+# Implements spec rev 2025-11-25.  Bearer auth piggybacks on the
+# same current_actor path as /api/v1.  Surface contract is in
+# spec.md § Architecture · Agent / MCP integration.
+import mcp_server as _mcp_server  # noqa: E402
+
+# Public alias so tests can override at module level if needed.
+_MCP_ENABLED = os.environ.get(
+    "STASH_MCP_ENABLED", "true",
+).strip().lower() not in ("false", "0", "no", "off")
 
 
 # ── Localization seams ───────────────────────────────────────────────
@@ -3765,6 +3777,68 @@ def invite_accept(request: Request, token: str):
     # Newly-joined member needs a fresh request so the middleware
     # picks up the membership; redirect home.
     return RedirectResponse("/", status_code=303)
+
+
+# ── /mcp — Model Context Protocol endpoint (phase 18) ────────────
+
+
+@app.post("/mcp")
+async def mcp_post(request: Request):
+    """Streamable HTTP POST handler.  Body is a single JSON-RPC
+    message; response is application/json with the result (or 202
+    for notifications).  SSE response is reserved for future tools
+    that want to stream — atomic tools land on the JSON path.
+
+    Spec rev 2025-11-25 — see mcp_server.py + spec.md."""
+    if not _MCP_ENABLED:
+        raise HTTPException(404)
+    actor: Actor = request.state.actor
+    _mcp_server.validate_request_headers(request)
+    body = await request.body()
+    response_payload = _mcp_server.dispatch(body, actor)
+    if response_payload is None:
+        # Notification — spec says 202 Accepted with no body.
+        return Response(status_code=202)
+    return Response(
+        content=json.dumps(response_payload, default=str),
+        media_type="application/json",
+        # Pin the negotiated protocol version on responses so
+        # clients can confirm what they're talking to.
+        headers={
+            "MCP-Protocol-Version": _mcp_server.SUPPORTED_PROTOCOL_VERSION,
+        },
+    )
+
+
+@app.get("/mcp")
+def mcp_get(request: Request):
+    """Spec compliance: the endpoint MUST accept GET, but stash
+    has no server-push use cases in v1.  Return 405."""
+    if not _MCP_ENABLED:
+        raise HTTPException(404)
+    _mcp_server.validate_request_headers(request)
+    return Response(
+        status_code=405,
+        content="Stash does not offer a server-initiated SSE stream.",
+        media_type="text/plain",
+        headers={"Allow": "POST"},
+    )
+
+
+@app.delete("/mcp")
+def mcp_delete(request: Request):
+    """Spec: ``DELETE /mcp`` is for client-initiated session
+    termination.  Stash opts out of MCP-Session-Id, so there's
+    no per-connection state to drop — return 405."""
+    if not _MCP_ENABLED:
+        raise HTTPException(404)
+    _mcp_server.validate_request_headers(request)
+    return Response(
+        status_code=405,
+        content="Stash does not implement MCP-Session-Id.",
+        media_type="text/plain",
+        headers={"Allow": "POST"},
+    )
 
 
 @app.get("/healthz")

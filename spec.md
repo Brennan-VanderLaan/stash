@@ -1131,19 +1131,19 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 shipped;
-phases 5, 7, 8, 9, 12 partially shipped (link-share invites,
-per-tenant backup download, manual B2 upload from /admin, telemetry
-recording, and operator-dashboard bootstrap respectively).
+**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 + 18
+shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
+invites, per-tenant backup download, manual B2 upload from /admin,
+telemetry recording, and operator-dashboard bootstrap respectively).
 Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
 moved up to unblock immediate use.  Pre-MCP security audit (in
 ``docs/`` lineage via commit history) drove a pass that closes
 the audit's P0/P1 list: per-share file allow-list, healthz bypass,
 bearer auto-revoke on HTTP/URL-leak, operator suspend/resume,
 SameSite=strict, app-level security headers, and the comprehensive
-auth-coverage test suite (69 cases).  Phase 18 (built-in MCP
-endpoint) is the next forthcoming feature — design spec'd in
-`Architecture · Agent / MCP integration`, implementation pending.
+auth-coverage test suite (69 cases).  Built-in MCP endpoint at
+``/mcp`` (spec rev 2025-11-25) is live with the full tool +
+resource catalogue from `Architecture · Agent / MCP integration`.
 See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
@@ -1362,17 +1362,42 @@ See per-phase `[shipped]` / `[partial]` markers below.
     flip the language picker on. Pure translation work — the
     engineering already shipped in step 1.
 
-18. **Built-in MCP endpoint.** Single ``/mcp`` route speaking
-    Streamable HTTP, bearer-auth via the existing api_tokens
-    surface.  Tool catalogue covers read (find/get/list across
-    boxes/items/locations/rooms/tags + room inventory) and a
-    bounded set of writes (move, create, update, tag, mark
-    missing).  Photo bytes via MCP ``ImageContent`` with
-    none/thumb/full opt-in so an agent can show "here's what
-    your blue mug looks like" without forcing the bytes through
-    every read.  Full surface contract in the `Architecture ·
-    Agent / MCP integration` section above.  No sidecar — the
-    endpoint is in-app or it's deferred.
+18. **[shipped]** **Built-in MCP endpoint.** Single ``/mcp``
+    route speaking Streamable HTTP rev 2025-11-25, bearer-auth
+    via the existing api_tokens surface.
+    * ``mcp_server.py`` — JSON-RPC dispatch + tool/resource
+      registry + header validation (Origin allow-list,
+      Accept, MCP-Protocol-Version pinned at ``2025-11-25``,
+      no fallback).
+    * 15 tools: ``me``, ``find_items``, ``get_item``,
+      ``list_boxes``, ``get_box``, ``list_locations``,
+      ``list_rooms``, ``list_tags``, ``inventory_room``,
+      ``move_item``, ``create_item``, ``update_item``,
+      ``add_tag``, ``remove_tag``, ``mark_missing``.  Read tools
+      idempotent + cheap; write tools one-shot + fail loud on
+      bad targets.
+    * 4 resources: ``stash://{items,boxes,rooms,locations}/{id}``.
+    * Photo bytes: ``get_item(include_photo='none|thumb|full')``
+      returns MCP ``ImageContent`` with base64-encoded JPEG.
+      ``full`` records ``upload_bytes`` telemetry against quota
+      so a hammering agent shows up in the cap meters.
+    * Telemetry: every tool call writes ``surface='mcp'`` with
+      ``kind='mcp.<tool_name>'`` so the cost-transparency block
+      breaks out agent-vs-human usage.
+    * Quota integration: 80–99% band surfaces in
+      ``_meta.warnings`` on every tool result; 429 surfaces as
+      ``isError: true`` with the cap details.
+    * Error mapping: NotFoundError → tool error,
+      ForbiddenError → tool error, ConflictError → tool error,
+      ValueError / TypeError → tool error.  Auth failures
+      (revoked / suspended / over-HTTP) come through the same
+      phase-11 path → 401 + JSON-RPC error code -32001.
+    * GET /mcp returns 405 (no server-push v1).
+      DELETE /mcp returns 405 (we opt out of MCP-Session-Id).
+    * Kill switch: ``STASH_MCP_ENABLED=false``.
+    * Origin allow-list: ``STASH_PUBLIC_URL`` plus optional
+      comma-separated ``STASH_MCP_ALLOWED_ORIGINS`` for dev
+      clients (Claude Desktop loopback, IDE hosts).
 
 (Support / Sentry / in-app feedback link — deferred.)
 
