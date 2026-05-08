@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.0...v1.7.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **oauth:** close P0/P1 audit findings + path-suffixed discovery ([d1386be](https://github.com/Brennan-VanderLaan/stash/commit/d1386be204014ecd4e1e705bfcc4ba18beac1ed1))
+
 ## [1.7.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.6.1...v1.7.0) (2026-05-08)
 
 
