@@ -234,6 +234,42 @@ def test_print_page_handles_empty_selection(client):
     assert "No boxes selected" in r.text
 
 
+def test_print_page_respects_persisted_orientation(client):
+    """Regression for the bug where the print + PDF paths fell
+    back to landscape because ``_selected_boxes`` didn't pull
+    ``label_orientation`` out of the row.  After the fix, a
+    box flipped to portrait must produce a ``rotate(90)`` in
+    the print HTML; a landscape box must NOT."""
+    client.post("/boxes", data={"name": "Portrait Test"})
+    client.post("/boxes", data={"name": "Landscape Test"})
+    client.post("/boxes/1/label-orientation",
+                data={"orientation": "portrait"})
+    html = client.get("/labels/print").text
+    # Exactly one rotate — the portrait box.
+    assert html.count("rotate(90)") == 1
+    assert "Portrait Test" in html
+    assert "Landscape Test" in html
+
+
+def test_portrait_layout_qr_lands_in_cell_bounds(client):
+    """The portrait rotation must land the QR fully inside the
+    cell, not half-outside — that was the other half of the
+    rendering bug.  Look at the portrait box's label SVG and
+    confirm the rotation transform puts the rendered shape's
+    bounding box at exactly cell dimensions."""
+    client.post("/boxes", data={"name": "Portrait Test"})
+    client.post("/boxes/1/label-orientation",
+                data={"orientation": "portrait"})
+    svg = client.get("/boxes/1/label.svg").text
+    # The outer rotation group wraps the inner shape with a
+    # translate that moves it back into bounds.  The translate
+    # value MUST equal the cell width (101.6 for 5523 default).
+    assert "translate(101.6,0) rotate(90)" in svg
+    # The inner rect is the portrait canvas (50.8 wide ×
+    # 101.6 tall), not the rotated landscape rect.
+    assert 'width="50.8" height="101.6"' in svg
+
+
 # ── QR + content ──────────────────────────────────────────────────
 
 

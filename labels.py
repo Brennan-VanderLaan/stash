@@ -187,65 +187,64 @@ def _fit_font(text: str, max_width: float, ideal: float,
 
 
 def _background_art_inner(art_bytes: bytes | None,
-                          long_dim: float, short_dim: float,
-                          qr_size: float, margin: float) -> str:
-    """Background-art layer rendered to fit *behind* the text
-    portion of the cell (i.e. the area that's not occupied by
-    the QR code on the left).  Opacity intentionally low so the
-    text stays legible; clipped to keep QR contrast."""
+                          canvas_w: float, canvas_h: float,
+                          margin: float) -> str:
+    """Background-art layer covering the full cell minus the
+    rounded-corner margin.  Earlier versions clipped the art to
+    the right of the QR which left a hard vertical cut line
+    (looked like a partly-loaded image).  The QR's black
+    squares stay 100% opaque on top of the faded art and
+    scan fine — the text + QR are still the focal points,
+    the art is wallpaper."""
     if not art_bytes:
         return ""
     mime = "image/jpeg" if art_bytes[:3] == b"\xff\xd8\xff" else "image/png"
     b64 = base64.b64encode(art_bytes).decode("ascii")
-    art_x = margin + qr_size + margin
-    art_w = long_dim - art_x - margin
-    art_h = short_dim - margin * 2
     return (
         f'<image href="data:{mime};base64,{b64}" '
-        f'x="{art_x}" y="{margin}" width="{art_w}" height="{art_h}" '
+        f'x="{margin}" y="{margin}" '
+        f'width="{canvas_w - 2 * margin}" '
+        f'height="{canvas_h - 2 * margin}" '
         f'preserveAspectRatio="xMidYMid slice" opacity="0.3"/>'
     )
 
 
-def _label_inner(
+def _label_inner_landscape(
     box_id: int,
     name: str,
     description: str,
     public_url: str,
-    long_dim: float,
-    short_dim: float,
+    canvas_w: float,
+    canvas_h: float,
     background_art: bytes | None = None,
 ) -> str:
-    """SVG inside a cell, laid out as if the cell were
-    landscape-oriented (long_dim wide × short_dim tall).  The
-    sheet renderer rotates this content 90° around the cell
-    centre when the box's orientation is ``portrait``."""
+    """Landscape-canvas layout: QR on the left, name + notes
+    fill the right.  Used for the canvas being wider than tall —
+    Avery 5523's natural cell shape (101.6 × 50.8)."""
+    short_dim = canvas_h
     margin = short_dim * _MARGIN_FRACTION
     qr_size = short_dim * _QR_FRACTION
-    qr_y = (short_dim - qr_size) / 2
+    qr_y = (canvas_h - qr_size) / 2
     name_size = short_dim * _NAME_FONT_FRACTION
     desc_size = short_dim * _DESC_FONT_FRACTION
     id_size = short_dim * _ID_FONT_FRACTION
 
-    # Where the text starts horizontally + how wide it can be
-    # before it'd run into the corner ID badge.
     text_x = margin + qr_size + margin
     id_reserve = id_size * 5
-    text_max = long_dim - text_x - margin - id_reserve
+    text_max = canvas_w - text_x - margin - id_reserve
 
     name_size = _fit_font(name, text_max, name_size)
-    name_y = short_dim / 2 - (1 if description else 0)
+    name_y = canvas_h / 2 - (1 if description else 0)
 
     qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
     vb_w = float(qr_vb.split()[2])
     vb_h = float(qr_vb.split()[3])
 
     parts = [
-        f'<rect width="{long_dim}" height="{short_dim}" rx="1.5" ry="1.5" '
-        f'fill="white" stroke="#bbb" stroke-width="0.25"/>',
+        f'<rect width="{canvas_w}" height="{canvas_h}" '
+        f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
-    art = _background_art_inner(background_art, long_dim, short_dim,
-                                qr_size, margin)
+    art = _background_art_inner(background_art, canvas_w, canvas_h, margin)
     if art:
         parts.append(art)
     parts.extend([
@@ -253,7 +252,7 @@ def _label_inner(
         f'scale({qr_size / vb_w},{qr_size / vb_h})">',
         f'  <path d="{qr_path}" fill="black"/>',
         f'</g>',
-        f'<text x="{long_dim - margin}" y="{margin + id_size * 0.9}" '
+        f'<text x="{canvas_w - margin}" y="{margin + id_size * 0.9}" '
         f'font-family="ui-monospace, Menlo, monospace" '
         f'font-size="{id_size}" fill="#666" text-anchor="end">'
         f'#{box_id}</text>',
@@ -273,13 +272,98 @@ def _label_inner(
     return "\n    ".join(parts)
 
 
+def _label_inner_portrait(
+    box_id: int,
+    name: str,
+    description: str,
+    public_url: str,
+    canvas_w: float,
+    canvas_h: float,
+    background_art: bytes | None = None,
+) -> str:
+    """Portrait-canvas layout: QR on TOP, name + notes stack
+    below.  Used inside a cell after a 90° rotation so the long
+    axis of the printed cell ends up reading vertically.  Canvas
+    here is "tall" — narrower than tall.
+
+    Sized off ``canvas_w`` (the short side of the rotated canvas,
+    which becomes the short side of the printed cell after
+    rotation) so QR + text proportions match what landscape
+    produces in the same cell."""
+    short_dim = canvas_w
+    margin = short_dim * _MARGIN_FRACTION
+    qr_size = short_dim * _QR_FRACTION
+    qr_x = (canvas_w - qr_size) / 2
+    qr_y = margin
+    name_size = short_dim * _NAME_FONT_FRACTION
+    desc_size = short_dim * _DESC_FONT_FRACTION
+    id_size = short_dim * _ID_FONT_FRACTION
+
+    text_x = margin
+    text_max = canvas_w - 2 * margin
+    # First text line sits a full ``margin`` below the QR.
+    name_y = qr_y + qr_size + margin + name_size
+
+    name_size = _fit_font(name, text_max, name_size)
+
+    qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
+    vb_w = float(qr_vb.split()[2])
+    vb_h = float(qr_vb.split()[3])
+
+    parts = [
+        f'<rect width="{canvas_w}" height="{canvas_h}" '
+        f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
+    ]
+    art = _background_art_inner(background_art, canvas_w, canvas_h, margin)
+    if art:
+        parts.append(art)
+    parts.extend([
+        f'<g transform="translate({qr_x},{qr_y}) '
+        f'scale({qr_size / vb_w},{qr_size / vb_h})">',
+        f'  <path d="{qr_path}" fill="black"/>',
+        f'</g>',
+        # ID badge sits at the bottom-right of the portrait
+        # canvas so it's away from the QR but still on a fixed
+        # corner you can find at a glance.
+        f'<text x="{canvas_w - margin}" '
+        f'y="{canvas_h - margin}" '
+        f'font-family="ui-monospace, Menlo, monospace" '
+        f'font-size="{id_size}" fill="#666" text-anchor="end">'
+        f'#{box_id}</text>',
+        f'<text x="{text_x}" y="{name_y}" '
+        f'font-family="sans-serif" font-size="{name_size}" '
+        f'font-weight="bold" fill="#111">{_escape(name)}</text>',
+    ])
+    if description:
+        desc_size = _fit_font(description, text_max, desc_size)
+        desc_y = name_y + desc_size + 1.5
+        parts.append(
+            f'<text x="{text_x}" y="{desc_y}" '
+            f'font-family="sans-serif" font-size="{desc_size}" '
+            f'fill="#666">{_escape(description)}</text>'
+        )
+    return "\n    ".join(parts)
+
+
 def _label_group(
     fmt: AveryFormat,
     box: dict,
     public_url: str,
 ) -> str:
     """One cell's worth of SVG, sized to the format's cell
-    dimensions and rotated for the box's orientation."""
+    dimensions.  Picks the right layout for the box's
+    orientation:
+
+    * ``landscape`` — QR + text laid out across the cell's
+      natural (101.6 × 50.8 for 5523) shape.
+    * ``portrait`` — QR + text laid out into a tall narrow
+      canvas (50.8 × 101.6 for 5523), then rotated 90°
+      clockwise + translated so it fits the actual landscape
+      cell on the sheet.  After rotation the rendered shape's
+      original "top" lands on the cell's right edge — peel the
+      label, rotate it 90° CCW in your hand, and the text
+      reads horizontally on a vertical surface.
+    """
     orientation = (box.get("label_orientation") or "landscape").lower()
     name = box.get("name", "")
     description = box.get("notes") or ""
@@ -287,36 +371,32 @@ def _label_group(
     box_id = box["id"]
 
     if orientation == "portrait":
-        # Lay content out as if the cell were rotated:
-        # long_dim = cell height, short_dim = cell width.  Then
-        # apply a 90° rotation around the cell centre so the
-        # rendered shape lines up with the physical cell.
-        long_dim = fmt.label_h_mm
-        short_dim = fmt.label_w_mm
-        inner = _label_inner(
+        # Portrait canvas is "tall" — width = cell height,
+        # height = cell width.  After we render the inner
+        # shape, a 90°-CW rotation followed by a translation
+        # by the cell width along X makes the (tall) shape
+        # fit the (wide) cell.
+        canvas_w = fmt.label_h_mm    # 50.8 for 5523
+        canvas_h = fmt.label_w_mm    # 101.6 for 5523
+        inner = _label_inner_portrait(
             box_id, name, description, public_url,
-            long_dim, short_dim, art_bytes,
+            canvas_w, canvas_h, art_bytes,
         )
-        # Rotate 90° clockwise around the cell's centre.  Translate
-        # → rotate → un-translate, all inside the parent cell's
-        # coordinate space.
-        cx = fmt.label_w_mm / 2
-        cy = fmt.label_h_mm / 2
-        # After rotation, the rendered shape's origin lands at
-        # (cx + long_dim/2, cy - short_dim/2) in the unrotated
-        # cell — we counter-translate so the shape's top-left
-        # corner ends up at (0, 0) of the cell.
+        # SVG transform reads right-to-left for application
+        # order: rotate first, then translate.  rotate(90)
+        # takes (x, y) → (-y, x); the (canvas_w, 0) translate
+        # shifts the rotated shape so its bounding box lands
+        # at (0,0)..(canvas_h, canvas_w) — which equals
+        # (label_w_mm, label_h_mm) — perfectly matching the
+        # cell.
         return (
-            f'<g transform="rotate(90 {cx} {cy}) '
-            f'translate({cx - long_dim / 2},{cy - short_dim / 2})">'
+            f'<g transform="translate({fmt.label_w_mm},0) rotate(90)">'
             f'{inner}</g>'
         )
 
-    long_dim = fmt.label_w_mm
-    short_dim = fmt.label_h_mm
-    return _label_inner(
+    return _label_inner_landscape(
         box_id, name, description, public_url,
-        long_dim, short_dim, art_bytes,
+        fmt.label_w_mm, fmt.label_h_mm, art_bytes,
     )
 
 

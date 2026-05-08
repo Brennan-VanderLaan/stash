@@ -3071,17 +3071,26 @@ def box_label_svg(request: Request, box_id: int):
 def _selected_boxes(conn, actor: Actor, box_ids_raw: list[str]) -> list:
     """Return rows for the selected boxes, or all boxes in the actor's
     tenant if no selection given.  Ordering matches the labels page
-    (alpha) so printed sheets are predictable."""
+    (alpha) so printed sheets are predictable.
+
+    Pulls ``label_orientation`` so the print + PDF paths render
+    each box at the orientation the user chose on /labels —
+    without it, ``_label_group`` would fall back to landscape
+    for every box.
+    """
+    cols = ("id, name, notes, background_art, label_orientation, "
+            "tenant_id")
     if box_ids_raw:
         placeholders = ",".join("?" * len(box_ids_raw))
         return conn.execute(
-            f"SELECT id, name, notes, background_art, tenant_id FROM boxes "
-            f"WHERE id IN ({placeholders}) AND tenant_id = ? ORDER BY name",
+            f"SELECT {cols} FROM boxes "
+            f"WHERE id IN ({placeholders}) AND tenant_id = ? "
+            f"ORDER BY name",
             [*[int(b) for b in box_ids_raw], actor.tenant_id],
         ).fetchall()
     return conn.execute(
-        "SELECT id, name, notes, background_art, tenant_id FROM boxes "
-        "WHERE tenant_id = ? ORDER BY name",
+        f"SELECT {cols} FROM boxes "
+        f"WHERE tenant_id = ? ORDER BY name",
         (actor.tenant_id,),
     ).fetchall()
 

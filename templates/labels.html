@@ -80,17 +80,14 @@
             </button>
           </div>
           {% if art_enabled %}
+            {# Inline clear is gone — fewer buttons per tile keeps
+               the grid scannable.  Clear-art lives in the preview
+               modal that opens when you tap the tile's thumbnail. #}
             <button type="button"
                     class="btn btn-sm label-action {% if b.background_art %}label-action-regen{% else %}label-action-generate{% endif %}"
                     data-art-action="generate"
                     title="{% if b.background_art %}Regenerate art{% else %}Generate art{% endif %}">
               <span class="art-icon">{% if b.background_art %}↻{% else %}🎨{% endif %}</span>
-            </button>
-            <button type="button"
-                    class="btn btn-ghost btn-sm label-action label-action-clear"
-                    data-art-action="clear" title="Clear art"
-                    {% if not b.background_art %}hidden{% endif %}>
-              <span class="art-icon">✕</span>
             </button>
           {% endif %}
         </div>
