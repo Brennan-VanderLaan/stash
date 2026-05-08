@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.6.0...v1.6.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **api:** mint API token without putting plaintext in a URL ([d6b4d37](https://github.com/Brennan-VanderLaan/stash/commit/d6b4d37c4e6f585e907aad9bdf909de2d35a26e6))
+
 ## [1.6.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.5.0...v1.6.0) (2026-05-08)
 
 
