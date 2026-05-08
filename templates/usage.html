@@ -126,6 +126,33 @@
   </ul>
   {% endif %}
 </div>
+
+{# ── Outbound object shares ───────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Boxes and items I've shared") }} ({{ outbound_shares | length }})</div>
+  <p class="text-sm text-muted">
+    {{ _("Share boxes or items with someone outside your tenant from the box detail page (the 🔗 Share card under each box).") }}
+  </p>
+  {% if outbound_shares %}
+  <ul class="allowed-emails">
+    {% for s in outbound_shares %}
+    <li>
+      {% if s.target_kind == 'box' %}📦{% else %}🏷️{% endif %}
+      <code>{{ s.target_label }}</code>
+      <span class="text-muted text-sm">
+        → {{ s.recipient_email }} · {{ s.role }}
+      </span>
+      <form method="post" action="/shares/{{ s.id }}/revoke" style="display:inline;">
+        <button type="submit" class="btn btn-link btn-sm"
+                onclick="return confirm('{{ _('Revoke this share?') }}');">
+          {{ _("Revoke") }}
+        </button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
 {% endif %}
 
 {% endblock %}

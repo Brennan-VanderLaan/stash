@@ -20,6 +20,7 @@ from dao import items as dao_items
 from dao import locations as dao_locations
 from dao import pending_items as dao_pending
 from dao import rooms as dao_rooms
+from dao import shares as dao_shares
 from dao import tags as dao_tags
 from dao import tenants as dao_tenants
 from dao import usage as dao_usage
@@ -192,13 +193,14 @@ async def current_actor(request: Request, call_next):
     is_operator = bool(email) and email in _OPERATOR_EMAILS
 
     memberships = dao_tenants.memberships_for_email(email) if email else ()
+    shares = dao_shares.shares_for_email(email) if email else ()
 
     # Invite-bypass: a signed-in email with no current membership is
     # still allowed onto /invite/<token> so they can land on the
     # redemption page.  The redemption itself only succeeds if the
     # token is valid + un-consumed (DAO enforces).  Spec § "Sign-up +
     # onboarding" path #2 — "sign-in following an invite link".
-    if not memberships and not is_operator and email:
+    if not memberships and not is_operator and email and not shares:
         token = _invite_token_in_path(request.url.path)
         if token and dao_invites.get_by_token(token) is not None:
             request.state.actor = Actor(
@@ -207,10 +209,16 @@ async def current_actor(request: Request, call_next):
                 role=None,
                 is_operator=False,
                 memberships=(),
+                shares=(),
             )
             return await call_next(request)
 
-    if not memberships and not is_operator:
+    # Share-only access: an email with no membership but at least
+    # one active share is allowed in.  Their actor has tenant_id +
+    # role None (no active tenant context); the routes that handle
+    # share-target pages consult the ``shares`` tuple directly via
+    # :func:`dao.shares.effective_role_for_*`.
+    if not memberships and not is_operator and not shares:
         return Response(
             "Forbidden — your email is not a member of any tenant on this stash.",
             status_code=403,
@@ -224,6 +232,7 @@ async def current_actor(request: Request, call_next):
         role=active_role,
         is_operator=is_operator,
         memberships=memberships,
+        shares=shares,
     )
     return await call_next(request)
 
@@ -1227,11 +1236,16 @@ def _resolve_serve_tenant(request: Request, name: str) -> int | None:
     """Pick the tenant whose directory holds `name` for this actor.
 
     Most requests resolve cleanly to ``actor.tenant_id`` — the file is
-    in the active tenant's directory.  But operators with no
-    membership, and (eventually) share recipients, need a fallback:
-    walk every tenant the actor *might* see and pick the first that
-    owns the file.  See spec § "Sharing model" for where this widens
-    when object_shares lands."""
+    in the active tenant's directory.  Operators with no membership,
+    multi-tenant members, and share recipients need fallbacks: walk
+    every tenant the actor *might* see and pick the first that owns
+    the file.  See spec § "Sharing model".
+
+    Caveat: this widens read access to "any file in a tenant the
+    actor has any share-link into", not just the photos referenced
+    by the shared target.  In practice the URL space stays bound by
+    what the rendered pages embed; tightening to a per-target file
+    allow-list is deferred future work."""
     actor: Actor = request.state.actor
     if actor.tenant_id is not None:
         # Fast path: file lives in the active tenant's directory.
@@ -1242,6 +1256,13 @@ def _resolve_serve_tenant(request: Request, name: str) -> int | None:
         for tid, _role in actor.memberships:
             if tid != actor.tenant_id and _tenant_file(tid, name).exists():
                 return tid
+    # Share recipients with no active membership (or with one that
+    # didn't match above) — walk the unique tenant_ids carried on
+    # actor.shares.
+    share_tenants = {s["tenant_id"] for s in actor.shares}
+    for tid in share_tenants:
+        if _tenant_file(tid, name).exists():
+            return tid
     if actor.is_operator:
         # Operators have no automatic data access through /admin (see
         # spec § "Operator surface"), but if a tenant maintainer has
@@ -3132,8 +3153,10 @@ def usage_page(request: Request, invite_url: str = ""):
     tenant = dao_tenants.get_tenant(actor, actor.tenant_id)
     members = dao_tenants.list_members(actor, actor.tenant_id)
     invites = []
+    outbound_shares = []
     if actor.role == "maintainer":
         invites = dao_invites.list_for_tenant(actor)
+        outbound_shares = dao_shares.list_outbound(actor)
     summary = dao_usage.summary(actor)
     return templates.TemplateResponse(
         request, "usage.html",
@@ -3141,6 +3164,7 @@ def usage_page(request: Request, invite_url: str = ""):
             "tenant": tenant,
             "members": members,
             "invites": invites,
+            "outbound_shares": outbound_shares,
             "current_email": actor.email,
             "current_role": actor.role,
             "is_maintainer": actor.role == "maintainer",
@@ -3221,6 +3245,127 @@ def invite_accept(request: Request, token: str):
     # Newly-joined member needs a fresh request so the middleware
     # picks up the membership; redirect home.
     return RedirectResponse("/", status_code=303)
+
+
+# ── /shared + share-mint routes (phase 6) ──────────────────────────
+#
+# Spec § "Sharing model".  Two sides:
+# * Granters: maintainers of a tenant share a single box / item to
+#   an outside email.  Mint via POST /boxes/{id}/share or
+#   /items/{id}/share; revoke from /usage's outbound table.
+# * Recipients: see /shared (index of inbound shares) and the
+#   read-only /shared/box/{id} + /shared/item/{id} views.  Their
+#   actor middleware bypass is wired in current_actor — this surface
+#   doesn't widen the existing /boxes/{id} route.
+
+
+@app.post("/boxes/{box_id}/share")
+def share_box(
+    request: Request,
+    box_id: int,
+    recipient_email: str = Form(...),
+    role: str = Form("readonly"),
+):
+    actor: Actor = request.state.actor
+    try:
+        result = dao_shares.create(
+            actor, target_kind="box", target_id=box_id,
+            recipient_email=recipient_email, role=role,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "share_id": result["id"], "role": result["role"]}
+    return RedirectResponse(f"/boxes/{box_id}", status_code=303)
+
+
+@app.post("/items/{item_id}/share")
+def share_item(
+    request: Request,
+    item_id: int,
+    recipient_email: str = Form(...),
+    role: str = Form("readonly"),
+):
+    actor: Actor = request.state.actor
+    try:
+        result = dao_shares.create(
+            actor, target_kind="item", target_id=item_id,
+            recipient_email=recipient_email, role=role,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if "application/json" in request.headers.get("accept", ""):
+        return {"ok": True, "share_id": result["id"], "role": result["role"]}
+    # Item-detail target rendered by the modal on the parent box —
+    # send the granter back there with the item anchor preserved so
+    # the modal reopens after the redirect.
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+        target = f"/boxes/{item['box_id']}#item-{item_id}"
+    except NotFoundError:
+        target = "/usage"
+    return RedirectResponse(target, status_code=303)
+
+
+@app.post("/shares/{share_id}/revoke")
+def revoke_share(request: Request, share_id: int):
+    actor: Actor = request.state.actor
+    try:
+        dao_shares.revoke(actor, share_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse("/usage", status_code=303)
+
+
+@app.get("/shared", response_class=HTMLResponse)
+def shared_index(request: Request):
+    """Recipient view: every inbound active share, grouped per
+    granting tenant.  Soft-deleted granting tenants are filtered
+    out by the DAO so the recipient sees them as gone."""
+    actor: Actor = request.state.actor
+    shares = dao_shares.list_for_recipient(actor.email)
+    return templates.TemplateResponse(
+        request, "shared.html",
+        {"shares": shares, "current_email": actor.email},
+    )
+
+
+@app.get("/shared/box/{box_id}", response_class=HTMLResponse)
+def shared_box(request: Request, box_id: int):
+    """Read-only recipient view of a shared box.  Tenant members
+    should still use /boxes/{id} — that route carries the full
+    edit surface; this one renders the items grid only."""
+    actor: Actor = request.state.actor
+    box = dao_shares.fetch_box_for_recipient(actor, box_id)
+    if box is None:
+        raise HTTPException(404)
+    items = dao_shares.fetch_box_items_for_recipient(actor, box_id)
+    return templates.TemplateResponse(
+        request, "shared_box.html",
+        {"box": box, "items": items},
+    )
+
+
+@app.get("/shared/item/{item_id}", response_class=HTMLResponse)
+def shared_item(request: Request, item_id: int):
+    actor: Actor = request.state.actor
+    item = dao_shares.fetch_item_for_recipient(actor, item_id)
+    if item is None:
+        raise HTTPException(404)
+    return templates.TemplateResponse(
+        request, "shared_item.html",
+        {"item": item},
+    )
 
 
 # ── /admin — operator dashboard (phase 12) ─────────────────────────

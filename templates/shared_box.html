@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ box.name }} · Stash{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-title">
+    📦 {{ box.name }}
+    <span class="text-muted text-sm">
+      — {{ _("shared from") }} {{ box.tenant_name }} · {{ box.share_role }}
+    </span>
+  </div>
+  {% if box.notes %}
+    <p>{{ box.notes }}</p>
+  {% endif %}
+  {% if box.location %}
+    <p class="text-muted text-sm">{{ _("Located:") }} {{ box.location }}</p>
+  {% endif %}
+  <p class="text-sm">
+    <a href="/shared">← {{ _("Back to shared") }}</a>
+  </p>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    {{ _("Items") }} ({{ items | length }})
+  </div>
+  {% if not items %}
+    <p class="text-muted">{{ _("Empty box.") }}</p>
+  {% else %}
+    <div class="item-grid">
+      {% for it in items %}
+        <a class="item-tile" href="/shared/item/{{ it.id }}">
+          {% if it.photo %}
+            <img src="/thumbs/{{ it.photo }}" alt="" loading="lazy">
+          {% else %}
+            <div class="item-tile-empty">📷</div>
+          {% endif %}
+          <div class="item-tile-name">{{ it.name }}</div>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -34,12 +34,19 @@ class Actor:
     (roadmap step 15), but for now we just take the first by
     joined_at.  `memberships` is the full list so the eventual
     switcher UI can render without another DB hit.
+
+    `shares` carries every active object share pointed at this
+    email (one entry per (target_kind, target_id) pair).  It's
+    populated by :mod:`dao.shares.shares_for_email` at middleware
+    time so the DAO's effective-role helpers can dedupe membership
+    + share access without a per-request DB hit.
     """
     email: str
     tenant_id: int | None
     role: str | None
     is_operator: bool
     memberships: tuple[tuple[int, str], ...]
+    shares: tuple[dict, ...] = ()
 
     def has_membership(self, tenant_id: int) -> str | None:
         """Return the role this actor has on `tenant_id`, or None if
@@ -51,6 +58,16 @@ class Actor:
         for tid, role in self.memberships:
             if tid == tenant_id:
                 return role
+        return None
+
+    def has_share(self, target_kind: str, target_id: int) -> str | None:
+        """Return the share-role this actor has on a specific
+        (kind, id) target, or None.  Doesn't check cascade — a box
+        share covering an item is resolved by
+        :func:`dao.shares.effective_role_for_item`."""
+        for s in self.shares:
+            if s["target_kind"] == target_kind and s["target_id"] == target_id:
+                return s["role"]
         return None
 
 

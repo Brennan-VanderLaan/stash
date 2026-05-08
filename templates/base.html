@@ -23,6 +23,9 @@
       <a href="/labels">{{ _("Labels") }}</a>
       <a href="/tags">{{ _("Tags") }}</a>
       <a href="/usage">{{ _("Usage") }}</a>
+      {% if request.state.actor and request.state.actor.shares %}
+      <a href="/shared">{{ _("Shared") }}</a>
+      {% endif %}
       <a href="/maintenance">{{ _("Maintenance") }}</a>
       {% if request.state.actor and request.state.actor.is_operator %}
       <a href="/admin">{{ _("Admin") }}</a>

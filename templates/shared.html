@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Shared with you") }} · Stash{% endblock %}
+{% block content %}
+
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Shared with you") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Boxes and items other tenants have shared with") }}
+    <code>{{ current_email }}</code>.
+    {{ _("Share-only access means you can view but not edit unless the granter set the role to maintainer.") }}
+  </p>
+
+  {% if not shares %}
+    <p class="text-muted">{{ _("Nothing yet — when someone shares a box or item with you, it'll show up here.") }}</p>
+  {% else %}
+    {# Group by granting tenant so a recipient who has shares from
+       two friends sees them in two distinct sections rather than
+       one indistinguishable list. #}
+    {% set ns = namespace(prev_tenant=None) %}
+    {% for s in shares %}
+      {% if s.tenant_id != ns.prev_tenant %}
+        {% if not loop.first %}</ul>{% endif %}
+        <div class="section-label" style="margin-top:0.75rem;">
+          {{ _("From") }} <strong>{{ s.tenant_name }}</strong>
+        </div>
+        <ul class="allowed-emails">
+        {% set ns.prev_tenant = s.tenant_id %}
+      {% endif %}
+      <li>
+        {% if s.target_kind == "box" %}
+          <a href="/shared/box/{{ s.target_id }}">📦 {{ s.target_label }}</a>
+        {% else %}
+          <a href="/shared/item/{{ s.target_id }}">🏷️ {{ s.target_label }}</a>
+          {% if s.item_box_id %}
+            <span class="text-muted text-sm">{{ _("(item only)") }}</span>
+          {% endif %}
+        {% endif %}
+        <span class="text-muted text-sm">— {{ s.role }}</span>
+      </li>
+      {% if loop.last %}</ul>{% endif %}
+    {% endfor %}
+  {% endif %}
+</div>
+
+{% endblock %}

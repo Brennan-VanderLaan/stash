@@ -310,6 +310,34 @@
 })();
 </script>
 
+{# --- Share box --- #}
+<details class="card">
+  <summary class="card-title">
+    🔗 Share this box
+  </summary>
+  <p class="text-sm text-muted">
+    Grants the recipient view access to this box and every item
+    inside it (current + future).  They'll see it under
+    <a href="/shared">/shared</a> after they sign in.  Revoke from
+    <a href="/usage">/usage</a>.
+  </p>
+  <form method="post" action="/boxes/{{ box.id }}/share">
+    <label>
+      Recipient email
+      <input type="email" name="recipient_email" required
+             placeholder="them@example.com" autocomplete="off">
+    </label>
+    <label>
+      Role
+      <select name="role">
+        <option value="readonly" selected>Read-only</option>
+        <option value="maintainer">Maintainer</option>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Create share</button>
+  </form>
+</details>
+
 {# --- Delete Box --- #}
 <details class="card danger-zone">
   <summary class="card-title card-title-danger">
