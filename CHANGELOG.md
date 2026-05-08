@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.0...v1.10.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **ingest:** worker logs every step, never wedges in processing ([6a62e67](https://github.com/Brennan-VanderLaan/stash/commit/6a62e67d445dc467be70644794ace5468a2984ec))
+
 ## [1.10.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.9.0...v1.10.0) (2026-05-08)
 
 
