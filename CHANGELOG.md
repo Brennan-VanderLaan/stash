@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.1...v0.20.2) (2026-05-07)
+
+
+### Refactors
+
+* Phase 1 ([39d4791](https://github.com/Brennan-VanderLaan/stash/commit/39d47918c4fb0a1abb63258d94a022a52a8a4dd2))
+
 ## [0.20.1](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.0...v0.20.1) (2026-05-07)
 
 
