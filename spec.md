@@ -835,39 +835,59 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-1. **Schema + actor middleware + i18n seams + SQLite pragmas.** Add
-   the new tables, add `tenant_id` to every owned table, backfill all
-   existing rows to `tenant_id = 1` plus a "Personal" tenant with the
-   live user as sole maintainer. Replace `enforce_email_allowlist`
-   with a `current_actor` middleware that resolves
-   `email → tenant + role` (also handling the invite / share
-   bypass paths from "Sign-up + onboarding"). Wrap every user-facing
-   string in `gettext()` and route dates through `babel` from day
-   one — even though v1 ships English-only, retrofitting i18n later
-   is the kind of mass-edit nightmare we're avoiding. Set WAL +
-   busy_timeout pragmas on every connection. Pure additive at the
-   tenancy layer; live user keeps working.
+**Status (2026-05-07).** Phases 1–4 shipped, plus the link-share
+slice of phase 5, the recording slice of phase 9, and the
+bootstrap slice of phase 12 (out of order — moved up to support an
+upcoming move).  See per-phase `[shipped]` / `[partial]` markers
+below.
 
-2. **Encryption at rest.** Per-tenant DEK + envelope encryption with
-   a `STASH_KEK` env var. Encrypt photos and thumbs on write,
-   decrypt streaming on read. Re-write existing photos through the
-   encrypt path during the live-user migration. CLI `stash-recover`
-   tool for audited operator decryption.
+1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
+   pragmas.** Add the new tables, add `tenant_id` to every owned
+   table, backfill all existing rows to `tenant_id = 1` plus a
+   "Personal" tenant with the live user as sole maintainer. Replace
+   `enforce_email_allowlist` with a `current_actor` middleware that
+   resolves `email → tenant + role` (also handling the invite /
+   share bypass paths from "Sign-up + onboarding"). Wrap every
+   user-facing string in `gettext()` and route dates through
+   `babel` from day one — even though v1 ships English-only,
+   retrofitting i18n later is the kind of mass-edit nightmare we're
+   avoiding. Set WAL + busy_timeout pragmas on every connection.
+   Pure additive at the tenancy layer; live user keeps working.
 
-3. **DAO module — read paths.** Build `dao/` with one module per
-   aggregate (`boxes`, `items`, `rooms`, etc.). Migrate every read
-   route to call the DAO. CI lint: any `conn.execute(` outside `dao/`
-   fails the build. Add tenancy assertions to every DAO read method.
+2. **[shipped]** **Encryption at rest.** Per-tenant DEK + envelope
+   encryption with a `STASH_KEK` env var. Encrypt photos and thumbs
+   on write, decrypt streaming on read. Re-write existing photos
+   through the encrypt path during the live-user migration. CLI
+   `stash-recover` tool for audited operator decryption.
 
-4. **DAO mutation paths + optimistic concurrency.** Migrate writes
-   to DAO, lower-traffic routes first. Mutation methods enforce role
-   at the DAO. Routes pre-check role. Add `version` columns and
-   `If-Match` semantics on mutable rows.
+3. **[shipped]** **DAO module — read paths.** Build `dao/` with one
+   module per aggregate (`boxes`, `items`, `rooms`, etc.). Migrate
+   every read route to call the DAO.  Tenancy assertions on every
+   DAO read method.  Lint enforced as a ratchet
+   (`tests/test_dao_ratchet.py`): app.py inline `conn.execute(`
+   count is capped, and any *other* module shipping raw SQL fails
+   the suite — the small allow-list is `app.py`, `dao/`, `vault.py`,
+   `tests/`.
 
-5. **Email delivery (Postmark) + invites.** Templates for the
-   notification surfaces. `/usage/members` page. Token-based invite
-   links with the bypass logic from "Sign-up + onboarding". Audit
-   entries on send + accept.
+4. **[shipped]** **DAO mutation paths + optimistic concurrency.**
+   Writes migrated to DAO, role gates on every mutation method,
+   routes pre-check role.  `version` columns on mutable rows;
+   `If-Match` on the box-edit form is the first surface to consume
+   the contract — stale tokens 409 with `_conflict_http`, missing
+   tokens fall back to last-write-wins for backwards compatibility.
+
+5. **[partial]** **Email delivery (Postmark) + invites.**
+   * **[shipped]** Token-based invite links with the bypass logic
+     from "Sign-up + onboarding".  `dao/invites.py` (mint / get /
+     redeem / list / revoke).  Per-tenant `/usage` surface with the
+     mint form + outstanding-invites table + revoke.  Identity-vs-
+     invite collision handled per spec — actual oauth2-proxy email
+     wins, audit logs the rebind.  Audit entries on send / accept /
+     revoke.
+   * **[deferred]** Postmark templates + transactional send.  Until
+     this lands, invite URLs are copy-pasted out-of-band; the
+     `/usage` page round-trips the link into `?invite_url=…` so
+     it's one tap to copy.
 
 6. **Object shares.** `share` action on box / item detail pages.
    "Shared with you" view at `/shared`. Revocation UI. Edge cases
@@ -885,9 +905,17 @@ In order. Each step ends in a testable, deployable state.
    *separate* bucket (and ideally vendor) than the data. Configurable
    retention.
 
-9. **Telemetry.** Wrap the AI clients (Gemini, Anthropic) and the
-   upload path to write `usage_events`. No enforcement yet — just
-   data collection, so we have a baseline before the cap hits.
+9. **[partial]** **Telemetry.** Wrap the AI clients (Gemini,
+   Anthropic) and the upload path to write `usage_events`. No
+   enforcement yet — just data collection, so we have a baseline
+   before the cap hits.
+   * **[shipped]** `dao/usage.py` (`record` + `summary`).  Hooks at
+     `save_photo_bytes` (post-encode bytes), `process_ingest_job`
+     (gemini_detect), `queue_match` (anthropic_match),
+     `generate_box_art` (gemini_art).  `/usage` renders three
+     meters + AI breakdown.
+   * **[deferred]** Backup-bytes recording (waits for phase 7),
+     monthly cost rollup view, sparklines.
 
 10. **Quotas + enforcement + anti-abuse.** Soft caps in
     router-prefix middleware. Banners on usage page. 429s on gated
@@ -897,10 +925,20 @@ In order. Each step ends in a testable, deployable state.
 11. **API tokens.** `/api/v1` router with bearer auth. Token mint /
     revoke surface in `/usage`. Token traffic counts toward quotas.
 
-12. **Operator dashboard.** `/admin` surface with cross-tenant
-    metadata, lifecycle controls (soft-delete / reactivate /
-    force-hard-delete), quota overrides, audit-log view, vendor cost
-    panel. Explicitly no per-tenant data access.
+12. **[partial]** **Operator dashboard.** `/admin` surface with
+    cross-tenant metadata, lifecycle controls (soft-delete /
+    reactivate / force-hard-delete), quota overrides, audit-log
+    view, vendor cost panel. Explicitly no per-tenant data access.
+    * **[shipped]** Tenant roster (counts + plan + lifecycle
+      state — never content).  `dao.tenants.list_all` +
+      `create_tenant`; `dao.invites.create` operator-bypass for
+      cross-tenant minting.  "Create tenant + invite first
+      maintainer" form so operators can bootstrap a friend onto
+      their own tenant without ever joining it.  GET + POST gates
+      404 (not 403) for non-operators so the surface stays opaque.
+    * **[deferred]** Lifecycle controls (soft-delete / reactivate /
+      hard-delete), quota override editor, audit-log view, vendor
+      cost panel.
 
 13. **User usage page + cost transparency + GDPR controls.**
     `/usage` rebuilt as the per-tenant home for plan / role / quotas
