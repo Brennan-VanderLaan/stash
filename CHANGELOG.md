@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.3.0...v1.4.0) (2026-05-08)
+
+
+### Features
+
+* **backup:** manual /admin trigger to upload tenant backup to B2 ([8065633](https://github.com/Brennan-VanderLaan/stash/commit/806563308e5b17f5aa47d63664a27555aa74eeb1))
+* **backup:** per-tenant backup at /usage/backup ([2d12f2f](https://github.com/Brennan-VanderLaan/stash/commit/2d12f2fa6f0c1708f36975860c02922262603848))
+* **shares:** object shares with cascade + dedupe + soft-delete pause ([7dc5bd2](https://github.com/Brennan-VanderLaan/stash/commit/7dc5bd28790d1b5f2ab366f69fffc4d9562798b3))
+
 ## [1.3.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.2.0...v1.3.0) (2026-05-08)
 
 
