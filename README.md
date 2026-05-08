@@ -70,15 +70,56 @@ clients that don't speak MCP. Mint tokens from `/usage`.
 
 ## Run it yourself
 
-[`deploy/`](deploy/) ships a complete `docker-compose` stack —
-Caddy + oauth2-proxy + watchtower in front of stash, Google OAuth
-sign-in, an emails allowlist as the first gate, the per-tenant
-member surface as the second. Required env vars (`STASH_KEK`,
-`OAUTH2_PROXY_*`, `B2_*` for off-site backups) are documented in
-[`deploy/.env.example`](deploy/.env.example) with generation
-commands inline.
+Stash is fully self-hostable — [`deploy/`](deploy/) ships a complete
+`docker-compose` stack with Caddy + oauth2-proxy + watchtower in
+front of stash, Google OAuth sign-in, the per-tenant member
+surface, and the `OAUTH2_PROXY_SKIP_AUTH_ROUTES` plumbing that
+lets the OAuth + bearer endpoints reach stash. Before you commit
+to it, a realistic checklist of what running your own instance
+involves:
 
-Container images are built on every push to `main`:
+**Infrastructure (you provide)**
+
+- A host that's online 24/7. A small VPS handles a household-size
+  stash easily — DigitalOcean droplet, Hetzner CX11, Linode shared,
+  EC2 t4g.small. Budget ~$5–10/month at the low end.
+- A domain you control (~$12/year) with DNS pointed at the host.
+  SSL/TLS is automatic via Caddy + Let's Encrypt once DNS resolves
+  — no cert wrangling — but you do need the domain.
+- Baseline ops chops: SSH, Docker Compose, knowing how to restart
+  things when watchtower can't auto-update for some reason.
+
+**Third-party accounts (free to register, pay-per-use)**
+
+- A **Google Cloud project** with an OAuth 2.0 client (web
+  application). Free, requires walking through the consent-screen
+  setup. Credentials feed `OAUTH2_PROXY_CLIENT_ID` / `_SECRET`.
+- An **Anthropic API key** — powers the queue's "suggest a box"
+  and any AI-flavoured agent calls on the MCP side. Pay-per-call.
+- A **Gemini API key** — drives photo ingest (item detection) and
+  label-background-art generation. Pay-per-call (free tier exists
+  but small).
+- A **Backblaze B2 account** with a bucket and application key —
+  for the nightly off-site backup target. ~$6/TB/month storage,
+  effectively free at household scale.
+- For genuine disaster-recovery posture, a **second cloud account
+  or different vendor** for the `STASH_KEK` value. Spec is
+  explicit (and the deploy docs reinforce): the KEK lives in a
+  *different* bucket — and ideally a different vendor — than the
+  data backup. Co-locating them defeats the encryption-at-rest
+  separation.
+
+**Operational tax** (your weekend, then a few hours a quarter)
+
+- Standing up the Google OAuth client, generating + safely storing
+  the `STASH_KEK`, configuring the email allowlist.
+- Monitoring container health, log volume, backup success.
+- Staying current with security patches, image rebuilds, the
+  occasional schema migration.
+
+If that sounds reasonable, [`deploy/.env.example`](deploy/.env.example)
+walks you through every variable with copy-pasteable generation
+commands. Container images publish on every push to `main`:
 
 ```bash
 docker pull ghcr.io/brennan-vanderlaan/stash:latest        # follows main
@@ -86,10 +127,21 @@ docker pull ghcr.io/brennan-vanderlaan/stash:<X.Y>         # follows minor
 docker pull ghcr.io/brennan-vanderlaan/stash:<X.Y.Z>       # exact release
 ```
 
-Updating a deployed instance: click **Check for updates** on the
-Maintenance page; Watchtower pulls the latest image and restarts.
-Pin to a specific version by editing `STASH_IMAGE` in your
-`deploy/.env`.
+Updates are pull-and-restart: click **Check for updates** on the
+Maintenance page and Watchtower handles the rest. Pin to a
+specific version by editing `STASH_IMAGE` in `deploy/.env`.
+
+**Or skip all of the above.** That's exactly what
+**[stash.swampcats.life](https://stash.swampcats.life)** is — a
+hosted instance that rolls the host, the domain, the OAuth client,
+the AI keys, the Backblaze account, the KEK separation, and the
+ongoing patching into one signup. You sign in, you have a stash.
+Pricing is itemised the way the ethos demands — vendor
+passthrough, community subsidies, operator payout, small margin,
+summed equals your bill — so you know exactly what your dollars
+cover. Self-host costs the same things in aggregate; the SaaS
+just amortises them across many tenants and removes the
+weekend-of-yak-shaving.
 
 ## Local development
 
