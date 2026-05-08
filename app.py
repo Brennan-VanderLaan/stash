@@ -12,6 +12,7 @@ import labels
 import vault
 import vision
 from dao import Actor, ConflictError, ForbiddenError, NotFoundError
+from dao import api_tokens as dao_api_tokens
 from dao import backups as dao_backups
 from dao import boxes as dao_boxes
 from dao import floors as dao_floors
@@ -93,6 +94,14 @@ def _trigger_watchtower_update() -> None:
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
+
+# /api/v1 — bearer-auth JSON API (phase 11).  Routes live in api.py
+# so the surface stays self-contained for the eventual MCP server +
+# any future agent wrappers.  Bearer auth runs in the global
+# current_actor middleware so every handler sees a populated
+# request.state.actor by the time it fires.
+import api as _api_module  # noqa: E402  (must follow `app = FastAPI()`)
+app.include_router(_api_module.router)
 
 
 # ── Localization seams ───────────────────────────────────────────────
@@ -207,6 +216,51 @@ async def current_actor(request: Request, call_next):
 
     import time as _time
     started = _time.monotonic()
+
+    # Bearer auth (phase 11): if Authorization: Bearer <token> is
+    # present, resolve via the api_tokens DAO and short-circuit the
+    # X-Forwarded-Email path.  Tokens carry a tenant_id + role,
+    # nothing else — no operator flag, no memberships beyond the
+    # token's own tenant.  Routes that need user-specific identity
+    # (audit-log actor_email) will see ``api_token:<id>`` instead.
+    auth_header = (request.headers.get("Authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        token_plaintext = auth_header[7:].strip()
+        token_row = dao_api_tokens.authenticate(token_plaintext)
+        if token_row is None:
+            _LOG_ROUTE.warning(
+                "auth.bearer_invalid path=%s", request.url.path,
+            )
+            return Response(
+                "Unauthorized — bearer token unknown or revoked.",
+                status_code=401,
+                media_type="text/plain",
+            )
+        actor_email = f"api_token:{token_row['id']}"
+        request.state.actor = Actor(
+            email=actor_email,
+            tenant_id=token_row["tenant_id"],
+            role=token_row["role"],
+            is_operator=False,
+            memberships=((token_row["tenant_id"], token_row["role"]),),
+            shares=(),
+        )
+        actor_tokens = obs.bind_actor(actor_email, token_row["tenant_id"])
+        response: Response | None = None
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            if response is not None:
+                response.headers["X-Request-Id"] = request_id
+            duration_ms = int((_time.monotonic() - started) * 1000)
+            status = response.status_code if response is not None else 500
+            _LOG_ROUTE.info(
+                "%s %s -> %d in %dms (api_token=%s)",
+                request.method, request.url.path, status, duration_ms,
+                token_row["id"],
+            )
+            obs.reset_tokens(*actor_tokens, rid_token)
 
     email = (request.headers.get("X-Forwarded-Email") or "").strip().lower()
     is_operator = bool(email) and email in _OPERATOR_EMAILS
@@ -363,6 +417,28 @@ def init_db():
             consumed_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
+
+        -- Per-tenant API tokens (phase 11).  Bearer auth on /api/v1.
+        -- ``token_hash`` is sha256(plaintext) — the plaintext is shown
+        -- exactly once at mint time and never stored, so a DB leak
+        -- doesn't expose live tokens.  ``last_used_at`` lets a user
+        -- audit which tokens are actually in flight; revocation is
+        -- by setting ``revoked_at``.  Role pins what the bearer can
+        -- do (typically ``maintainer``); future scopes (read-only,
+        -- ai-only) plug in via the ``scopes`` JSON column.
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'maintainer',
+            scopes TEXT,
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TEXT,
+            revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant ON api_tokens(tenant_id);
 
         CREATE TABLE IF NOT EXISTS object_shares (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3189,12 +3265,18 @@ def _referenced_uploads() -> set[tuple[int, str]]:
 
 
 @app.get("/usage", response_class=HTMLResponse)
-def usage_page(request: Request, invite_url: str = ""):
+def usage_page(
+    request: Request,
+    invite_url: str = "",
+    api_token_plaintext: str = "",
+):
     """Per-tenant usage + members surface.  Maintainers see the full
     page; readonly members see the meters only (membership listing
     too, since they're already in it).  ``invite_url`` lets the mint
     POST round-trip the freshly-created link into the page so the
-    user can copy it without an email send."""
+    user can copy it without an email send.  ``api_token_plaintext``
+    similarly round-trips a freshly-minted token — shown ONCE, never
+    persisted server-side beyond the SHA-256 hash."""
     actor: Actor = request.state.actor
     if actor.tenant_id is None:
         raise HTTPException(403, "No active tenant")
@@ -3202,9 +3284,11 @@ def usage_page(request: Request, invite_url: str = ""):
     members = dao_tenants.list_members(actor, actor.tenant_id)
     invites = []
     outbound_shares = []
+    api_tokens = []
     if actor.role == "maintainer":
         invites = dao_invites.list_for_tenant(actor)
         outbound_shares = dao_shares.list_outbound(actor)
+        api_tokens = dao_api_tokens.list_for_tenant(actor)
     summary = dao_usage.summary(actor)
     return templates.TemplateResponse(
         request, "usage.html",
@@ -3213,6 +3297,8 @@ def usage_page(request: Request, invite_url: str = ""):
             "members": members,
             "invites": invites,
             "outbound_shares": outbound_shares,
+            "api_tokens": api_tokens,
+            "api_token_plaintext": api_token_plaintext,
             "current_email": actor.email,
             "current_role": actor.role,
             "is_maintainer": actor.role == "maintainer",
@@ -3252,6 +3338,42 @@ def usage_backup(request: Request):
             "X-Backup-Sha256": manifest["zip_sha256"],
         },
     )
+
+
+@app.post("/usage/api-tokens")
+def create_api_token(
+    request: Request,
+    name: str = Form(...),
+    role: str = Form("maintainer"),
+):
+    """Mint a new API token + round-trip the plaintext into
+    ``?api_token_plaintext=…`` so the page can render the
+    one-time copy box.  After this redirect the plaintext is
+    gone forever — the DB only carries the SHA-256 hash."""
+    actor: Actor = request.state.actor
+    try:
+        result = dao_api_tokens.create(actor, name=name, role=role)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    from urllib.parse import urlencode
+    return RedirectResponse(
+        f"/usage?{urlencode({'api_token_plaintext': result['plaintext']})}",
+        status_code=303,
+    )
+
+
+@app.post("/usage/api-tokens/{token_id}/revoke")
+def revoke_api_token(request: Request, token_id: int):
+    actor: Actor = request.state.actor
+    try:
+        dao_api_tokens.revoke(actor, token_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse("/usage", status_code=303)
 
 
 @app.post("/usage/invites")

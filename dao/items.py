@@ -41,6 +41,59 @@ def get_by_id(actor: Actor, item_id: int) -> dict:
     return dict(row)
 
 
+def search(
+    actor: Actor,
+    *,
+    q: str = "",
+    box_id: int | None = None,
+    tag: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Lightweight item search for the /api/v1 surface.  Filters
+    are anded — pass any combination.  Returns rows joined with
+    their box's name so an MCP-style consumer can render
+    "<item> in <box>" without a follow-up fetch.
+
+    Per-tenant by construction; no cross-tenant matches even if
+    the caller passes a foreign box_id (the join's tenant filter
+    drops it)."""
+    if actor.tenant_id is None:
+        return []
+    clauses = ["i.tenant_id = ?"]
+    params: list = [actor.tenant_id]
+    if q.strip():
+        like = f"%{q.strip()}%"
+        clauses.append("(i.name LIKE ? OR i.notes LIKE ?)")
+        params.extend([like, like])
+    if box_id is not None:
+        clauses.append("i.box_id = ?")
+        params.append(box_id)
+    if tag.strip():
+        clauses.append(
+            "i.id IN (SELECT it.item_id FROM item_tags it "
+            "JOIN tags t ON t.id = it.tag_id "
+            "WHERE t.name = ? AND it.tenant_id = ?)"
+        )
+        params.extend([tag.strip(), actor.tenant_id])
+    where = " AND ".join(clauses)
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+    with db() as conn:
+        rows = conn.execute(
+            f"SELECT i.id, i.name, i.notes, i.photo, i.is_missing, "
+            f"       i.box_id, b.name AS box_name, "
+            f"       i.created_at, i.last_seen_at "
+            f"FROM items i "
+            f"JOIN boxes b ON b.id = i.box_id "
+            f"WHERE {where} "
+            f"ORDER BY i.created_at DESC "
+            f"LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_recent_photos_per_box(
     actor: Actor, limit_per_box: int = 5,
 ) -> dict[int, list[str]]:
