@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Usage") }} · Stash{% endblock %}
+{% block content %}
+
+{# ── Tenant + you ─────────────────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("This stash") }}</div>
+  <dl class="stat-row">
+    <div><dt>{{ _("Tenant") }}</dt><dd>{{ tenant.name }}</dd></div>
+    <div><dt>{{ _("Plan") }}</dt><dd>{{ tenant.plan }}</dd></div>
+    <div><dt>{{ _("Signed in as") }}</dt><dd>{{ current_email }}</dd></div>
+    <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
+  </dl>
+</div>
+
+{# ── This-month usage meters ──────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("This month") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Counters reset on the 1st of each month (UTC). Costs are operator-side estimates and round to the nearest cent.") }}
+  </p>
+  <dl class="stat-row">
+    <div>
+      <dt>{{ _("AI calls") }}</dt>
+      <dd>
+        {{ usage.ai_calls }}
+        {% if usage.ai_cost_micros %}
+          <span class="text-muted text-sm">≈ ${{ "%.2f" | format(usage.ai_cost_micros / 1_000_000) }}</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Photos uploaded") }}</dt>
+      <dd>
+        {% set mb = (usage.upload_bytes / (1024 * 1024)) %}
+        {{ "%.1f" | format(mb) }} MB
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Items tracked") }}</dt>
+      <dd>{{ usage.item_count }}</dd>
+    </div>
+    <div>
+      <dt>{{ _("Boxes") }}</dt>
+      <dd>{{ usage.box_count }}</dd>
+    </div>
+  </dl>
+  {% if usage.kinds %}
+  <details>
+    <summary class="disclosure">{{ _("AI breakdown") }}</summary>
+    <ul class="allowed-emails">
+      {% for kind, count in usage.kinds.items() %}
+      <li><code>{{ kind }}</code> <span class="text-muted text-sm">— {{ count }}</span></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+
+{# ── Members ──────────────────────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Members") }} ({{ members | length }})</div>
+  <ul class="allowed-emails">
+    {% for m in members %}
+    <li>
+      <code>{{ m.email }}</code>
+      <span class="text-muted text-sm">
+        — {{ m.role }}{% if m.email == current_email %} · {{ _("you") }}{% endif %}
+        {% if not m.joined_at %} · {{ _("invited, pending sign-in") }}{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+{# ── Outstanding invites + mint form ──────────────────────────── #}
+{% if is_maintainer %}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Invite someone") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Mint a one-time link, then send it to the invitee yourself (text, email, paper). They sign in at that link and join your stash.") }}
+  </p>
+
+  {% if invite_url %}
+  <div class="notice notice-success">
+    <strong>{{ _("Link ready") }}.</strong>
+    {{ _("Copy and send:") }}
+    <input type="text" readonly value="{{ invite_url }}"
+           id="fresh-invite-url" class="invite-url-input"
+           onclick="this.select()" style="width:100%;margin-top:0.5rem;font-family:monospace;">
+  </div>
+  {% endif %}
+
+  <form method="post" action="/usage/invites">
+    <label>
+      {{ _("Email") }}
+      <input type="email" name="email" required placeholder="someone@example.com"
+             autocomplete="off">
+    </label>
+    <label>
+      {{ _("Role") }}
+      <select name="role">
+        <option value="maintainer" selected>{{ _("Maintainer (can edit)") }}</option>
+        <option value="readonly">{{ _("Read-only (can browse)") }}</option>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">{{ _("Mint invite link") }}</button>
+  </form>
+
+  {% if invites %}
+  <div class="section-label" style="margin-top:1rem;">{{ _("Outstanding invites") }} ({{ invites | length }})</div>
+  <ul class="allowed-emails">
+    {% for inv in invites %}
+    <li>
+      <code>{{ inv.email }}</code>
+      <span class="text-muted text-sm">
+        — {{ inv.role }} · {{ _("expires") }} {{ inv.expires_at[:10] }}
+      </span>
+      <form method="post" action="/usage/invites/{{ inv.token }}/revoke" style="display:inline;">
+        <button type="submit" class="btn btn-link btn-sm" onclick="return confirm('{{ _('Revoke this invite?') }}');">
+          {{ _("Revoke") }}
+        </button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}
