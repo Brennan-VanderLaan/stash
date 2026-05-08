@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.1.0...v1.1.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **docker:** copy dao/ into the image ([68cfff6](https://github.com/Brennan-VanderLaan/stash/commit/68cfff61ea2dbd96a2752819ca8038a0ad179574))
+
 ## [1.1.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.0.1...v1.1.0) (2026-05-08)
 
 
