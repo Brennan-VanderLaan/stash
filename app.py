@@ -1427,21 +1427,30 @@ def move_box_to_room(
 ):
     """Reassign a box to a different room. Used by floorplan drag-and-drop
     and as a generic API. Empty room_id clears the assignment."""
+    actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
-            raise HTTPException(404)
-        location_text = ""
-        if rid is not None:
-            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
-            if not row:
-                raise HTTPException(400, "Unknown room")
-            location_text = row["name"]
-        conn.execute(
-            "UPDATE boxes SET room_id = ?, location = ? WHERE id = ?",
-            (rid, location_text, box_id),
+    location_text = ""
+    if rid is not None:
+        # Validate the room belongs to this tenant before passing through.
+        try:
+            location_text = dao_rooms.get_with_location(actor, rid)["name"]
+        except NotFoundError:
+            raise HTTPException(400, "Unknown room")
+    try:
+        # set_room handles the box-tenancy check; we update location text
+        # alongside it via the broader update() call so the legacy
+        # free-text location stays in sync with the room reassignment.
+        box = dao_boxes.get_by_id(actor, box_id)
+        dao_boxes.update(
+            actor, box_id,
+            name=box["name"], location=location_text,
+            notes=box.get("notes") or "", room_id=rid,
+            color=box.get("color"),
         )
-        conn.commit()
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     if "application/json" in request.headers.get("accept", ""):
         return {"ok": True, "room_id": rid}
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
@@ -1449,6 +1458,7 @@ def move_box_to_room(
 
 @app.post("/boxes/{box_id}/edit")
 def edit_box(
+    request: Request,
     box_id: int,
     name: str = Form(...),
     location: str = Form(""),
@@ -1458,6 +1468,7 @@ def edit_box(
 ):
     if not name.strip():
         raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
     # "" / "inherit" wipes the override and falls back to the room color.
     color_val: str | None
@@ -1467,20 +1478,21 @@ def edit_box(
         color_val = color.strip()
     else:
         color_val = None  # silently reject off-palette
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
-            raise HTTPException(404)
-        if rid is not None:
-            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
-            if row:
-                location = row["name"]
-            else:
-                rid = None
-        conn.execute(
-            "UPDATE boxes SET name = ?, location = ?, notes = ?, room_id = ?, color = ? WHERE id = ?",
-            (name.strip(), location.strip(), notes.strip(), rid, color_val, box_id),
+    if rid is not None:
+        try:
+            location = dao_rooms.get_with_location(actor, rid)["name"]
+        except NotFoundError:
+            rid = None
+    try:
+        dao_boxes.update(
+            actor, box_id,
+            name=name, location=location, notes=notes,
+            room_id=rid, color=color_val,
         )
-        conn.commit()
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
 
 
