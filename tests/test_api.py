@@ -25,17 +25,24 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-def _bootstrap_two_tenants(tmp_path, monkeypatch):
+def _bootstrap_two_tenants(tmp_path, monkeypatch, *,
+                           keep_operators: bool = False):
     """Two tenants with one maintainer each, plus a box + item in
     each tenant so a tenant-scope leak shows up as a wrong-tenant
-    row appearing in a list."""
+    row appearing in a list.
+
+    ``keep_operators`` lets a caller preserve a STASH_OPERATOR_EMAILS
+    they set BEFORE invoking the bootstrap (the env var is read at
+    module import time into a frozenset, so changes after reload
+    don't take effect)."""
     monkeypatch.setenv("STASH_DB", str(tmp_path / "stash.db"))
     monkeypatch.setenv("STASH_UPLOADS", str(tmp_path / "uploads"))
     monkeypatch.setenv(
         "STASH_KEK",
         base64.b64encode(secrets.token_bytes(32)).decode(),
     )
-    monkeypatch.delenv("STASH_OPERATOR_EMAILS", raising=False)
+    if not keep_operators:
+        monkeypatch.delenv("STASH_OPERATOR_EMAILS", raising=False)
     if "app" in sys.modules:
         del sys.modules["app"]
     if "api" in sys.modules:
@@ -289,6 +296,158 @@ def test_usage_mints_token_and_reveals_plaintext_once(client):
     page = client.get("/usage").text
     assert "stash_" not in page  # no plaintext leaks once redirect is gone
     assert "MCP server" in page  # but the listing has the name
+
+
+def test_bearer_over_http_auto_revokes(tmp_path, monkeypatch):
+    """Spec § "API tokens · token-leak guards": a bearer that
+    travels over plaintext HTTP must be auto-revoked with reason
+    ``seen_over_http`` on the first request that arrives without
+    X-Forwarded-Proto: https."""
+    monkeypatch.setenv("STASH_REQUIRE_HTTPS_TOKENS", "true")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with TestClient(app_mod.app) as c:
+        r = c.get("/api/v1/me",
+                  headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    # Token row should be revoked with the right reason.
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT revoked_at, revoked_reason FROM api_tokens "
+            "WHERE name = 'test-token'"
+        ).fetchone()
+    assert row["revoked_at"] is not None
+    assert row["revoked_reason"] == "seen_over_http"
+
+
+def test_bearer_with_x_forwarded_proto_https_works(tmp_path, monkeypatch):
+    """When Caddy proxies a real HTTPS request, ``X-Forwarded-Proto:
+    https`` is set and the guard lets the bearer through."""
+    monkeypatch.setenv("STASH_REQUIRE_HTTPS_TOKENS", "true")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with TestClient(app_mod.app) as c:
+        r = c.get(
+            "/api/v1/me",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Forwarded-Proto": "https",
+            },
+        )
+    assert r.status_code == 200
+
+
+def test_token_in_url_query_auto_revokes(tmp_path, monkeypatch):
+    """A stash_-shaped token in the URL query string is treated as
+    a leak and auto-revoked, even if the same token isn't in the
+    Authorization header.  Defensive scan covers the
+    'pasted-curl-with-?token=' mistake."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with TestClient(app_mod.app) as c:
+        r = c.get(f"/?token={token}")
+    assert r.status_code == 401
+    assert "revoked" in r.text.lower()
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT revoked_reason FROM api_tokens "
+            "WHERE name = 'test-token'"
+        ).fetchone()
+    assert row["revoked_reason"] == "leaked_in_url"
+
+
+def test_token_in_other_header_auto_revokes(tmp_path, monkeypatch):
+    """A stash_-shaped token in a non-Authorization header (e.g. a
+    custom X-Token header from a misconfigured client) is also
+    treated as a leak."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with TestClient(app_mod.app) as c:
+        r = c.get("/", headers={"X-Custom-Token": token})
+    assert r.status_code == 401
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT revoked_reason FROM api_tokens "
+            "WHERE name = 'test-token'"
+        ).fetchone()
+    assert row["revoked_reason"] == "leaked_in_header"
+
+
+def test_operator_can_revoke_any_tenants_token(tmp_path, monkeypatch):
+    """/admin token panel lets an operator kill any tenant's
+    token.  Reason on the row is 'operator_revoke' so the
+    owning tenant can see the kill came from above."""
+    # STASH_OPERATOR_EMAILS must be set *before* the bootstrap reloads
+    # the app module — it's read at module import time into a frozenset.
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch,
+                                          keep_operators=True)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with app_mod.db() as conn:
+        token_id = conn.execute(
+            "SELECT id FROM api_tokens WHERE name = 'test-token'"
+        ).fetchone()["id"]
+    with TestClient(app_mod.app, headers={"X-Forwarded-Email": "op@example.com"}) as c:
+        r = c.post(f"/admin/api-tokens/{token_id}/revoke",
+                   follow_redirects=False)
+    assert r.status_code == 303
+    # Now the bearer fails.
+    with TestClient(app_mod.app) as c:
+        r = c.get("/api/v1/me",
+                  headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT revoked_reason FROM api_tokens WHERE id = ?",
+            (token_id,),
+        ).fetchone()
+    assert row["revoked_reason"] == "operator_revoke"
+
+
+def test_operator_can_suspend_and_resume(tmp_path, monkeypatch):
+    """Suspend pauses a token; resume reactivates it.  Auth fails
+    while suspended, succeeds once resumed."""
+    # STASH_OPERATOR_EMAILS must be set *before* the bootstrap reloads
+    # the app module — it's read at module import time into a frozenset.
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch,
+                                          keep_operators=True)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with app_mod.db() as conn:
+        token_id = conn.execute(
+            "SELECT id FROM api_tokens WHERE name = 'test-token'"
+        ).fetchone()["id"]
+    op_h = {"X-Forwarded-Email": "op@example.com"}
+    with TestClient(app_mod.app, headers=op_h) as c:
+        # Suspend.
+        c.post(f"/admin/api-tokens/{token_id}/suspend",
+               follow_redirects=False)
+    # Bearer fails while suspended.
+    with TestClient(app_mod.app) as c:
+        r = c.get("/api/v1/me",
+                  headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 401
+    # Resume.
+    with TestClient(app_mod.app, headers=op_h) as c:
+        c.post(f"/admin/api-tokens/{token_id}/resume",
+               follow_redirects=False)
+    # Bearer works again.
+    with TestClient(app_mod.app) as c:
+        r = c.get("/api/v1/me",
+                  headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+
+
+def test_token_name_too_long_rejected(client):
+    """100-char cap on token names — reject longer names with 400
+    so a runaway-input client can't bloat the DB."""
+    long_name = "x" * 200
+    r = client.post(
+        "/usage/api-tokens",
+        data={"name": long_name, "role": "maintainer"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
 
 
 def test_usage_revoke_cuts_token_immediately(client):

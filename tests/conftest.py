@@ -30,6 +30,12 @@ def _test_kek(monkeypatch):
     monkeypatch.setenv(
         "STASH_KEK", base64.b64encode(secrets.token_bytes(32)).decode(),
     )
+    # Disable the bearer-over-HTTPS guard for the whole suite by
+    # default — TestClient runs against ``http://testserver``, so
+    # the guard would 401 every bearer-auth test otherwise.  Tests
+    # that specifically exercise the guard set this back to "true"
+    # on a per-test basis.
+    monkeypatch.setenv("STASH_REQUIRE_HTTPS_TOKENS", "false")
     import vault
     vault.clear_dek_cache()
 
@@ -41,6 +47,11 @@ def client(tmp_path, monkeypatch):
     # The actor middleware looks up STASH_OPERATOR_EMAILS; clear it for
     # tests so we don't accidentally mark TEST_EMAIL as an operator.
     monkeypatch.delenv("STASH_OPERATOR_EMAILS", raising=False)
+    # TestClient runs over plain http://testserver — disable the
+    # bearer-over-HTTPS guard for tests that don't bother stamping
+    # X-Forwarded-Proto: https on every request.  Tests that
+    # specifically exercise the HTTPS guard re-set this themselves.
+    monkeypatch.setenv("STASH_REQUIRE_HTTPS_TOKENS", "false")
 
     if "app" in sys.modules:
         del sys.modules["app"]

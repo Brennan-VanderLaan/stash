@@ -214,6 +214,56 @@ def _invite_token_in_path(path: str) -> str | None:
 _LOG_ROUTE = obs.get_logger("route")
 
 
+# Default: trust X-Forwarded-Proto (we ship behind Caddy, which
+# strips inbound copies + sets the real one).  Set this env var
+# to "false" in dev / for stand-alone deploys without a proxy.
+_REQUIRE_HTTPS_TOKENS = os.environ.get(
+    "STASH_REQUIRE_HTTPS_TOKENS", "true",
+).strip().lower() not in ("false", "0", "no", "off")
+
+
+# Token-leak scanner pattern.  ``stash_<43 url-safe chars>`` is the
+# exact shape ``secrets.token_urlsafe(32)`` produces; the regex is
+# slightly lenient (40-50 chars) so a future format tweak doesn't
+# silently disable the guard.
+import re as _re
+_TOKEN_LEAK_PATTERN = _re.compile(r"stash_[A-Za-z0-9_\-]{40,50}")
+
+
+def _scan_request_for_token_leak(request: Request) -> tuple[str, str] | None:
+    """Look for a stash_-prefixed token plaintext in places it has
+    no business being.
+
+    Returns ``(plaintext, where)`` if found — ``where`` is one of
+    ``"url"``, ``"header"`` (and the header name is logged from
+    the caller).  None when nothing leaks.
+
+    Scanned surfaces:
+    * URL query string — clients sometimes mistakenly do
+      ``?token=stash_xxx`` and then the URL ends up in proxy
+      logs, browser history, etc.
+    * Non-Authorization headers — anything in another header.
+      (The Authorization header is the *only* legitimate place;
+      tokens elsewhere are a misuse signal.)
+    * Body scanning is deliberately omitted — too hot of a path
+      to parse on every request, and cookie/POST-body leaks are
+      rarer than URL/header ones.
+    """
+    qs = request.url.query
+    if "stash_" in qs:
+        m = _TOKEN_LEAK_PATTERN.search(qs)
+        if m:
+            return m.group(0), "url"
+    for k, v in request.headers.items():
+        if k.lower() == "authorization":
+            continue
+        if "stash_" in v:
+            m = _TOKEN_LEAK_PATTERN.search(v)
+            if m:
+                return m.group(0), f"header:{k.lower()}"
+    return None
+
+
 # Defense-in-depth response headers.  Caddy sets some of these at
 # the edge in production deploys, but stamping them in the app too
 # means the protection holds for any future deployment topology
@@ -285,6 +335,35 @@ async def current_actor(request: Request, call_next):
     import time as _time
     started = _time.monotonic()
 
+    # Defensive scan: if a stash-shaped token appears in the URL
+    # query string or any header *other* than Authorization, treat
+    # it as a leak — auto-revoke and 401 regardless of whether
+    # auth would otherwise succeed.  Runs on every request so a
+    # token leaking via, say, /search?q=stash_<...> gets caught
+    # even when the request is otherwise unauthenticated.
+    leak = _scan_request_for_token_leak(request)
+    if leak is not None:
+        leaked_plaintext, where = leak
+        token_row = dao_api_tokens.lookup_by_plaintext(leaked_plaintext)
+        if token_row is not None and token_row["revoked_at"] is None:
+            reason = "leaked_in_url" if where == "url" else "leaked_in_header"
+            dao_api_tokens.revoke_for_leak(
+                token_row["id"], reason,
+                request_path=str(request.url),
+            )
+        _LOG_ROUTE.error(
+            "auth.token_leak where=%s path=%s known=%s",
+            where, request.url.path, token_row is not None,
+        )
+        return Response(
+            "Unauthorized — a stash bearer token was detected in the "
+            "request URL or a non-Authorization header and has been "
+            "revoked.  Mint a fresh token from /usage and send it via "
+            "the Authorization header only.",
+            status_code=401,
+            media_type="text/plain",
+        )
+
     # Bearer auth (phase 11): if Authorization: Bearer <token> is
     # present, resolve via the api_tokens DAO and short-circuit the
     # X-Forwarded-Email path.  Tokens carry a tenant_id + role,
@@ -294,6 +373,39 @@ async def current_actor(request: Request, call_next):
     auth_header = (request.headers.get("Authorization") or "").strip()
     if auth_header.lower().startswith("bearer "):
         token_plaintext = auth_header[7:].strip()
+
+        # HTTPS gate: if the request didn't reach us over HTTPS,
+        # the bearer is travelling in cleartext (or has been at some
+        # earlier hop).  Auto-revoke + 401 with the reason logged.
+        # Behind Caddy, ``X-Forwarded-Proto`` carries the original
+        # client scheme; for stand-alone deploys without a proxy,
+        # ``request.url.scheme`` is the truth.  Operators on dev /
+        # local can disable via STASH_REQUIRE_HTTPS_TOKENS=false.
+        if _REQUIRE_HTTPS_TOKENS:
+            forwarded_proto = (
+                request.headers.get("X-Forwarded-Proto")
+                or request.url.scheme or ""
+            ).strip().lower()
+            if forwarded_proto != "https":
+                token_row = dao_api_tokens.lookup_by_plaintext(token_plaintext)
+                if token_row is not None and token_row["revoked_at"] is None:
+                    dao_api_tokens.revoke_for_leak(
+                        token_row["id"], "seen_over_http",
+                        request_path=str(request.url),
+                    )
+                _LOG_ROUTE.error(
+                    "auth.bearer_over_http forwarded_proto=%r path=%s",
+                    forwarded_proto, request.url.path,
+                )
+                return Response(
+                    "Unauthorized — bearer tokens require HTTPS.  "
+                    "The presented token has been revoked because it "
+                    "was sent over plaintext HTTP.  Mint a fresh "
+                    "token from /usage and use it on the HTTPS endpoint.",
+                    status_code=401,
+                    media_type="text/plain",
+                )
+
         token_row = dao_api_tokens.authenticate(token_plaintext)
         if token_row is None:
             _LOG_ROUTE.warning(
@@ -504,7 +616,18 @@ def init_db():
             created_by_email TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             last_used_at TEXT,
-            revoked_at TEXT
+            revoked_at TEXT,
+            -- Short tag for *why* the token was killed
+            -- (``manual``, ``seen_over_http``, ``leaked_in_url``,
+            -- ``operator_revoke``).  Surfaces in /admin so the
+            -- operator can spot a misconfigured client without
+            -- digging through the audit log.
+            revoked_reason TEXT,
+            -- Operator-driven temporary pause; auth fails while
+            -- the column is non-null but a future operator action
+            -- can clear it to resume.  Permanent kill is
+            -- ``revoked_at``; suspension is reversible.
+            suspended_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant ON api_tokens(tenant_id);
 
@@ -697,6 +820,12 @@ def migrate_db():
         # Per-box color override. Falls back to the room color when null,
         # so boxes can choose to break out from their room's hue.
         _add_column_if_missing(conn, "boxes", "color", "TEXT")
+        # Token-revocation hardening (phase 11+).  Reason is a short
+        # tag; suspended_at is a separate temporal field so an
+        # operator can pause-and-resume without losing the original
+        # mint metadata.  Auth fails for both states.
+        _add_column_if_missing(conn, "api_tokens", "revoked_reason", "TEXT")
+        _add_column_if_missing(conn, "api_tokens", "suspended_at", "TEXT")
         # Backfill source_photo for items created before this column existed
         conn.execute(
             "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
@@ -3696,16 +3825,14 @@ def admin_dashboard(
     invite_url: str = "",
     backup_status: str = "",
 ):
-    """Per-deployment tenant roster.  ``invite_url`` round-trips a
-    freshly-minted invite link from the create-tenant POST so the
-    operator can copy it without an email send.  ``backup_status``
-    surfaces the result of a manually-triggered B2 upload."""
+    """Per-deployment tenant roster + cross-tenant token panel.
+    ``invite_url`` round-trips a freshly-minted invite link from
+    the create-tenant POST.  ``backup_status`` surfaces the result
+    of a manually-triggered B2 upload."""
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
-    # Detect B2 configuration so the page can hide the upload
-    # buttons when the env vars aren't set rather than letting the
-    # operator click into an error.
+    api_tokens = dao_api_tokens.list_all_for_operator(actor)
     try:
         dao_backups._b2_config()
         b2_configured = True
@@ -3715,6 +3842,7 @@ def admin_dashboard(
         request, "admin.html",
         {
             "tenants": tenants,
+            "api_tokens": api_tokens,
             "current_email": actor.email,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
@@ -3722,6 +3850,45 @@ def admin_dashboard(
             "backup_status": backup_status,
         },
     )
+
+
+@app.post("/admin/api-tokens/{token_id}/revoke")
+def admin_revoke_api_token(request: Request, token_id: int):
+    """Operator-driven revoke of any tenant's API token.  Records
+    ``operator_revoke`` as the reason so the originating tenant
+    can see the kill came from the operator and not their own
+    /usage page."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_api_tokens.operator_revoke(actor, token_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/api-tokens/{token_id}/suspend")
+def admin_suspend_api_token(request: Request, token_id: int):
+    """Temporary pause — auth fails until resume.  Use case:
+    "I think this token might be compromised but I'm not sure"."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_api_tokens.operator_suspend(actor, token_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/api-tokens/{token_id}/resume")
+def admin_resume_api_token(request: Request, token_id: int):
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_api_tokens.operator_resume(actor, token_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/tenants/{tenant_id}/backup")

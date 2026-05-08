@@ -126,6 +126,87 @@
   {% endif %}
 </div>
 
+{# ── Cross-tenant API token panel ────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">API tokens ({{ api_tokens | length }})</div>
+  <p class="text-sm text-muted">
+    Cross-tenant view of every API token on the deployment.
+    Operator-side revoke kills a token regardless of which tenant
+    minted it; suspend pauses auth without losing the mint
+    metadata so you can resume after investigating.  Revoke reason
+    surfaces auto-revokes (HTTPS gate, URL-leak scanner) so you
+    can spot misconfigured clients.
+  </p>
+  {% if api_tokens %}
+  <table class="admin-tenant-table">
+    <thead>
+      <tr>
+        <th>Tenant</th>
+        <th>Name</th>
+        <th>Role</th>
+        <th>Last used</th>
+        <th>State</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in api_tokens %}
+      <tr>
+        <td>{{ t.tenant_name }}</td>
+        <td><code>{{ t.name }}</code></td>
+        <td>{{ t.role }}</td>
+        <td>
+          {% if t.last_used_at %}
+            {{ t.last_used_at[:10] }}
+          {% else %}
+            <span class="text-muted">never</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if t.revoked_at %}
+            <span class="text-muted">
+              revoked
+              {% if t.revoked_reason %}
+                <small>({{ t.revoked_reason }})</small>
+              {% endif %}
+            </span>
+          {% elif t.suspended_at %}
+            <span>suspended</span>
+          {% else %}
+            <span>active</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if not t.revoked_at %}
+            {% if t.suspended_at %}
+              <form method="post" action="/admin/api-tokens/{{ t.id }}/resume" style="display:inline;">
+                <button type="submit" class="btn btn-link btn-sm">Resume</button>
+              </form>
+            {% else %}
+              <form method="post" action="/admin/api-tokens/{{ t.id }}/suspend" style="display:inline;">
+                <button type="submit" class="btn btn-link btn-sm"
+                        onclick="return confirm('Suspend {{ t.name }}? Token auth will fail until resumed.');">
+                  Suspend
+                </button>
+              </form>
+            {% endif %}
+            <form method="post" action="/admin/api-tokens/{{ t.id }}/revoke" style="display:inline;">
+              <button type="submit" class="btn btn-link btn-sm"
+                      onclick="return confirm('Permanently revoke {{ t.name }}? Cannot be undone.');">
+                Revoke
+              </button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No API tokens have been minted on this deployment yet.</p>
+  {% endif %}
+</div>
+
 <style>
   .admin-tenant-table {
     width: 100%;
