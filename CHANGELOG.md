@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.1...v1.7.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* **deploy:** SameSite=lax so Google OAuth callback survives cross-site redirect ([0ee1c38](https://github.com/Brennan-VanderLaan/stash/commit/0ee1c38abda095b4b7b3c4726847c8355e40b735))
+
 ## [1.7.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.7.0...v1.7.1) (2026-05-08)
 
 
