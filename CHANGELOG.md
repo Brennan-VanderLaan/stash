@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.1.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.0.1...v1.1.0) (2026-05-08)
+
+
+### Features
+
+* **boxes:** wire optimistic concurrency through the box-edit form ([ff41e4f](https://github.com/Brennan-VanderLaan/stash/commit/ff41e4f470180ef1b8dd035c64e18ea0c1074c35))
+* **crypto:** log phase-2 filesystem migration so the operator can see it ran ([7496b3b](https://github.com/Brennan-VanderLaan/stash/commit/7496b3b28459b0ff682f8cf55fcd876ec5a6a1ac))
+* **dao:** add locations / floors / rooms / tags / pending_items / ingest_jobs modules ([5c89797](https://github.com/Brennan-VanderLaan/stash/commit/5c897977f2c7594ff37e405dc5a586a92ae07008))
+* **dao:** migrate box edit + move-to-room mutations ([b5d47f9](https://github.com/Brennan-VanderLaan/stash/commit/b5d47f94f4a44abda9bb2fec9b4dc774dfd2291a))
+* **dao:** migrate create_box, add_item, ingest worker, kill dead helpers ([88df191](https://github.com/Brennan-VanderLaan/stash/commit/88df191ddf83ccb5d5b8af9de3be011230db5696))
+* **dao:** migrate ingest + queue-delete routes onto the DAO ([d865d85](https://github.com/Brennan-VanderLaan/stash/commit/d865d8592da9dd5e643c0bd7d6e13bcd5de6f875))
+* **dao:** migrate item + recrop + audit + box-preview routes ([ee19a3a](https://github.com/Brennan-VanderLaan/stash/commit/ee19a3a1081454dc52cc563863ff1b7694f7a070))
+* **dao:** migrate location/floor/room mutation routes onto the DAO ([32f7303](https://github.com/Brennan-VanderLaan/stash/commit/32f7303d394b841494152241e4de8cbc697ee92d))
+* **dao:** migrate search, tags, labels, box-art, box-delete ([8c6deea](https://github.com/Brennan-VanderLaan/stash/commit/8c6deea0f0a37f82edae866d659e092a0c6a502d))
+* **dao:** migrate the high-traffic read paths off raw conn.execute ([cc9a4fd](https://github.com/Brennan-VanderLaan/stash/commit/cc9a4fd1b7f49657cab66a6594aa0ef8bf3b795b))
+* **dao:** scaffold + boxes/items/tenants modules ([cc6fa88](https://github.com/Brennan-VanderLaan/stash/commit/cc6fa8875d4f9d9a02db4e138eaec5e0d74b60e7))
+
+
+### Refactors
+
+* **dao:** drop dead set_item_tags / get_item_tags helpers ([cf3c265](https://github.com/Brennan-VanderLaan/stash/commit/cf3c265e9766587e149dea059642d2af62e503f0))
+
 ## [1.0.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.0.0...v1.0.1) (2026-05-08)
 
 
