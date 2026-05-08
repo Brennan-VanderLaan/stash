@@ -432,6 +432,251 @@ place). The `/api/v1` router is bearer-only and explicitly
 disables cookie auth — there's no scenario where a token call
 could be triggered cross-origin from a stale browser session.
 
+### Agent / MCP integration
+
+Agents (Claude Desktop, Claude Code, custom agents via the
+Anthropic SDK) get first-class access to the stash via the
+**Model Context Protocol** — Anthropic's open spec for
+tool-using agents.  The goal is "interact with the stash
+natively, like the UI": ask an agent where something is,
+have it show you a picture, have it move things between
+boxes when you're packing.
+
+#### Goals
+
+- Agents can browse + search the stash without screen-scraping.
+- Agents can mutate (move, create, edit) when explicitly asked,
+  with the same audit trail any human action carries.
+- Agents can fetch photo bytes (thumbs or full-res) so an agent
+  reply can include "here's what your blue mug looks like"
+  rather than just text.
+- Tenant isolation + role gates from the REST surface carry
+  through unchanged — an MCP session is just a bearer token
+  with extra-rich error semantics.
+- Operators can kill an agent's access instantly via
+  `/admin`'s suspend/revoke surface (already shipped with phase
+  11 token hardening).
+
+#### Non-goals (this round)
+
+- Sidecar MCP server.  Built-in HTTP MCP is the primary
+  deliverable; a stdio sidecar is dropped, not deferred.  If a
+  client only speaks stdio, run it through the Anthropic
+  ``mcp-proxy`` (HTTP→stdio bridge) instead of carrying a
+  parallel surface in this codebase.
+- Multi-agent coordination, agent-to-agent messaging.
+- Streaming long tool outputs incrementally.  All tool calls
+  return atomic results.
+
+#### Transport
+
+The endpoint is a **single HTTP route at `/mcp`** speaking the
+MCP "Streamable HTTP" transport (spec rev 2025-03-26):
+
+- `POST /mcp` — JSON-RPC requests with optional response
+  streaming via SSE in the same response when the tool needs
+  it.  Stash's tools are atomic so most calls finish without
+  the SSE branch.
+- Auth: `Authorization: Bearer stash_<...>` — same surface as
+  `/api/v1`.  No bearer ⇒ JSON-RPC error with
+  `code = -32001` ("auth required"); invalid bearer ⇒ same.
+- Required headers: `MCP-Protocol-Version: 2025-03-26`.  Older
+  versions are rejected explicitly so a stale client doesn't
+  silently miss new tool args.
+- Session lifecycle: every connection is stateless from
+  stash's side — the bearer is the session.  No `Mcp-Session-Id`
+  cookie, no resumption.  Clients that want long-running
+  state hold it themselves.
+
+#### Auth + multi-tenant
+
+- One bearer = one tenant, full stop.  Tokens minted on `/usage`
+  carry the issuing tenant + role; the MCP session inherits.
+- The same auto-revoke guards from phase 11 fire here: bearer
+  over plain HTTP ⇒ revoked + 401, `stash_<...>` signature in
+  the URL or non-Authorization header ⇒ revoked.
+- An operator can suspend any tenant's MCP session by suspending
+  its token at `/admin` — the next tool call fails 401, the
+  agent reconnects (and 401s again), the human sees the failure.
+- Future: scoped tokens (read-only, ai-only) ride the existing
+  ``api_tokens.scopes`` JSON column.  An MCP server can opt
+  into a narrower scope at mint time.
+
+#### Tool catalogue (v1)
+
+Read tools — side-effect-free, idempotent, safe to call freely:
+
+| Tool | Args | Returns |
+|---|---|---|
+| `me` | — | `{tenant_id, role, plan}` |
+| `find_items` | `q: str = ""`, `box_id: int? `, `tag: str = ""`, `limit: int = 50`, `offset: int = 0` | List of items with box name + photo URL inline |
+| `get_item` | `item_id: int`, `include_photo: "none"\|"thumb"\|"full" = "none"` | Item dict with optional ``ImageContent`` |
+| `list_boxes` | `room_id: int?`, `location_id: int?` | List of boxes with item counts |
+| `get_box` | `box_id: int`, `include_items: bool = True` | Box dict + item summary |
+| `list_locations` | — | Locations with room/box counts |
+| `list_rooms` | `location_id: int?` | Rooms |
+| `list_tags` | — | Tag names + per-tag use counts |
+| `inventory_room` | `room_id: int` | Composite: every box + items in the room |
+
+Write tools — one-shot, fail loudly on bad targets:
+
+| Tool | Args | Returns |
+|---|---|---|
+| `move_item` | `item_id: int`, `target_box_id: int` | `{old_box_id, new_box_id}`, MCP error on bad ids |
+| `create_item` | `box_id: int`, `name: str`, `notes: str = ""`, `tags: list[str] = []` | New item dict |
+| `update_item` | `item_id: int`, `name: str?`, `notes: str?` | Updated item dict |
+| `add_tag` / `remove_tag` | `item_id: int`, `tag: str` | Updated tag list |
+| `mark_missing` | `item_id: int` | `{is_missing: bool}` |
+
+Each write tool walks the same DAO methods the REST API uses,
+so the audit log and quota enforcement are uniform across UI /
+API / MCP traffic.
+
+Deferred for v2:
+
+- `create_box`, `delete_item`, `delete_box` — destructive
+  enough to warrant explicit human confirmation in the UI for
+  now.  When agents prove themselves we lift these in.
+- `generate_box_art` — direct AI invocation through MCP would
+  loop AI through AI; better to keep this on the human surface.
+- `recrop_item` / `replace_photo` — agents shouldn't be
+  rewriting source-of-truth photo data without the user
+  watching.
+
+#### Resource catalogue (v1)
+
+MCP "resources" are read-only addressable surfaces an agent
+discovers via `resources/list` and reads via `resources/read`.
+Stash exposes:
+
+- `stash://items/{id}` — item JSON.  Equivalent to `get_item`
+  without the photo.
+- `stash://boxes/{id}` — box + items JSON.
+- `stash://rooms/{id}` — room + boxes JSON.
+- `stash://locations/{id}` — location + floors + rooms JSON.
+
+Resources are useful when an agent wants to pull stable URIs
+into its prompt context without invoking a tool every time.
+The data is identical to the read-tool output; the URI form
+is what enables agents like Claude Desktop to "remember" a
+specific box across turns.
+
+#### Photo content
+
+`get_item(item_id, include_photo=...)` returns:
+
+- `"none"` (default): item JSON + a `photo_url` string the
+  agent can render in a UI link.  No image bytes, minimal
+  bandwidth.
+- `"thumb"`: 320 px JPEG returned as MCP `ImageContent` (base64
+  + `mime: "image/jpeg"`).  Agents that "look at" items in
+  bulk should default to this.
+- `"full"`: full-resolution JPEG.  Costs the agent's full
+  context window per item; gated by quota the same as any
+  upload-bytes consumer (each `full` fetch counts toward the
+  daily AI cost cap to keep agents from hammering the source
+  files).
+
+The photo bytes path goes through the same encryption-at-rest
++ tenant-scope checks as `/uploads/{name}` — no new file
+serving surface, just a different output encoding.
+
+#### Quota + soft warnings
+
+- `X-Quota-Warning` from the REST layer surfaces to the agent
+  as a non-fatal MCP warning attached to the next tool result.
+  Format: `{"warnings": ["monthly_ai_calls=85%", ...]}` in the
+  `_meta` field of the JSON-RPC response.
+- 429 from a write tool surfaces as an MCP error with
+  `data: {retry_after: <seconds>, reset_at: <iso>}` so a
+  well-behaved agent can back off.
+- The daily AI cost cap is the runaway-MCP guard from phase
+  10; an agent that triggers it sees 429s on every AI-flavoured
+  tool until UTC midnight or until an operator raises the cap.
+
+#### Error mapping
+
+REST layer → MCP error contract:
+
+| REST | MCP behaviour |
+|---|---|
+| 200 | Tool result, `isError: false` |
+| 400 | Tool result, `isError: true`, message reflects the validation problem |
+| 401 (token revoked / suspended / over HTTP) | JSON-RPC error `code = -32001`, kill the connection |
+| 403 (role insufficient) | Tool result, `isError: true`, "Token role lacks permission" |
+| 404 (item / box not found in actor's tenant) | Tool result, `isError: true`, "Not found" — never 403, no leak about other tenants |
+| 409 (optimistic concurrency conflict) | Tool result, `isError: true`, "Stale read, refresh and retry" |
+| 429 (quota exceeded) | Tool result, `isError: true`, `data: {retry_after, reset_at}` |
+| 5xx | JSON-RPC error `code = -32603`, transient |
+
+#### Logging + telemetry
+
+- Every MCP request is a regular HTTP request to `/mcp`, so the
+  per-request log line + audit-log integration from phase 16
+  apply unchanged.  Agent traffic shows up with
+  `actor_email = api_token:<id>` and the bearer's tenant_id in
+  the structured fields.
+- New telemetry distinction: `surface = "mcp"` on every
+  `usage_events` row generated by an MCP tool call, replacing
+  the default `"core"` for non-AI tools.  Enables the
+  cost-transparency block to break out agent-vs-human usage in
+  phase 13.
+- Per-tool counters (`mcp.find_items.calls` /
+  `mcp.move_item.calls` etc.) land as ``kind`` values so an
+  operator audit can see "your agent did 5,000 searches and
+  3 moves" at a glance.
+
+#### Deployment
+
+- Single endpoint, no sidecar.  ``/mcp`` ships in the same
+  container as the rest of stash.  Caddy proxies through with
+  the standard TLS/headers flow.
+- No new env vars; the bearer mechanism is already configured.
+  Per-deployment MCP can be disabled by setting
+  ``STASH_MCP_ENABLED=false`` (default true) — useful for
+  early-stage deploys that want to lock down the agent surface
+  while sorting out the prompt + tool semantics.
+- Claude Desktop / Code config example:
+
+  ```json
+  {
+    "mcpServers": {
+      "stash": {
+        "url": "https://stash.example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer stash_..."
+        }
+      }
+    }
+  }
+  ```
+
+#### Versioning
+
+- Tool schemas declared in code with explicit JSON Schema; any
+  breaking change bumps the tool name (``find_items_v2``) +
+  keeps the old form for two minor versions.
+- Resource URIs are stable forever; the JSON shape they return
+  follows the same versioning rule.
+- The MCP protocol version (`MCP-Protocol-Version`) is pinned;
+  bumping it requires a code change + a release note.
+
+#### Open questions
+
+- **Image bandwidth caps.**  Should `include_photo: "full"`
+  count as a single AI call (priced at $cost_per_image) or as
+  upload-bytes (priced per MB)?  The cleaner model is
+  upload-bytes since the bytes are stash's own; lean toward
+  that.  Resolved when phase 13 ships.
+- **Tool gating per token scope.**  Today every token can call
+  every tool.  When we ship scoped tokens, do we want
+  per-tool scopes (`mcp.find_items` vs `mcp.move_item`) or
+  bucket-level (`read` vs `write`)?  Bucket-level is cheaper;
+  start there.
+- **Embedded confirmations.**  Spec'd for no-confirm one-shot
+  writes per the explicit user direction; revisit if agents
+  start making expensive mistakes that audit-log can't undo.
+
 ### SQLite concurrency
 
 With multi-tenant write fan-out (a single ingest commits to
@@ -845,8 +1090,10 @@ moved up to unblock immediate use.  Pre-MCP security audit (in
 the audit's P0/P1 list: per-share file allow-list, healthz bypass,
 bearer auto-revoke on HTTP/URL-leak, operator suspend/resume,
 SameSite=strict, app-level security headers, and the comprehensive
-auth-coverage test suite (69 cases).  See per-phase `[shipped]` /
-`[partial]` markers below.
+auth-coverage test suite (69 cases).  Phase 18 (built-in MCP
+endpoint) is the next forthcoming feature — design spec'd in
+`Architecture · Agent / MCP integration`, implementation pending.
+See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -1063,6 +1310,18 @@ auth-coverage test suite (69 cases).  See per-phase `[shipped]` /
     French based on demand), populate `locale/<lang>/messages.po`,
     flip the language picker on. Pure translation work — the
     engineering already shipped in step 1.
+
+18. **Built-in MCP endpoint.** Single ``/mcp`` route speaking
+    Streamable HTTP, bearer-auth via the existing api_tokens
+    surface.  Tool catalogue covers read (find/get/list across
+    boxes/items/locations/rooms/tags + room inventory) and a
+    bounded set of writes (move, create, update, tag, mark
+    missing).  Photo bytes via MCP ``ImageContent`` with
+    none/thumb/full opt-in so an agent can show "here's what
+    your blue mug looks like" without forcing the bytes through
+    every read.  Full surface contract in the `Architecture ·
+    Agent / MCP integration` section above.  No sidecar — the
+    endpoint is in-app or it's deferred.
 
 (Support / Sentry / in-app feedback link — deferred.)
 
