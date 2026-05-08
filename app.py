@@ -3595,19 +3595,17 @@ def _referenced_uploads() -> set[tuple[int, str]]:
 # underlying machinery exists.
 
 
-@app.get("/usage", response_class=HTMLResponse)
-def usage_page(
+def _render_usage_page(
     request: Request,
+    *,
     invite_url: str = "",
     api_token_plaintext: str = "",
 ):
-    """Per-tenant usage + members surface.  Maintainers see the full
-    page; readonly members see the meters only (membership listing
-    too, since they're already in it).  ``invite_url`` lets the mint
-    POST round-trip the freshly-created link into the page so the
-    user can copy it without an email send.  ``api_token_plaintext``
-    similarly round-trips a freshly-minted token — shown ONCE, never
-    persisted server-side beyond the SHA-256 hash."""
+    """Shared usage-page renderer used by both GET and POST
+    handlers.  Pulled out so the token-mint POST can render
+    directly with the plaintext in the response body — *not*
+    via a URL round-trip, which the leak scanner would (very
+    correctly) catch and revoke the freshly-minted token."""
     actor: Actor = request.state.actor
     if actor.tenant_id is None:
         raise HTTPException(403, "No active tenant")
@@ -3638,6 +3636,21 @@ def usage_page(
             "public_url": PUBLIC_URL,
         },
     )
+
+
+@app.get("/usage", response_class=HTMLResponse)
+def usage_page(
+    request: Request,
+    invite_url: str = "",
+):
+    """Per-tenant usage + members surface.  Maintainers see the full
+    page; readonly members see the meters only (membership listing
+    too, since they're already in it).  ``invite_url`` round-trips a
+    freshly-created invite link into the page — invite tokens don't
+    match the API-token leak signature so they're safe to put in a
+    URL.  API token plaintext is *never* in a URL — the mint POST
+    renders the page inline instead of redirecting."""
+    return _render_usage_page(request, invite_url=invite_url)
 
 
 @app.get("/usage/backup")
@@ -3671,16 +3684,24 @@ def usage_backup(request: Request):
     )
 
 
-@app.post("/usage/api-tokens")
+@app.post("/usage/api-tokens", response_class=HTMLResponse)
 def create_api_token(
     request: Request,
     name: str = Form(...),
     role: str = Form("maintainer"),
 ):
-    """Mint a new API token + round-trip the plaintext into
-    ``?api_token_plaintext=…`` so the page can render the
-    one-time copy box.  After this redirect the plaintext is
-    gone forever — the DB only carries the SHA-256 hash."""
+    """Mint a new API token and render the usage page inline with
+    the one-time plaintext block.  Deliberately *not* a redirect:
+    putting the plaintext in ``?api_token_plaintext=…`` would land
+    in the next request's URL, where the leak scanner correctly
+    spots it and revokes the freshly-minted token.  The plaintext
+    rides only in the response body — never in a URL or any
+    request that follows.
+
+    URL bar after this POST shows ``/usage/api-tokens`` rather
+    than ``/usage``; refreshing prompts the standard browser
+    "resubmit form?" dialog, which is fine — re-submitting just
+    mints another token, the user can revoke duplicates."""
     actor: Actor = request.state.actor
     try:
         result = dao_api_tokens.create(actor, name=name, role=role)
@@ -3688,10 +3709,8 @@ def create_api_token(
         raise HTTPException(403)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    from urllib.parse import urlencode
-    return RedirectResponse(
-        f"/usage?{urlencode({'api_token_plaintext': result['plaintext']})}",
-        status_code=303,
+    return _render_usage_page(
+        request, api_token_plaintext=result["plaintext"],
     )
 
 

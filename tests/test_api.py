@@ -279,23 +279,64 @@ def test_move_item_to_other_tenant_box_400(tmp_path, monkeypatch):
 
 
 def test_usage_mints_token_and_reveals_plaintext_once(client):
-    """The mint POST round-trips ``?api_token_plaintext=…`` so the
-    page can render the one-time copy box.  After the redirect,
-    the plaintext is gone — refreshing /usage shouldn't reveal it
-    again."""
+    """The mint POST renders the usage page inline with the
+    plaintext block — *not* a redirect — so the plaintext never
+    lands in a URL where the leak scanner would (correctly) catch
+    and auto-revoke it.  The plain GET /usage that follows shows
+    no token bytes."""
     r = client.post(
         "/usage/api-tokens",
         data={"name": "MCP server", "role": "maintainer"},
         follow_redirects=False,
     )
-    assert r.status_code == 303
-    loc = r.headers["location"]
-    assert "api_token_plaintext=" in loc
-    # Plain ``GET /usage`` (no query string) shouldn't render any
+    # Direct render, not a redirect.
+    assert r.status_code == 200, r.text
+    body = r.text
+    # The plaintext appears exactly once, in the response body.
+    import re
+    matches = re.findall(r"stash_[A-Za-z0-9_\-]{40,50}", body)
+    assert len(matches) >= 1, "plaintext token missing from response body"
+
+    # Plain GET /usage (no query string) shouldn't render any
     # token bytes — the table only shows names + last_used_at.
     page = client.get("/usage").text
-    assert "stash_" not in page  # no plaintext leaks once redirect is gone
+    assert "stash_" not in page  # no plaintext leaks across requests
     assert "MCP server" in page  # but the listing has the name
+
+
+def test_freshly_minted_token_actually_works(client):
+    """End-to-end regression for the bug where the post-mint
+    redirect put the plaintext in the URL, the leak scanner
+    spotted it on the very next request, and auto-revoked the
+    freshly-minted token before the user could use it.
+
+    The fix is "render inline, never redirect with the plaintext"
+    — this test catches a re-introduction by extracting the
+    plaintext from the rendered page and confirming it actually
+    authenticates against /api/v1/me."""
+    r = client.post(
+        "/usage/api-tokens",
+        data={"name": "regression", "role": "maintainer"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, r.text
+    import re
+    m = re.search(r"stash_[A-Za-z0-9_\-]{40,50}", r.text)
+    assert m, "plaintext token missing from response body"
+    plaintext = m.group(0)
+
+    r2 = client.get(
+        "/api/v1/me",
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    # If the leak scanner ate the token during the mint flow,
+    # this request lands on a revoked row and 401s.  A clean
+    # mint produces a working token.
+    assert r2.status_code == 200, (
+        f"freshly-minted token failed auth (status {r2.status_code}, "
+        f"body {r2.text!r}) — the post-mint flow re-introduced a "
+        "URL round-trip that the leak scanner caught."
+    )
 
 
 def test_bearer_over_http_auto_revokes(tmp_path, monkeypatch):
