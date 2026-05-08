@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.5.0...v1.6.0) (2026-05-08)
+
+
+### Features
+
+* **mcp:** built-in /mcp endpoint speaking spec rev 2025-11-25 ([45d4525](https://github.com/Brennan-VanderLaan/stash/commit/45d45253406d977ad3aaf3a3d0544a373f1e3461))
+
 ## [1.5.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.4.0...v1.5.0) (2026-05-08)
 
 
