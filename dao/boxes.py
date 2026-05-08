@@ -4,6 +4,7 @@ sheet selection).  See spec § "Roles" for who can do what.
 
 from __future__ import annotations
 
+import obs
 from dao._base import (
     Actor,
     ConflictError,
@@ -11,6 +12,9 @@ from dao._base import (
     db,
     require_role,
 )
+
+
+_log = obs.get_logger("dao.boxes")
 
 
 # ── Reads ───────────────────────────────────────────────────────────
@@ -155,8 +159,15 @@ def create(
             "VALUES (?, ?, ?, ?, ?)",
             (name.strip(), location.strip(), notes.strip(), room_id, actor.tenant_id),
         )
+        new_id = cur.lastrowid
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.create", target_kind="box", target_id=new_id,
+            metadata={"name": name.strip(), "room_id": room_id},
+        )
         conn.commit()
-    return cur.lastrowid
+    _log.info("box.create id=%s name=%r", new_id, name.strip())
+    return new_id
 
 
 def update(
@@ -198,7 +209,14 @@ def update(
             (name.strip(), location.strip(), notes.strip(),
              room_id, color, new_version, box_id, actor.tenant_id),
         )
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.update", target_kind="box", target_id=box_id,
+            metadata={"name": name.strip(), "room_id": room_id,
+                      "version": new_version},
+        )
         conn.commit()
+    _log.info("box.update id=%s version=%s", box_id, new_version)
     return new_version
 
 
@@ -220,7 +238,13 @@ def set_room(actor: Actor, box_id: int, room_id: int | None) -> None:
         )
         if cur.rowcount == 0:
             raise NotFoundError(f"box {box_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.set_room", target_kind="box", target_id=box_id,
+            metadata={"room_id": room_id},
+        )
         conn.commit()
+    _log.info("box.set_room id=%s room_id=%s", box_id, room_id)
 
 
 def mark_audited(actor: Actor, box_id: int) -> None:
@@ -237,6 +261,10 @@ def mark_audited(actor: Actor, box_id: int) -> None:
         )
         if cur.rowcount == 0:
             raise NotFoundError(f"box {box_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.audit", target_kind="box", target_id=box_id,
+        )
         conn.commit()
 
 
@@ -263,8 +291,15 @@ def delete(actor: Actor, box_id: int) -> dict:
                 (box_id, actor.tenant_id),
             ).fetchall()
         ]
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="box.delete", target_kind="box", target_id=box_id,
+            metadata={"name": box["name"], "items_dropped": len(photos)},
+        )
         conn.execute("DELETE FROM boxes WHERE id = ?", (box_id,))
         conn.commit()
+    _log.warning("box.delete id=%s name=%r items=%d",
+                 box_id, box["name"], len(photos))
     return {"name": box["name"], "tenant_id": box["tenant_id"], "photos": photos}
 
 

@@ -5,7 +5,11 @@ trusts the caller to encrypt/decrypt.
 
 from __future__ import annotations
 
+import obs
 from dao._base import Actor, NotFoundError, db, require_role
+
+
+_log = obs.get_logger("dao.items")
 
 
 # ── Reads ───────────────────────────────────────────────────────────
@@ -134,8 +138,17 @@ def create(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (box_id, name.strip(), notes.strip(), photo, source_photo, actor.tenant_id),
         )
+        new_id = cur.lastrowid
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="item.create", target_kind="item", target_id=new_id,
+            metadata={"box_id": box_id, "name": name.strip(),
+                      "has_photo": bool(photo)},
+        )
         conn.commit()
-    return cur.lastrowid
+    _log.info("item.create id=%s box_id=%s name=%r",
+              new_id, box_id, name.strip())
+    return new_id
 
 
 def replace_photo(actor: Actor, item_id: int, new_photo: str) -> dict:
@@ -234,7 +247,15 @@ def move_to_box(actor: Actor, item_id: int, target_box_id: int) -> dict:
             "UPDATE items SET box_id = ? WHERE id = ? AND tenant_id = ?",
             (target_box_id, item_id, actor.tenant_id),
         )
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="item.move", target_kind="item", target_id=item_id,
+            metadata={"old_box_id": item["box_id"],
+                      "new_box_id": target_box_id},
+        )
         conn.commit()
+    _log.info("item.move id=%s %s -> %s",
+              item_id, item["box_id"], target_box_id)
     return {"old_box_id": item["box_id"], "new_box_id": target_box_id}
 
 
@@ -252,11 +273,17 @@ def delete(actor: Actor, item_id: int) -> dict:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"item {item_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="item.delete", target_kind="item", target_id=item_id,
+            metadata={"box_id": row["box_id"]},
+        )
         conn.execute(
             "DELETE FROM items WHERE id = ? AND tenant_id = ?",
             (item_id, actor.tenant_id),
         )
         conn.commit()
+    _log.info("item.delete id=%s box_id=%s", item_id, row["box_id"])
     return {
         "box_id": row["box_id"],
         "photo": row["photo"],

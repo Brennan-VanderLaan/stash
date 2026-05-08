@@ -4,7 +4,11 @@ with its own floorplan image and rooms.
 
 from __future__ import annotations
 
+import obs
 from dao._base import Actor, NotFoundError, db, require_role
+
+
+_log = obs.get_logger("dao.floors")
 
 
 def list_for_location(actor: Actor, location_id: int) -> list[dict]:
@@ -53,8 +57,14 @@ def create(actor: Actor, location_id: int, name: str) -> int:
             "VALUES (?, ?, ?, ?)",
             (location_id, name.strip(), next_sort, actor.tenant_id),
         )
+        new_id = cur.lastrowid
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="floor.create", target_kind="floor", target_id=new_id,
+            metadata={"name": name.strip(), "location_id": location_id},
+        )
         conn.commit()
-    return cur.lastrowid
+    return new_id
 
 
 def rename(actor: Actor, floor_id: int, name: str) -> int:
@@ -115,6 +125,13 @@ def delete(actor: Actor, floor_id: int) -> dict:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"floor {floor_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="floor.delete", target_kind="floor",
+            target_id=floor_id,
+            metadata={"location_id": row["location_id"]},
+        )
         conn.execute("DELETE FROM floors WHERE id = ?", (floor_id,))
         conn.commit()
+    _log.warning("floor.delete id=%s", floor_id)
     return {"location_id": row["location_id"], "floorplan": row["floorplan"]}

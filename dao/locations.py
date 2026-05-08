@@ -5,7 +5,11 @@ tenant-scoped.
 
 from __future__ import annotations
 
+import obs
 from dao._base import Actor, NotFoundError, db, require_role
+
+
+_log = obs.get_logger("dao.locations")
 
 
 # ── Reads ───────────────────────────────────────────────────────────
@@ -71,8 +75,15 @@ def create(actor: Actor, name: str) -> int:
             "INSERT INTO locations (name, tenant_id) VALUES (?, ?)",
             (name.strip(), actor.tenant_id),
         )
+        new_id = cur.lastrowid
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="location.create", target_kind="location",
+            target_id=new_id, metadata={"name": name.strip()},
+        )
         conn.commit()
-    return cur.lastrowid
+    _log.info("location.create id=%s name=%r", new_id, name.strip())
+    return new_id
 
 
 def rename(actor: Actor, location_id: int, name: str) -> None:
@@ -109,6 +120,13 @@ def delete(actor: Actor, location_id: int, expected_name: str) -> dict:
         if expected_name.strip() != row["name"]:
             from dao._base import ForbiddenError
             raise ForbiddenError("type the location name to confirm deletion")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="location.delete", target_kind="location",
+            target_id=location_id, metadata={"name": row["name"]},
+        )
         conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
         conn.commit()
+    _log.warning("location.delete id=%s name=%r",
+                 location_id, row["name"])
     return {"floorplan": row["floorplan"]}

@@ -5,7 +5,11 @@ into the "Unassigned" bucket on the index).
 
 from __future__ import annotations
 
+import obs
 from dao._base import Actor, NotFoundError, db, require_role
+
+
+_log = obs.get_logger("dao.rooms")
 
 
 def list_for_floor(actor: Actor, floor_id: int) -> list[dict]:
@@ -95,8 +99,15 @@ def create(
             (floor["location_id"], floor_id, name.strip(),
              x, y, w, h, color, actor.tenant_id),
         )
+        new_id = cur.lastrowid
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="room.create", target_kind="room", target_id=new_id,
+            metadata={"name": name.strip(), "floor_id": floor_id,
+                      "location_id": floor["location_id"]},
+        )
         conn.commit()
-    return cur.lastrowid
+    return new_id
 
 
 def update(
@@ -147,6 +158,14 @@ def delete(actor: Actor, room_id: int) -> dict:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"room {room_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="room.delete", target_kind="room",
+            target_id=room_id,
+            metadata={"floor_id": row["floor_id"],
+                      "location_id": row["location_id"]},
+        )
         conn.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
         conn.commit()
+    _log.warning("room.delete id=%s", room_id)
     return {"location_id": row["location_id"], "floor_id": row["floor_id"]}
