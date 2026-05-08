@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import labels
+import vault
 import vision
 
 load_dotenv()
@@ -24,6 +25,13 @@ VERSION = os.environ.get("STASH_VERSION", "dev")
 GIT_SHA = os.environ.get("STASH_GIT_SHA", "")
 WATCHTOWER_URL = os.environ.get("WATCHTOWER_URL", "").rstrip("/")
 WATCHTOWER_TOKEN = os.environ.get("WATCHTOWER_TOKEN", "")
+# At-rest encryption key.  Loaded once at import so a misconfigured or
+# missing key fails fast instead of corrupting on first write.  The KEK
+# wraps every tenant's DEK; losing it is total data loss, so it lives
+# in env (not the DB or the uploads directory) and gets backed up to a
+# different bucket than the data.  See vault.py + spec § "Encryption
+# at rest".
+_KEK = vault.get_kek()
 # Public-facing base URL for QR codes on printed labels. Set in production
 # (deploy/.env via the compose stack) to e.g. https://stash.example.com.
 # Empty in local dev — labels fall back to the `stash:box:N` custom scheme.
@@ -510,6 +518,103 @@ def migrate_db():
 
         _migrate_to_multi_tenant(conn)
         conn.commit()
+    # Filesystem migration runs outside the DB transaction (file IO can
+    # take a while on big stashes; we don't want a long transaction
+    # holding writes for everyone).  Idempotent — re-runs are no-ops
+    # because already-migrated files live in tenant subdirs and carry
+    # the encryption marker.
+    _migrate_uploads_to_encrypted_tenant_dirs()
+
+
+def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
+    """One-shot relocate + encrypt for pre-phase-2 cleartext uploads.
+
+    Walks UPLOAD_DIR's flat root and for each cleartext blob:
+      1. Looks up which tenant owns the file (any DB column reference).
+      2. Encrypts it with that tenant's DEK.
+      3. Writes the ciphertext to UPLOAD_DIR/{tenant_id}/{name}.
+      4. Roundtrip-verifies the new file before deleting the original.
+
+    Idempotent — files already inside a tenant subdir are skipped, and
+    files in the flat root that already start with the encryption
+    marker just get moved (no re-encryption).  Orphans (no DB
+    reference) stay where they are; the orphan sweep cleans them up
+    later.
+
+    Crashes mid-migration are safe: each file is processed in
+    isolation, with the cleartext original surviving until the new
+    encrypted blob has been roundtrip-verified."""
+    if not UPLOAD_DIR.exists():
+        return
+
+    # Build a (filename → tenant_id) map from every reference column,
+    # plus the thumb companion of each.
+    file_owners: dict[str, int] = {}
+    with db() as conn:
+        for sql in (
+            "SELECT tenant_id, photo FROM items WHERE photo IS NOT NULL",
+            "SELECT tenant_id, source_photo FROM items WHERE source_photo IS NOT NULL",
+            "SELECT tenant_id, photo FROM pending_items WHERE photo IS NOT NULL",
+            "SELECT tenant_id, photo FROM ingest_jobs WHERE photo IS NOT NULL",
+            "SELECT tenant_id, background_art FROM boxes WHERE background_art IS NOT NULL",
+            "SELECT tenant_id, floorplan FROM floors WHERE floorplan IS NOT NULL",
+            "SELECT tenant_id, floorplan FROM locations WHERE floorplan IS NOT NULL",
+        ):
+            for tid, name in conn.execute(sql).fetchall():
+                if tid is None or not name:
+                    continue
+                file_owners[name] = tid
+                file_owners[f"{Path(name).stem}_thumb.jpg"] = tid
+
+    for entry in list(UPLOAD_DIR.iterdir()):
+        if entry.is_dir():
+            # Already a per-tenant dir — phase 2+ layout.
+            continue
+        if not entry.is_file():
+            continue
+        if entry.suffix == ".tmp":
+            # Atomic-rename intermediate from an interrupted write.
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        tenant_id = file_owners.get(entry.name)
+        if tenant_id is None:
+            # Orphan — leave for /maintenance/cleanup to deal with so a
+            # bug here can't accidentally delete an unmapped file the
+            # operator might want to rescue.
+            continue
+        target = _tenant_file(tenant_id, entry.name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            # Already migrated under this name (an earlier interrupted
+            # run got this far).  Drop the original.
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        try:
+            blob = entry.read_bytes()
+            if vault.looks_encrypted(blob):
+                # Pre-encrypted (operator manually placed it, perhaps).
+                # Just move it.
+                entry.rename(target)
+                continue
+            ciphertext = _encrypt_for(tenant_id, blob)
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_bytes(ciphertext)
+            roundtrip = _decrypt_for(tenant_id, tmp.read_bytes())
+            if roundtrip != blob:
+                tmp.unlink()
+                continue  # something went wrong; original stays put
+            os.replace(tmp, target)
+            entry.unlink()
+        except Exception:
+            # Don't crash startup on a single bad file.  An operator
+            # can investigate via the filesystem if photos go missing.
+            continue
 
 
 def _first_email_from_env(var: str) -> str:
@@ -644,8 +749,10 @@ def _migrate_legacy_locations(conn) -> None:
         )
 
 
-init_db()
-migrate_db()
+# init_db / migrate_db are called at the *bottom* of this module — after
+# every helper they need (filesystem migration, encryption helpers,
+# path utilities) is defined.  Keep this comment so a future contributor
+# doesn't move them back up here for tidiness.
 
 
 MAX_IMAGE_DIM = 2048
@@ -659,14 +766,17 @@ from PIL import Image as _PilImage
 _PilImage.MAX_IMAGE_PIXELS = 50_000_000
 
 
-def save_photo(photo: UploadFile | None) -> str | None:
+def save_photo(tenant_id: int, photo: UploadFile | None) -> str | None:
     if not photo or not photo.filename:
         return None
-    return save_photo_bytes(photo.file.read(), photo.filename)
+    return save_photo_bytes(tenant_id, photo.file.read(), photo.filename)
 
 
-def save_photo_bytes(data: bytes, filename: str) -> str:
+def save_photo_bytes(tenant_id: int, data: bytes, filename: str) -> str:
     """Re-encode as JPEG with EXIF orientation baked in and longest side capped.
+
+    Encrypts the resulting bytes with the tenant's DEK and writes to
+    UPLOAD_DIR/{tenant_id}/{name}.
 
     On PIL failure we still write the bytes (test fixtures use synthetic JPEG
     headers PIL can't decode), but ALWAYS as `.jpg` — never honor the caller's
@@ -688,40 +798,59 @@ def save_photo_bytes(data: bytes, filename: str) -> str:
         if max(img.size) > MAX_IMAGE_DIM:
             img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM), Image.LANCZOS)
         name = f"{secrets.token_hex(8)}.jpg"
-        img.save(UPLOAD_DIR / name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        out = _io.BytesIO()
+        img.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        _write_encrypted(tenant_id, name, out.getvalue())
         # Pre-generate the thumb from the in-memory image — cheaper than
         # opening the file again, and covers the new-upload-then-immediately-
         # render case without paying the lazy-gen cost on the first request.
-        _save_thumb_from_image(img, name)
+        _save_thumb_from_image(tenant_id, img, name)
         return name
     except HTTPException:
         raise
     except Exception:
         name = f"{secrets.token_hex(8)}.jpg"
-        (UPLOAD_DIR / name).write_bytes(data)
+        _write_encrypted(tenant_id, name, data)
         return name
 
 
-def _save_thumb_from_image(img, name: str) -> None:
-    """Write a thumbnail for `name` from an already-decoded PIL image."""
+def _save_thumb_from_image(tenant_id: int, img, name: str) -> None:
+    """Encrypt + write a thumbnail for `name` from an already-decoded PIL image."""
     from PIL import Image as _Image
+    import io as _io
     try:
         thumb_img = img.copy()
         if max(thumb_img.size) > THUMB_MAX_DIM:
             thumb_img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), _Image.LANCZOS)
-        thumb = _thumb_path(name)
-        tmp = thumb.with_suffix(thumb.suffix + ".tmp")
-        thumb_img.save(tmp, format="JPEG", quality=80, optimize=True)
-        os.replace(tmp, thumb)
+        out = _io.BytesIO()
+        thumb_img.save(out, format="JPEG", quality=80, optimize=True)
+        thumb_name = _tenant_thumb(tenant_id, name).name
+        _write_encrypted(tenant_id, thumb_name, out.getvalue())
     except Exception:
         pass  # the lazy /thumbs endpoint will retry generation on first view
 
 
-def ensure_tag(conn, name: str) -> int:
-    """Get or create a tag by name (case-insensitive). Returns tag id."""
+def ensure_tag(conn, tenant_id: int, name: str) -> int:
+    """Get or create a tag by name (case-insensitive) within a tenant.
+    Returns tag id.
+
+    Tags are per-tenant per spec § "Tag uniqueness" — same tag name in
+    two tenants resolves to two distinct rows.  Existing rows from the
+    pre-multi-tenant migration carry the same tenant_id but no UNIQUE
+    constraint enforces (tenant_id, name) yet (DAO migration in step 3
+    adds it); for now the lookup is by (tenant_id, name) and an
+    INSERT OR IGNORE matches on the legacy global UNIQUE on `name`."""
     name = name.strip()
-    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (name,))
-    row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO tags (name, tenant_id) VALUES (?, ?)",
+        (name, tenant_id),
+    )
+    row = conn.execute(
+        "SELECT id FROM tags WHERE name = ? AND "
+        "(tenant_id = ? OR tenant_id IS NULL) "
+        "ORDER BY tenant_id IS NULL, id LIMIT 1",
+        (name, tenant_id),
+    ).fetchone()
     return row["id"]
 
 
@@ -740,12 +869,13 @@ def parse_tag_input(raw: str) -> list[tuple[str, str | None]]:
     return results
 
 
-def set_item_tags(conn, item_id: int, tag_entries: list[tuple[str, str | None]]) -> None:
+def set_item_tags(conn, tenant_id: int, item_id: int, tag_entries: list[tuple[str, str | None]]) -> None:
     for tag_name, value in tag_entries:
-        tag_id = ensure_tag(conn, tag_name)
+        tag_id = ensure_tag(conn, tenant_id, tag_name)
         conn.execute(
-            "INSERT OR REPLACE INTO item_tags (item_id, tag_id, value) VALUES (?, ?, ?)",
-            (item_id, tag_id, value),
+            "INSERT OR REPLACE INTO item_tags (item_id, tag_id, value, tenant_id) "
+            "VALUES (?, ?, ?, ?)",
+            (item_id, tag_id, value, tenant_id),
         )
 
 
@@ -773,16 +903,20 @@ def _open_image_oriented(path: Path):
     return img
 
 
-def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
+def crop_photo(tenant_id: int, photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     """Crop a photo using bbox (y_min, x_min, y_max, x_max in 0-1000 coords).
-    Returns the filename of the cropped image saved to UPLOAD_DIR.
+    Returns the filename of the cropped image saved to UPLOAD_DIR/{tenant_id}/.
 
-    Normalizes to JPEG and pre-generates the companion thumbnail so a re-crop
-    is reflected immediately on the next page render — without the thumbnail
-    side, lazy /thumbs generation can fall back to serving the source under an
+    Source is read + decrypted from the tenant's directory; the new crop is
+    encrypted with the tenant's DEK before write.  Normalizes to JPEG and
+    pre-generates the companion thumbnail so a re-crop is reflected
+    immediately on the next page render — without the thumbnail side, lazy
+    /thumbs generation can fall back to serving the source under an
     immutable cache header, leaving stale crops visible."""
-    src = UPLOAD_DIR / photo_name
-    img = _open_image_oriented(src)
+    plaintext = _read_encrypted(tenant_id, photo_name)
+    import io as _io
+    from PIL import Image, ImageOps
+    img = ImageOps.exif_transpose(Image.open(_io.BytesIO(plaintext)))
     w, h = img.size
     y_min, x_min, y_max, x_max = bbox
     # Convert 0-1000 normalized coords to pixels
@@ -801,8 +935,10 @@ def crop_photo(photo_name: str, bbox: tuple[int, int, int, int]) -> str:
     if cropped.mode not in ("RGB", "L"):
         cropped = cropped.convert("RGB")
     crop_name = f"{secrets.token_hex(8)}.jpg"
-    cropped.save(UPLOAD_DIR / crop_name, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-    _save_thumb_from_image(cropped, crop_name)
+    out = _io.BytesIO()
+    cropped.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    _write_encrypted(tenant_id, crop_name, out.getvalue())
+    _save_thumb_from_image(tenant_id, cropped, crop_name)
     return crop_name
 
 
@@ -821,21 +957,123 @@ def _photo_still_referenced(conn, photo_name: str) -> bool:
     ).fetchone() is not None
 
 
-def _delete_upload_if_orphan(conn, photo_name: str) -> None:
+def _delete_upload_if_orphan(conn, tenant_id: int, photo_name: str) -> None:
+    """Delete a tenant's upload (and its thumb companion) if no row
+    still references it.  Caller passes the tenant_id of the row that
+    just stopped pointing at the file — cross-tenant references aren't
+    a thing in the new schema, so the file lives in exactly one
+    tenant's directory."""
     if not photo_name or _photo_still_referenced(conn, photo_name):
         return
     try:
-        (UPLOAD_DIR / photo_name).unlink()
+        _tenant_file(tenant_id, photo_name).unlink()
     except FileNotFoundError:
         pass
     # Companion thumbnail goes with the source. The thumb is a derived
     # artifact, never tracked in the DB — so its lifetime is purely tied to
     # whether anything still references the original.
-    _delete_thumb_if_exists(photo_name)
+    _delete_thumb_if_exists(tenant_id, photo_name)
 
 
 import re as _re
 _UPLOAD_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+# ── Per-tenant upload paths + encryption helpers ─────────────────────
+# Files live under UPLOAD_DIR/{tenant_id}/{name} and are encrypted with
+# the tenant's DEK.  See spec § "Filesystem layout" + "Encryption at
+# rest".  Routes derive tenant_id from request.state.actor.tenant_id;
+# the URL itself stays plain (`/uploads/{name}`) so templates don't
+# need to thread tenant ids through every src attribute.
+
+def _tenant_dir(tenant_id: int) -> Path:
+    return UPLOAD_DIR / str(tenant_id)
+
+
+def _ensure_tenant_dir(tenant_id: int) -> Path:
+    p = _tenant_dir(tenant_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _tenant_file(tenant_id: int, name: str) -> Path:
+    """Encrypted blob path for a given upload."""
+    return _tenant_dir(tenant_id) / name
+
+
+def _tenant_thumb(tenant_id: int, name: str) -> Path:
+    """Encrypted thumbnail path for a given upload (always .jpg)."""
+    return _tenant_dir(tenant_id) / f"{Path(name).stem}_thumb.jpg"
+
+
+def _encrypt_for(tenant_id: int, plaintext: bytes) -> bytes:
+    """Encrypt bytes with the tenant's DEK.  Opens a fresh connection;
+    the DEK cache hides the cost after the first call per tenant."""
+    with db() as conn:
+        return vault.encrypt_for_tenant(conn, tenant_id, _KEK, plaintext)
+
+
+def _decrypt_for(tenant_id: int, ciphertext: bytes) -> bytes:
+    with db() as conn:
+        return vault.decrypt_for_tenant(conn, tenant_id, _KEK, ciphertext)
+
+
+def _write_encrypted(tenant_id: int, name: str, plaintext: bytes) -> None:
+    """Encrypt + atomically replace the on-disk blob."""
+    _ensure_tenant_dir(tenant_id)
+    target = _tenant_file(tenant_id, name)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(_encrypt_for(tenant_id, plaintext))
+    os.replace(tmp, target)
+
+
+def _read_encrypted(tenant_id: int, name: str) -> bytes:
+    """Read + decrypt an upload.  Caller is responsible for tenant scoping
+    (i.e. for routes, pull tenant_id from request.state.actor)."""
+    target = _tenant_file(tenant_id, name)
+    return _decrypt_for(tenant_id, target.read_bytes())
+
+
+def _resolve_tenant_for_filename(conn, name: str) -> int | None:
+    """Reverse-lookup which tenant owns a file by scanning every column
+    that holds an upload reference.  Used by serve_upload / serve_thumb
+    to keep URLs tenant-id-free; also used by the filesystem migration
+    to relocate cleartext blobs into the right per-tenant directory."""
+    for sql in (
+        "SELECT tenant_id FROM items WHERE photo = ? OR source_photo = ? LIMIT 1",
+        "SELECT tenant_id FROM pending_items WHERE photo = ? LIMIT 1",
+        "SELECT tenant_id FROM ingest_jobs WHERE photo = ? LIMIT 1",
+        "SELECT tenant_id FROM boxes WHERE background_art = ? LIMIT 1",
+        "SELECT tenant_id FROM floors WHERE floorplan = ? LIMIT 1",
+        "SELECT tenant_id FROM locations WHERE floorplan = ? LIMIT 1",
+    ):
+        params = (name, name) if "OR" in sql else (name,)
+        row = conn.execute(sql, params).fetchone()
+        if row and row["tenant_id"] is not None:
+            return row["tenant_id"]
+    # Thumb companions follow their source: strip _thumb suffix and
+    # try the source's owner.  Same approach the migration uses.
+    stem = Path(name).stem
+    if stem.endswith("_thumb"):
+        source_stem = stem[: -len("_thumb")]
+        # Source extension is unknown without filesystem inspection, but
+        # the DB column always carries the full filename — try the four
+        # most common image extensions.
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            for tid_sql in (
+                "SELECT tenant_id FROM items WHERE photo = ? OR source_photo = ? LIMIT 1",
+                "SELECT tenant_id FROM pending_items WHERE photo = ? LIMIT 1",
+                "SELECT tenant_id FROM ingest_jobs WHERE photo = ? LIMIT 1",
+                "SELECT tenant_id FROM boxes WHERE background_art = ? LIMIT 1",
+                "SELECT tenant_id FROM floors WHERE floorplan = ? LIMIT 1",
+                "SELECT tenant_id FROM locations WHERE floorplan = ? LIMIT 1",
+            ):
+                src = f"{source_stem}{ext}"
+                params = (src, src) if "OR" in tid_sql else (src,)
+                row = conn.execute(tid_sql, params).fetchone()
+                if row and row["tenant_id"] is not None:
+                    return row["tenant_id"]
+    return None
 
 # Longest side of a generated thumbnail. 320 px renders crisply at 100 px CSS
 # squares on retina (3x = 300) without paying the cost of the 2048 px source.
@@ -849,41 +1087,52 @@ import threading as _threading
 _THUMB_GEN_SEMAPHORE = _threading.Semaphore(2)
 
 
-def _thumb_path(name: str) -> Path:
+def _thumb_path(tenant_id: int, name: str) -> Path:
     """Companion thumbnail file for a given upload. Always .jpg since
     save_photo_bytes re-encodes everything to JPEG anyway."""
-    return UPLOAD_DIR / f"{Path(name).stem}_thumb.jpg"
+    return _tenant_thumb(tenant_id, name)
 
 
 def _is_thumb_name(name: str) -> bool:
     return Path(name).stem.endswith("_thumb")
 
 
-def _ensure_thumb(name: str) -> Path | None:
-    """Lazy-generate the thumb for an existing upload. Returns the thumb path
-    or None if the source is missing / un-decodable. Writes via a tmp file +
-    rename so concurrent requests can't see a half-written thumb.
+def _ensure_thumb(tenant_id: int, name: str) -> bytes | None:
+    """Lazy-generate the thumb for an existing upload.  Returns decrypted
+    thumb bytes or None if the source is missing / un-decodable.  Writes
+    the encrypted thumb via tmp-file + rename so concurrent requests
+    can't see a half-written file.
 
     Memory-aware: uses PIL's draft() to tell the JPEG decoder to scale down
     BEFORE allocating pixel buffers. A pre-cap 7000×7000 JPEG decodes at full
     res to ~150 MB RGB; with draft asking for ~640 px, the same image lands
     at <3 MB. Combined with the module-level semaphore, the container can no
     longer be OOM-killed by a fan-out of concurrent thumb requests."""
-    src = UPLOAD_DIR / name
-    if not src.exists() or _is_thumb_name(name):
+    if _is_thumb_name(name):
         return None
-    thumb = _thumb_path(name)
+    src = _tenant_file(tenant_id, name)
+    if not src.exists():
+        return None
+    thumb = _tenant_thumb(tenant_id, name)
     if thumb.exists():
-        return thumb
+        try:
+            return _decrypt_for(tenant_id, thumb.read_bytes())
+        except Exception:
+            return None
 
     with _THUMB_GEN_SEMAPHORE:
         # Re-check now that we hold the lock — another request may have
         # generated this very thumb while we were queued.
         if thumb.exists():
-            return thumb
+            try:
+                return _decrypt_for(tenant_id, thumb.read_bytes())
+            except Exception:
+                return None
         try:
             from PIL import Image, ImageOps
-            with Image.open(src) as opened:
+            import io as _io
+            plaintext = _decrypt_for(tenant_id, src.read_bytes())
+            with Image.open(_io.BytesIO(plaintext)) as opened:
                 # draft() is JPEG-only and a no-op on other formats. Asking
                 # for 2x the target size gives the decoder enough room to
                 # downscale further with a clean LANCZOS pass below.
@@ -894,10 +1143,11 @@ def _ensure_thumb(name: str) -> Path | None:
                     img = img.convert("RGB")
                 if max(img.size) > THUMB_MAX_DIM:
                     img.thumbnail((THUMB_MAX_DIM, THUMB_MAX_DIM), Image.LANCZOS)
-                tmp = thumb.with_suffix(thumb.suffix + ".tmp")
-                img.save(tmp, format="JPEG", quality=80, optimize=True)
-                os.replace(tmp, thumb)
-            return thumb
+                out = _io.BytesIO()
+                img.save(out, format="JPEG", quality=80, optimize=True)
+                thumb_plaintext = out.getvalue()
+            _write_encrypted(tenant_id, thumb.name, thumb_plaintext)
+            return thumb_plaintext
         except Exception:
             # Any decode failure (test fixtures, corrupt jpegs, OOM in PIL,
             # etc) — let the caller fall back to serving the full-res source
@@ -905,45 +1155,87 @@ def _ensure_thumb(name: str) -> Path | None:
             return None
 
 
-def _delete_thumb_if_exists(name: str) -> None:
+def _delete_thumb_if_exists(tenant_id: int, name: str) -> None:
     if _is_thumb_name(name):
         return
     try:
-        _thumb_path(name).unlink()
+        _thumb_path(tenant_id, name).unlink()
     except FileNotFoundError:
         pass
 
 
+def _resolve_serve_tenant(request: Request, name: str) -> int | None:
+    """Pick the tenant whose directory holds `name` for this actor.
+
+    Most requests resolve cleanly to ``actor.tenant_id`` — the file is
+    in the active tenant's directory.  But operators with no
+    membership, and (eventually) share recipients, need a fallback:
+    walk every tenant the actor *might* see and pick the first that
+    owns the file.  See spec § "Sharing model" for where this widens
+    when object_shares lands."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is not None:
+        # Fast path: file lives in the active tenant's directory.
+        if _tenant_file(actor.tenant_id, name).exists():
+            return actor.tenant_id
+        # Membership in another tenant?  (Multi-membership pre-dates
+        # the switcher; resolve any tenant the actor has access to.)
+        for tid, _role in actor.memberships:
+            if tid != actor.tenant_id and _tenant_file(tid, name).exists():
+                return tid
+    if actor.is_operator:
+        # Operators have no automatic data access through /admin (see
+        # spec § "Operator surface"), but if a tenant maintainer has
+        # invited them, the membership above already resolved.  Refuse
+        # any operator path that isn't backed by a real membership.
+        return None
+    return None
+
+
 @app.get("/uploads/{name}")
-def serve_upload(name: str):
+def serve_upload(request: Request, name: str):
     # Reject obviously hostile names before any filesystem touch. We only
     # generate names like `<hex>.jpg` — anything outside that alphabet is not
     # ours and not worth resolving.
     if not _UPLOAD_NAME_RE.match(name) or ".." in name:
         raise HTTPException(404)
+    tenant_id = _resolve_serve_tenant(request, name)
+    if tenant_id is None:
+        raise HTTPException(404)
     upload_root = UPLOAD_DIR.resolve()
-    p = (UPLOAD_DIR / name).resolve()
+    p = _tenant_file(tenant_id, name).resolve()
     # Defense-in-depth: even after the regex check, refuse to serve anything
     # that lands outside UPLOAD_DIR (e.g. through symlink shenanigans).
     if not p.is_relative_to(upload_root) or not p.is_file():
         raise HTTPException(404)
-    return FileResponse(p)
+    try:
+        plaintext = _decrypt_for(tenant_id, p.read_bytes())
+    except Exception:
+        raise HTTPException(500, "decryption failed")
+    # Photo MIME — every stored upload is JPEG (save_photo_bytes
+    # normalises) so we can hard-code without sniffing bytes.
+    return Response(content=plaintext, media_type="image/jpeg")
 
 
 @app.get("/thumbs/{name}")
-def serve_thumb(name: str):
+def serve_thumb(request: Request, name: str):
     """Serves a downscaled version of /uploads/{name} for grid + list views.
     Filenames are content-hashed so the result is immutable — long-cached."""
     if not _UPLOAD_NAME_RE.match(name) or ".." in name:
         raise HTTPException(404)
-    upload_root = UPLOAD_DIR.resolve()
-    src = (UPLOAD_DIR / name).resolve()
-    if not src.is_relative_to(upload_root) or not src.is_file():
+    tenant_id = _resolve_serve_tenant(request, name)
+    if tenant_id is None:
         raise HTTPException(404)
-    thumb = _ensure_thumb(name)
-    target = thumb if thumb and thumb.exists() else src
-    return FileResponse(
-        target,
+    plaintext = _ensure_thumb(tenant_id, name)
+    if plaintext is None:
+        # Fall through to the full-res source so the page doesn't break.
+        try:
+            plaintext = _read_encrypted(tenant_id, name)
+        except Exception:
+            raise HTTPException(404)
+    return Response(
+        content=plaintext,
+        media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
 
@@ -1034,11 +1326,13 @@ def _coerce_room_id(value: str) -> int | None:
 
 @app.post("/boxes")
 def create_box(
+    request: Request,
     name: str = Form(...),
     location: str = Form(""),
     notes: str = Form(""),
     room_id: str = Form(""),
 ):
+    actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
     with db() as conn:
         # If a room is picked, denormalize its name into boxes.location so the
@@ -1050,8 +1344,9 @@ def create_box(
             else:
                 rid = None
         conn.execute(
-            "INSERT INTO boxes (name, location, notes, room_id) VALUES (?, ?, ?, ?)",
-            (name.strip(), location.strip(), notes.strip(), rid),
+            "INSERT INTO boxes (name, location, notes, room_id, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name.strip(), location.strip(), notes.strip(), rid, actor.tenant_id),
         )
         conn.commit()
     return RedirectResponse("/", status_code=303)
@@ -1264,36 +1559,44 @@ async def submit_audit(request: Request, box_id: int):
 
 @app.post("/boxes/{box_id}/items")
 async def add_item(
+    request: Request,
     box_id: int,
     name: str = Form(...),
     notes: str = Form(""),
     tags: str = Form(""),
     photo: UploadFile = File(None),
 ):
+    actor: Actor = request.state.actor
     with db() as conn:
         if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
             raise HTTPException(404)
-        photo_name = save_photo(photo)
+        photo_name = save_photo(actor.tenant_id, photo)
         cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo, source_photo) VALUES (?, ?, ?, ?, ?)",
-            (box_id, name.strip(), notes.strip(), photo_name, photo_name),
+            "INSERT INTO items (box_id, name, notes, photo, source_photo, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (box_id, name.strip(), notes.strip(), photo_name, photo_name, actor.tenant_id),
         )
         if tags.strip():
-            set_item_tags(conn, cur.lastrowid, parse_tag_input(tags))
+            set_item_tags(conn, actor.tenant_id, cur.lastrowid, parse_tag_input(tags))
         conn.commit()
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/tags")
-def add_item_tag(item_id: int, tag: str = Form(...)):
+def add_item_tag(request: Request, item_id: int, tag: str = Form(...)):
     entries = parse_tag_input(tag)
     if not entries:
         raise HTTPException(400, "Tag required")
+    actor: Actor = request.state.actor
     with db() as conn:
-        row = conn.execute("SELECT box_id FROM items WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT box_id, tenant_id FROM items WHERE id = ?", (item_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(404)
-        set_item_tags(conn, item_id, entries)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        set_item_tags(conn, row["tenant_id"] or actor.tenant_id, item_id, entries)
         conn.commit()
     return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
@@ -1379,6 +1682,7 @@ def recrop_item(request: Request, item_id: int):
 
 @app.post("/items/{item_id}/recrop")
 def apply_recrop(
+    request: Request,
     item_id: int,
     crop_y_min: str = Form(""),
     crop_x_min: str = Form(""),
@@ -1386,12 +1690,20 @@ def apply_recrop(
     crop_x_max: str = Form(""),
     skip_crop: str = Form(""),
 ):
+    actor: Actor = request.state.actor
     with db() as conn:
         item = conn.execute(
-            "SELECT photo, source_photo, box_id FROM items WHERE id = ?", (item_id,)
+            "SELECT photo, source_photo, box_id, tenant_id FROM items WHERE id = ?",
+            (item_id,),
         ).fetchone()
         if not item:
             raise HTTPException(404)
+        # Tenancy guard: routes will move into the DAO in roadmap step 3 but
+        # until then we enforce here so a file path can't be reached
+        # cross-tenant.
+        if item["tenant_id"] is not None and item["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = item["tenant_id"] or actor.tenant_id
 
         source = item["source_photo"] or item["photo"]
         old_photo = item["photo"]
@@ -1401,7 +1713,7 @@ def apply_recrop(
             new_photo = source
         elif crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
             bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
-            new_photo = crop_photo(source, bbox)
+            new_photo = crop_photo(tenant_id, source, bbox)
         else:
             # No change
             return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
@@ -1413,50 +1725,60 @@ def apply_recrop(
         conn.commit()
         # Old crop file may now be orphaned
         if old_photo and old_photo != new_photo and old_photo != source:
-            _delete_upload_if_orphan(conn, old_photo)
+            _delete_upload_if_orphan(conn, tenant_id, old_photo)
     return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/replace-photo")
-async def replace_item_photo(item_id: int, photo: UploadFile = File(...)):
+async def replace_item_photo(request: Request, item_id: int, photo: UploadFile = File(...)):
     if not photo or not photo.filename:
         raise HTTPException(400, "Photo required")
+    actor: Actor = request.state.actor
     with db() as conn:
         row = conn.execute(
-            "SELECT box_id, photo, source_photo FROM items WHERE id = ?", (item_id,)
+            "SELECT box_id, photo, source_photo, tenant_id FROM items WHERE id = ?",
+            (item_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404)
-        new_photo = save_photo(photo)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = row["tenant_id"] or actor.tenant_id
+        new_photo = save_photo(tenant_id, photo)
         conn.execute(
             "UPDATE items SET photo = ?, source_photo = ? WHERE id = ?",
             (new_photo, new_photo, item_id),
         )
         conn.commit()
         for old in {row["photo"], row["source_photo"]}:
-            _delete_upload_if_orphan(conn, old)
+            _delete_upload_if_orphan(conn, tenant_id, old)
     return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/delete")
-def delete_item(item_id: int):
+def delete_item(request: Request, item_id: int):
+    actor: Actor = request.state.actor
     with db() as conn:
         row = conn.execute(
-            "SELECT box_id, photo, source_photo FROM items WHERE id = ?", (item_id,)
+            "SELECT box_id, photo, source_photo, tenant_id FROM items WHERE id = ?",
+            (item_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = row["tenant_id"] or actor.tenant_id
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
         for photo_name in {row["photo"], row["source_photo"]}:
-            _delete_upload_if_orphan(conn, photo_name)
+            _delete_upload_if_orphan(conn, tenant_id, photo_name)
     return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
 
 
 _EXT_TO_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 
-def _bytes_for_vision(photo_name: str) -> bytes:
+def _bytes_for_vision(tenant_id: int, photo_name: str) -> bytes:
     """Re-encode the saved photo into a JPEG with no EXIF segment before
     sending it to the vision model.
 
@@ -1469,13 +1791,13 @@ def _bytes_for_vision(photo_name: str) -> bytes:
     the `exif=` kwarg) means there's nothing left for the decoder to
     interpret either way: pixel orientation is the only source of truth.
 
-    Falls back to raw bytes if PIL can't decode the file (test fixtures
-    sometimes use synthetic JPEG headers PIL refuses)."""
-    src = UPLOAD_DIR / photo_name
+    Falls back to raw plaintext bytes if PIL can't decode the file (test
+    fixtures sometimes use synthetic JPEG headers PIL refuses)."""
+    plaintext = _read_encrypted(tenant_id, photo_name)
     try:
         from PIL import Image, ImageOps
         import io as _io
-        with Image.open(src) as opened:
+        with Image.open(_io.BytesIO(plaintext)) as opened:
             rotated = ImageOps.exif_transpose(opened)
         if rotated.mode not in ("RGB", "L"):
             rotated = rotated.convert("RGB")
@@ -1484,25 +1806,25 @@ def _bytes_for_vision(photo_name: str) -> bytes:
         rotated.save(buf, format="JPEG", quality=JPEG_QUALITY)
         return buf.getvalue()
     except Exception:
-        return src.read_bytes()
+        return plaintext
 
 
-def process_ingest_job(job_id: int, photo_name: str) -> None:
+def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     """Background worker: vision pass → insert pending items → mark job done."""
     with db() as conn:
         conn.execute("UPDATE ingest_jobs SET status = 'processing' WHERE id = ?", (job_id,))
         conn.commit()
     try:
-        image_bytes = _bytes_for_vision(photo_name)
+        image_bytes = _bytes_for_vision(tenant_id, photo_name)
         detected = vision.detect_items(image_bytes, media_type="image/jpeg")
         with db() as conn:
             for item in detected:
                 bbox = item.bbox or [None, None, None, None]
                 conn.execute(
                     "INSERT INTO pending_items "
-                    "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (item.name, item.description, photo_name, *bbox),
+                    "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, tenant_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (item.name, item.description, photo_name, *bbox, tenant_id),
                 )
             conn.execute(
                 "UPDATE ingest_jobs SET status = 'done', item_count = ?, "
@@ -1571,42 +1893,54 @@ def ingest_jobs_fragment(request: Request):
 
 
 @app.post("/ingest")
-async def ingest(background_tasks: BackgroundTasks, photos: list[UploadFile] = File(...)):
+async def ingest(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    photos: list[UploadFile] = File(...),
+):
     valid = [p for p in photos if p and p.filename]
     if not valid:
         raise HTTPException(400, "Photo required")
+    actor: Actor = request.state.actor
 
     for photo in valid:
         image_bytes = await photo.read()
-        photo_name = save_photo_bytes(image_bytes, photo.filename)
+        photo_name = save_photo_bytes(actor.tenant_id, image_bytes, photo.filename)
 
         with db() as conn:
             cur = conn.execute(
-                "INSERT INTO ingest_jobs (photo, status) VALUES (?, 'pending')", (photo_name,)
+                "INSERT INTO ingest_jobs (photo, status, tenant_id) VALUES (?, 'pending', ?)",
+                (photo_name, actor.tenant_id),
             )
             job_id = cur.lastrowid
             conn.commit()
 
-        background_tasks.add_task(process_ingest_job, job_id, photo_name)
+        background_tasks.add_task(process_ingest_job, job_id, photo_name, actor.tenant_id)
 
     return RedirectResponse("/ingest", status_code=303)
 
 
 @app.post("/ingest/{job_id}/retry")
-def ingest_retry(background_tasks: BackgroundTasks, job_id: int):
+def ingest_retry(request: Request, background_tasks: BackgroundTasks, job_id: int):
+    actor: Actor = request.state.actor
     with db() as conn:
         row = conn.execute(
-            "SELECT photo FROM ingest_jobs WHERE id = ? AND status = 'failed'", (job_id,)
+            "SELECT photo, tenant_id FROM ingest_jobs WHERE id = ? AND status = 'failed'",
+            (job_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, "Job not found or not failed")
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
         conn.execute(
             "UPDATE ingest_jobs SET status = 'pending', error = NULL, "
             "completed_at = NULL WHERE id = ?",
             (job_id,),
         )
         conn.commit()
-    background_tasks.add_task(process_ingest_job, job_id, row["photo"])
+    background_tasks.add_task(
+        process_ingest_job, job_id, row["photo"], row["tenant_id"] or actor.tenant_id,
+    )
     return RedirectResponse("/ingest", status_code=303)
 
 
@@ -1734,6 +2068,7 @@ def queue_match(pending_id: int):
 
 @app.post("/queue/{pending_id}/assign")
 def queue_assign(
+    request: Request,
     pending_id: int,
     box_id: str = Form(...),
     name: str = Form(...),
@@ -1749,14 +2084,18 @@ def queue_assign(
         raise HTTPException(400, "Pick a box")
     if not name.strip():
         raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
 
     with db() as conn:
         row = conn.execute(
-            "SELECT photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max "
+            "SELECT photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, tenant_id "
             "FROM pending_items WHERE id = ?", (pending_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = row["tenant_id"] or actor.tenant_id
         target_box_id = int(box_id)
         if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (target_box_id,)).fetchone():
             raise HTTPException(400, "Unknown box")
@@ -1767,24 +2106,25 @@ def queue_assign(
         if skip_crop.strip() != "1":
             if crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
                 bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
-                photo = crop_photo(photo, bbox)
+                photo = crop_photo(tenant_id, photo, bbox)
             elif photo and row["bbox_y_min"] is not None:
                 bbox = (row["bbox_y_min"], row["bbox_x_min"], row["bbox_y_max"], row["bbox_x_max"])
-                photo = crop_photo(photo, bbox)
+                photo = crop_photo(tenant_id, photo, bbox)
 
         cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo, source_photo) VALUES (?, ?, ?, ?, ?)",
-            (target_box_id, name.strip(), description.strip(), photo, source_photo),
+            "INSERT INTO items (box_id, name, notes, photo, source_photo, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (target_box_id, name.strip(), description.strip(), photo, source_photo, tenant_id),
         )
         new_item_id = cur.lastrowid
         # Transfer tags from pending to the real item
         conn.execute(
-            "INSERT INTO item_tags (item_id, tag_id, value) "
-            "SELECT ?, tag_id, value FROM pending_item_tags WHERE pending_item_id = ?",
-            (new_item_id, pending_id),
+            "INSERT INTO item_tags (item_id, tag_id, value, tenant_id) "
+            "SELECT ?, tag_id, value, ? FROM pending_item_tags WHERE pending_item_id = ?",
+            (new_item_id, tenant_id, pending_id),
         )
         if tags.strip():
-            set_item_tags(conn, new_item_id, parse_tag_input(tags))
+            set_item_tags(conn, tenant_id, new_item_id, parse_tag_input(tags))
         conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
         conn.commit()
     return RedirectResponse("/queue", status_code=303)
@@ -1809,16 +2149,20 @@ def queue_state():
 
 
 @app.post("/queue/{pending_id}/delete")
-def queue_delete(pending_id: int):
+def queue_delete(request: Request, pending_id: int):
+    actor: Actor = request.state.actor
     with db() as conn:
         row = conn.execute(
-            "SELECT photo FROM pending_items WHERE id = ?", (pending_id,)
+            "SELECT photo, tenant_id FROM pending_items WHERE id = ?", (pending_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = row["tenant_id"] or actor.tenant_id
         conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
         conn.commit()
-        _delete_upload_if_orphan(conn, row["photo"])
+        _delete_upload_if_orphan(conn, tenant_id, row["photo"])
     return RedirectResponse("/queue", status_code=303)
 
 
@@ -2051,24 +2395,45 @@ def tags_autocomplete(q: str = ""):
     return [r["name"] for r in rows]
 
 
-def _box_art_path(box_row) -> Path | None:
-    """Resolve a box's background art file (or None). Tolerates missing files."""
+def _box_art_bytes(box_row) -> bytes | None:
+    """Decrypt a box's background art (if any) for embedding in a label.
+    Returns None when there's no art configured or the file is missing /
+    won't decrypt (rotation gone wrong, etc.) — labels still render
+    cleanly without art."""
     art = box_row["background_art"] if "background_art" in box_row.keys() else None
-    if not art:
+    tenant_id = box_row["tenant_id"] if "tenant_id" in box_row.keys() else None
+    if not art or tenant_id is None:
         return None
-    p = UPLOAD_DIR / art
-    return p if p.exists() else None
+    p = _tenant_file(tenant_id, art)
+    if not p.exists():
+        return None
+    try:
+        return _decrypt_for(tenant_id, p.read_bytes())
+    except Exception:
+        return None
+
+
+def _attach_art_bytes(box_dict: dict) -> dict:
+    """Mutate a box dict in place to add `art_bytes` for the label
+    renderers, then return it for chaining."""
+    box_dict["art_bytes"] = _box_art_bytes(box_dict)
+    return box_dict
 
 
 @app.get("/boxes/{box_id}/label.svg")
-def box_label_svg(box_id: int):
+def box_label_svg(request: Request, box_id: int):
+    actor: Actor = request.state.actor
     with db() as conn:
-        box = conn.execute("SELECT * FROM boxes WHERE id = ?", (box_id,)).fetchone()
+        box = conn.execute(
+            "SELECT * FROM boxes WHERE id = ?", (box_id,),
+        ).fetchone()
         if not box:
+            raise HTTPException(404)
+        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
             raise HTTPException(404)
     svg = labels.render_label_svg(
         box["id"], box["name"], box["notes"] or "", PUBLIC_URL,
-        background_art=_box_art_path(box),
+        background_art=_box_art_bytes(box),
     )
     return Response(
         content=svg,
@@ -2111,9 +2476,8 @@ def labels_sheet(request: Request):
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = _selected_boxes(conn, box_ids_raw)
-    svg = labels.render_sheet_svg(
-        [dict(b) for b in boxes], PUBLIC_URL, uploads_dir=UPLOAD_DIR,
-    )
+    payload = [_attach_art_bytes(dict(b)) for b in boxes]
+    svg = labels.render_sheet_svg(payload, PUBLIC_URL)
     return Response(
         content=svg,
         media_type="image/svg+xml",
@@ -2128,10 +2492,9 @@ def labels_sheet_pdf(request: Request):
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = _selected_boxes(conn, box_ids_raw)
+    payload = [_attach_art_bytes(dict(b)) for b in boxes]
     try:
-        pdf_bytes = labels.render_sheet_pdf(
-            [dict(b) for b in boxes], PUBLIC_URL, uploads_dir=UPLOAD_DIR,
-        )
+        pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL)
     except ImportError:
         # cairosvg + pypdf aren't installed in this environment (e.g. local
         # dev without the deps yet). Fall back to a clear error rather than
@@ -2154,13 +2517,11 @@ def labels_print(request: Request):
     in page-break-after divs — no PDF library needed for clean printing."""
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = [dict(b) for b in _selected_boxes(conn, box_ids_raw)]
+        boxes = [_attach_art_bytes(dict(b)) for b in _selected_boxes(conn, box_ids_raw)]
     pages = []
     for chunk_start in range(0, max(len(boxes), 1), labels.LABELS_PER_PAGE):
         chunk = boxes[chunk_start:chunk_start + labels.LABELS_PER_PAGE]
-        pages.append(labels.render_single_sheet_svg(
-            chunk, PUBLIC_URL, uploads_dir=UPLOAD_DIR,
-        ))
+        pages.append(labels.render_single_sheet_svg(chunk, PUBLIC_URL))
     return templates.TemplateResponse(
         request, "labels_print.html",
         {"sheet_svgs": pages, "label_count": len(boxes)},
@@ -2193,13 +2554,17 @@ def generate_box_art(
     so the prompt is grounded in actual contents instead of just the box
     name. The old image, if any, is cleaned up only after the new one writes
     successfully so a failed generation doesn't strand the box without art."""
+    actor: Actor = request.state.actor
     with db() as conn:
         box = conn.execute(
-            "SELECT id, name, notes, background_art FROM boxes WHERE id = ?",
+            "SELECT id, name, notes, background_art, tenant_id FROM boxes WHERE id = ?",
             (box_id,),
         ).fetchone()
         if not box:
             raise HTTPException(404)
+        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = box["tenant_id"] or actor.tenant_id
         items = [
             dict(r) for r in conn.execute(
                 "SELECT name, notes, photo FROM items WHERE box_id = ? "
@@ -2208,17 +2573,20 @@ def generate_box_art(
             ).fetchall()
         ]
 
-    # Up to 3 small photo references for the multimodal prompt. Read once so
-    # the genai call sees raw bytes; mime sniffed from extension since we
-    # always re-encode to JPEG on upload.
+    # Up to 3 small photo references for the multimodal prompt.  Read +
+    # decrypt; mime is always image/jpeg post-phase-2 because every
+    # upload is re-encoded as JPEG.
     photo_refs: list[tuple[bytes, str]] = []
     for it in items:
         if not it.get("photo"):
             continue
-        p = UPLOAD_DIR / it["photo"]
+        p = _tenant_file(tenant_id, it["photo"])
         if not p.exists():
             continue
-        photo_refs.append((p.read_bytes(), _EXT_TO_MIME.get(p.suffix.lower(), "image/jpeg")))
+        try:
+            photo_refs.append((_decrypt_for(tenant_id, p.read_bytes()), "image/jpeg"))
+        except Exception:
+            continue
         if len(photo_refs) >= 3:
             break
 
@@ -2233,7 +2601,7 @@ def generate_box_art(
         raise HTTPException(502, f"Art generation failed: {e}")
 
     new_name = f"art-{secrets.token_hex(8)}.jpg"
-    (UPLOAD_DIR / new_name).write_bytes(image_bytes)
+    _write_encrypted(tenant_id, new_name, image_bytes)
 
     with db() as conn:
         old = box["background_art"]
@@ -2243,7 +2611,7 @@ def generate_box_art(
         )
         conn.commit()
         if old and old != new_name:
-            _delete_upload_if_orphan(conn, old)
+            _delete_upload_if_orphan(conn, tenant_id, old)
 
     if _wants_json(request):
         return {"ok": True, "box_id": box_id, "background_art": new_name}
@@ -2259,16 +2627,20 @@ def clear_box_art(
     next_url: str = Form("/labels"),
 ):
     """Drop the generated background art for a box."""
+    actor: Actor = request.state.actor
     with db() as conn:
         row = conn.execute(
-            "SELECT background_art FROM boxes WHERE id = ?", (box_id,)
+            "SELECT background_art, tenant_id FROM boxes WHERE id = ?", (box_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404)
+        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = row["tenant_id"] or actor.tenant_id
         conn.execute("UPDATE boxes SET background_art = NULL WHERE id = ?", (box_id,))
         conn.commit()
         if row["background_art"]:
-            _delete_upload_if_orphan(conn, row["background_art"])
+            _delete_upload_if_orphan(conn, tenant_id, row["background_art"])
 
     if _wants_json(request):
         return {"ok": True, "box_id": box_id, "background_art": None}
@@ -2278,13 +2650,19 @@ def clear_box_art(
 
 
 @app.post("/boxes/{box_id}/delete")
-def delete_box(box_id: int, confirm: str = Form(...)):
+def delete_box(request: Request, box_id: int, confirm: str = Form(...)):
+    actor: Actor = request.state.actor
     with db() as conn:
-        box = conn.execute("SELECT name FROM boxes WHERE id = ?", (box_id,)).fetchone()
+        box = conn.execute(
+            "SELECT name, tenant_id FROM boxes WHERE id = ?", (box_id,),
+        ).fetchone()
         if not box:
+            raise HTTPException(404)
+        if box["tenant_id"] is not None and box["tenant_id"] != actor.tenant_id:
             raise HTTPException(404)
         if confirm.strip() != box["name"]:
             raise HTTPException(400, "Type the box name to confirm deletion")
+        tenant_id = box["tenant_id"] or actor.tenant_id
         photos = [r["photo"] for r in conn.execute(
             "SELECT photo FROM items WHERE box_id = ? AND photo IS NOT NULL", (box_id,)
         ).fetchall()]
@@ -2292,7 +2670,11 @@ def delete_box(box_id: int, confirm: str = Form(...)):
         conn.commit()
     for p in photos:
         try:
-            (UPLOAD_DIR / p).unlink()
+            _tenant_file(tenant_id, p).unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            _tenant_thumb(tenant_id, p).unlink()
         except FileNotFoundError:
             pass
     return RedirectResponse("/", status_code=303)
@@ -2393,12 +2775,16 @@ def locations_index(request: Request):
 
 
 @app.post("/locations")
-def create_location(name: str = Form(...)):
+def create_location(request: Request, name: str = Form(...)):
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
     with db() as conn:
-        cur = conn.execute("INSERT INTO locations (name) VALUES (?)", (name,))
+        cur = conn.execute(
+            "INSERT INTO locations (name, tenant_id) VALUES (?, ?)",
+            (name, actor.tenant_id),
+        )
         conn.commit()
     return RedirectResponse(f"/locations/{cur.lastrowid}", status_code=303)
 
@@ -2530,29 +2916,39 @@ def edit_location(location_id: int, name: str = Form(...)):
 
 
 @app.post("/locations/{location_id}/delete")
-def delete_location(location_id: int, confirm: str = Form(...)):
+def delete_location(request: Request, location_id: int, confirm: str = Form(...)):
+    actor: Actor = request.state.actor
     with db() as conn:
         loc = conn.execute(
-            "SELECT name, floorplan FROM locations WHERE id = ?", (location_id,),
+            "SELECT name, floorplan, tenant_id FROM locations WHERE id = ?", (location_id,),
         ).fetchone()
         if not loc:
             raise HTTPException(404)
+        if loc["tenant_id"] is not None and loc["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
         if confirm.strip() != loc["name"]:
             raise HTTPException(400, "Type the location name to confirm deletion")
+        tenant_id = loc["tenant_id"] or actor.tenant_id
         conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
         conn.commit()
         if loc["floorplan"]:
-            _delete_upload_if_orphan(conn, loc["floorplan"])
+            _delete_upload_if_orphan(conn, tenant_id, loc["floorplan"])
     return RedirectResponse("/locations", status_code=303)
 
 
 @app.post("/locations/{location_id}/floors")
-def create_floor(location_id: int, name: str = Form(...)):
+def create_floor(request: Request, location_id: int, name: str = Form(...)):
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
     with db() as conn:
-        if not conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
+        loc = conn.execute(
+            "SELECT tenant_id FROM locations WHERE id = ?", (location_id,),
+        ).fetchone()
+        if not loc:
+            raise HTTPException(404)
+        if loc["tenant_id"] is not None and loc["tenant_id"] != actor.tenant_id:
             raise HTTPException(404)
         # Append at the end so floor ordering matches creation order by default.
         next_sort = conn.execute(
@@ -2560,8 +2956,9 @@ def create_floor(location_id: int, name: str = Form(...)):
             (location_id,),
         ).fetchone()[0]
         cur = conn.execute(
-            "INSERT INTO floors (location_id, name, sort_order) VALUES (?, ?, ?)",
-            (location_id, name, next_sort),
+            "INSERT INTO floors (location_id, name, sort_order, tenant_id) "
+            "VALUES (?, ?, ?, ?)",
+            (location_id, name, next_sort, loc["tenant_id"] or actor.tenant_id),
         )
         conn.commit()
     return RedirectResponse(
@@ -2588,16 +2985,20 @@ def edit_floor(floor_id: int, name: str = Form(...)):
 
 
 @app.post("/floors/{floor_id}/floorplan")
-async def upload_floor_floorplan(floor_id: int, image: UploadFile = File(...)):
+async def upload_floor_floorplan(request: Request, floor_id: int, image: UploadFile = File(...)):
     if not image or not image.filename:
         raise HTTPException(400, "Image required")
+    actor: Actor = request.state.actor
     with db() as conn:
         floor = conn.execute(
-            "SELECT location_id, floorplan FROM floors WHERE id = ?", (floor_id,),
+            "SELECT location_id, floorplan, tenant_id FROM floors WHERE id = ?", (floor_id,),
         ).fetchone()
         if not floor:
             raise HTTPException(404)
-    new_name = save_photo_bytes(await image.read(), image.filename)
+        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = floor["tenant_id"] or actor.tenant_id
+    new_name = save_photo_bytes(tenant_id, await image.read(), image.filename)
     with db() as conn:
         old = floor["floorplan"]
         conn.execute(
@@ -2606,24 +3007,28 @@ async def upload_floor_floorplan(floor_id: int, image: UploadFile = File(...)):
         )
         conn.commit()
         if old and old != new_name:
-            _delete_upload_if_orphan(conn, old)
+            _delete_upload_if_orphan(conn, tenant_id, old)
     return RedirectResponse(
         f"/locations/{floor['location_id']}?floor={floor_id}&edit=1", status_code=303,
     )
 
 
 @app.post("/floors/{floor_id}/delete")
-def delete_floor(floor_id: int):
+def delete_floor(request: Request, floor_id: int):
+    actor: Actor = request.state.actor
     with db() as conn:
         floor = conn.execute(
-            "SELECT location_id, floorplan FROM floors WHERE id = ?", (floor_id,),
+            "SELECT location_id, floorplan, tenant_id FROM floors WHERE id = ?", (floor_id,),
         ).fetchone()
         if not floor:
             raise HTTPException(404)
+        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
+        tenant_id = floor["tenant_id"] or actor.tenant_id
         conn.execute("DELETE FROM floors WHERE id = ?", (floor_id,))
         conn.commit()
         if floor["floorplan"]:
-            _delete_upload_if_orphan(conn, floor["floorplan"])
+            _delete_upload_if_orphan(conn, tenant_id, floor["floorplan"])
     return RedirectResponse(f"/locations/{floor['location_id']}", status_code=303)
 
 
@@ -2638,19 +3043,23 @@ def create_room(
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
     with db() as conn:
         floor = conn.execute(
-            "SELECT location_id FROM floors WHERE id = ?", (floor_id,),
+            "SELECT location_id, tenant_id FROM floors WHERE id = ?", (floor_id,),
         ).fetchone()
         if not floor:
             raise HTTPException(404)
+        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
+            raise HTTPException(404)
         color = _next_room_color(conn, floor["location_id"])
         cur = conn.execute(
-            "INSERT INTO rooms (location_id, floor_id, name, x, y, w, h, color) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO rooms (location_id, floor_id, name, x, y, w, h, color, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 floor["location_id"], floor_id, name,
                 _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), color,
+                floor["tenant_id"] or actor.tenant_id,
             ),
         )
         conn.commit()
@@ -2762,9 +3171,10 @@ def room_boxes(request: Request, room_id: int):
     )
 
 
-def _referenced_uploads() -> set[str]:
-    """All upload filenames referenced by any row in the DB, plus their
-    derived thumbnail companions so the orphan sweep keeps both halves.
+def _referenced_uploads() -> set[tuple[int, str]]:
+    """All upload `(tenant_id, filename)` pairs referenced by any row in
+    the DB, plus their derived thumbnail companions so the orphan sweep
+    keeps both halves.
 
     This is the single source of truth for both /maintenance/cleanup
     (orphan deletion) and /maintenance/export (backup zip).  Any new
@@ -2772,22 +3182,29 @@ def _referenced_uploads() -> set[str]:
     will silently leak files on cleanup AND drop them from backups.
 
     DB tables themselves are captured by zipping the whole stash.db, so
-    DB-only additions (new tables, new non-file columns) need nothing."""
-    refs: set[str] = set()
+    DB-only additions (new tables, new non-file columns) need nothing.
+
+    The set is keyed on (tenant_id, filename) since after phase 2 every
+    upload lives under UPLOAD_DIR/{tenant_id}/{name} — same filename
+    can legitimately exist in two tenants without collision."""
+    refs: set[tuple[int, str]] = set()
     with db() as conn:
         for sql in (
-            "SELECT photo FROM items WHERE photo IS NOT NULL",
-            "SELECT source_photo FROM items WHERE source_photo IS NOT NULL",
-            "SELECT photo FROM pending_items WHERE photo IS NOT NULL",
-            "SELECT photo FROM ingest_jobs WHERE photo IS NOT NULL",
-            "SELECT background_art FROM boxes WHERE background_art IS NOT NULL",
-            "SELECT floorplan FROM floors WHERE floorplan IS NOT NULL",
-            "SELECT floorplan FROM locations WHERE floorplan IS NOT NULL",
+            "SELECT tenant_id, photo FROM items WHERE photo IS NOT NULL",
+            "SELECT tenant_id, source_photo FROM items WHERE source_photo IS NOT NULL",
+            "SELECT tenant_id, photo FROM pending_items WHERE photo IS NOT NULL",
+            "SELECT tenant_id, photo FROM ingest_jobs WHERE photo IS NOT NULL",
+            "SELECT tenant_id, background_art FROM boxes WHERE background_art IS NOT NULL",
+            "SELECT tenant_id, floorplan FROM floors WHERE floorplan IS NOT NULL",
+            "SELECT tenant_id, floorplan FROM locations WHERE floorplan IS NOT NULL",
         ):
-            refs.update(r[0] for r in conn.execute(sql).fetchall())
-    # The thumbs themselves aren't tracked in the DB but should follow
-    # whatever their source does.
-    refs.update(_thumb_path(name).name for name in list(refs))
+            for tid, name in conn.execute(sql).fetchall():
+                if tid is None or not name:
+                    continue
+                refs.add((tid, name))
+    # Thumb companions follow their source — same tenant, derived name.
+    for tid, name in list(refs):
+        refs.add((tid, _thumb_path(tid, name).name))
     return refs
 
 
@@ -2864,10 +3281,26 @@ def maintenance_cleanup():
     refs = _referenced_uploads()
     cleaned = 0
     if UPLOAD_DIR.exists():
-        for path in UPLOAD_DIR.iterdir():
-            if path.is_file() and path.name not in refs:
+        # Walk per-tenant subdirectories — every upload after phase 2
+        # lives at UPLOAD_DIR/{tenant_id}/{name}.  Anything in the flat
+        # root is either a leftover .tmp from an interrupted write or a
+        # pre-migration orphan; both get cleaned.
+        for entry in UPLOAD_DIR.iterdir():
+            if entry.is_dir() and entry.name.isdigit():
+                tid = int(entry.name)
+                for path in entry.iterdir():
+                    if path.is_file() and (tid, path.name) not in refs:
+                        try:
+                            path.unlink()
+                            cleaned += 1
+                        except FileNotFoundError:
+                            pass
+            elif entry.is_file():
+                # Stray file in the flat root (pre-migration leftover or
+                # broken write).  Always orphan in the post-phase-2
+                # world.
                 try:
-                    path.unlink()
+                    entry.unlink()
                     cleaned += 1
                 except FileNotFoundError:
                     pass
@@ -2876,7 +3309,13 @@ def maintenance_cleanup():
 
 @app.get("/maintenance/export")
 def maintenance_export():
-    """Stream a zip of stash.db + every upload file still referenced."""
+    """Stream a zip of stash.db + every upload file still referenced.
+
+    Files are written into the zip under their on-disk relative path
+    (`uploads/{tenant_id}/{name}`).  The blobs are stored as ciphertext —
+    the zip is a coherent snapshot of the on-disk state, not a cleartext
+    dump.  Restoring this zip without the matching STASH_KEK is useless,
+    by design (see spec § "Encryption at rest")."""
     import io as _io
     import zipfile
     from datetime import datetime
@@ -2894,10 +3333,10 @@ def maintenance_export():
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if DB_PATH.exists():
             zf.write(DB_PATH, arcname="stash.db")
-        for name in sorted(refs):
-            p = UPLOAD_DIR / name
+        for tid, name in sorted(refs):
+            p = _tenant_file(tid, name)
             if p.exists():
-                zf.write(p, arcname=f"uploads/{name}")
+                zf.write(p, arcname=f"uploads/{tid}/{name}")
     buf.seek(0)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Response(
@@ -2987,18 +3426,43 @@ def _extract_db_member_to_path(zf, member: str, dst: Path) -> None:
 
 
 def _restore_uploads_from_zip(zf) -> int:
-    """Extract `uploads/<name>` entries into UPLOAD_DIR. Returns count restored.
-    Skips entries with hostile names (path traversal, suspicious chars)."""
+    """Extract upload entries into the per-tenant directory layout.
+
+    Accepts both shapes the export has used:
+    * Phase-2+ zips: ``uploads/{tenant_id}/{name}`` (encrypted blob).
+    * Pre-phase-2 legacy zips: ``uploads/{name}`` (cleartext); these
+      get dropped into the flat root so the migration step can
+      relocate + encrypt them on next startup.
+
+    Skips entries with hostile names (path traversal, suspicious
+    chars).  Returns count restored."""
     import shutil
     upload_root = UPLOAD_DIR.resolve()
     count = 0
     for name in zf.namelist():
         if not name.startswith("uploads/") or name.endswith("/"):
             continue
-        base = name[len("uploads/"):]
-        if "/" in base or "\\" in base or ".." in base or not _UPLOAD_NAME_RE.match(base):
+        rel = name[len("uploads/"):]
+        if ".." in rel or "\\" in rel:
             continue
-        target = (UPLOAD_DIR / base).resolve()
+
+        parts = rel.split("/", 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            # Phase-2+ layout: uploads/{tenant_id}/{name}.
+            tid_segment, base = parts
+            if not _UPLOAD_NAME_RE.match(base):
+                continue
+            target_dir = UPLOAD_DIR / tid_segment
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = (target_dir / base).resolve()
+        else:
+            # Legacy flat layout; restore into the root so the next
+            # migrate_db relocates + encrypts.
+            base = rel
+            if "/" in base or not _UPLOAD_NAME_RE.match(base):
+                continue
+            target = (UPLOAD_DIR / base).resolve()
+
         if not target.is_relative_to(upload_root):
             continue
         with zf.open(name) as src, open(target, "wb") as out:
@@ -3072,3 +3536,12 @@ async def maintenance_import(file: UploadFile = File(...)):
             pass
 
     return RedirectResponse("/maintenance?imported=1", status_code=303)
+
+
+# ── Module bottom: schema + filesystem migrations run last ───────────
+# Every helper they need is defined above (encryption helpers,
+# _tenant_file, _migrate_uploads_to_encrypted_tenant_dirs).  Keeping
+# the calls here means the ordering between helper-definition and
+# helper-use never trips someone up.
+init_db()
+migrate_db()

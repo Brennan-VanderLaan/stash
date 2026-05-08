@@ -87,15 +87,19 @@ def _setup_pending(client, img_bytes, items, fmt="image/png"):
 
 
 def _get_item_photo(client, item_id=1):
-    """Helper: read an assigned item's photo as a PIL Image."""
+    """Helper: read an assigned item's photo as a PIL Image.  After phase 2
+    photos are encrypted on disk, so we serve through /uploads/{name} which
+    decrypts on the fly — that's the user-facing path anyway."""
+    import io
     import sys
     app_mod = sys.modules["app"]
     with app_mod.db() as conn:
         row = conn.execute(
             "SELECT photo, source_photo FROM items WHERE id = ?", (item_id,)
         ).fetchone()
-    photo_path = Path(app_mod.UPLOAD_DIR) / row["photo"]
-    return Image.open(photo_path), row
+    r = client.get(f"/uploads/{row['photo']}")
+    assert r.status_code == 200, f"GET /uploads/{row['photo']} returned {r.status_code}"
+    return Image.open(io.BytesIO(r.content)), row
 
 
 # ── Quadrant crop tests ──────────────────────────────────────────────
@@ -186,7 +190,7 @@ def test_source_photo_preserved_after_crop(client):
     assert row["source_photo"] is not None
     assert row["photo"] != row["source_photo"]
     import sys
-    assert (Path(sys.modules["app"].UPLOAD_DIR) / row["source_photo"]).exists()
+    assert (Path(sys.modules["app"].UPLOAD_DIR) / str(client.test_tenant_id) / row["source_photo"]).exists()
 
 
 def test_no_bbox_means_no_crop_and_source_equals_photo(client):
@@ -288,7 +292,7 @@ def test_recrop_preserves_original_for_items_without_source(client):
         row = conn.execute("SELECT photo, source_photo FROM items WHERE id = 1").fetchone()
     assert row["source_photo"] == original  # original captured, not lost
     assert row["photo"] != row["source_photo"]  # crop produced a distinct file
-    assert (Path(app_mod.UPLOAD_DIR) / row["source_photo"]).exists()
+    assert (Path(app_mod.UPLOAD_DIR) / str(client.test_tenant_id) / row["source_photo"]).exists()
 
 
 def test_rejecting_last_pending_keeps_shared_pile_photo(client):
@@ -306,7 +310,7 @@ def test_rejecting_last_pending_keeps_shared_pile_photo(client):
     app_mod = sys.modules["app"]
     with app_mod.db() as conn:
         source = conn.execute("SELECT source_photo FROM items WHERE id = 1").fetchone()["source_photo"]
-    source_path = Path(app_mod.UPLOAD_DIR) / source
+    source_path = Path(app_mod.UPLOAD_DIR) / str(client.test_tenant_id) / source
     assert source_path.exists()
 
     # Reject the remaining pending — its `photo` is the same pile photo, but

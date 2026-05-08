@@ -155,10 +155,11 @@ def test_tags_preserved_through_queue_assign(client):
     import sys
     app_mod = sys.modules["app"]
     with app_mod.db() as conn:
-        tag_id = app_mod.ensure_tag(conn, "auto-detected")
+        tag_id = app_mod.ensure_tag(conn, client.test_tenant_id, "auto-detected")
         conn.execute(
-            "INSERT INTO pending_item_tags (pending_item_id, tag_id) VALUES (?, ?)",
-            (1, tag_id),
+            "INSERT INTO pending_item_tags (pending_item_id, tag_id, tenant_id) "
+            "VALUES (?, ?, ?)",
+            (1, tag_id, client.test_tenant_id),
         )
         conn.commit()
 

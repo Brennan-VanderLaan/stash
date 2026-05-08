@@ -126,10 +126,18 @@ def test_add_item_with_photo_persists_and_serves(client, tmp_path):
     )
     assert r.status_code == 303
 
-    upload_dir = Path(client.app_module.UPLOAD_DIR)
+    # On disk the bytes are now encrypted (vault.encrypt_for_tenant) and
+    # carry the ENCRYPTED_MARKER prefix; the cleartext only exists when
+    # served through /uploads/{name}, which decrypts on the fly.  We
+    # check both: (1) on-disk file exists under the tenant subdir and
+    # is encrypted, (2) the served bytes match the input.
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
     saved = list(upload_dir.glob("*.jpg"))
     assert len(saved) == 1
-    assert saved[0].read_bytes() == fake_jpg
+    on_disk = saved[0].read_bytes()
+    assert on_disk.startswith(client.app_module.vault.ENCRYPTED_MARKER), \
+        "photo was written cleartext to disk — encryption-at-rest broken"
+    assert on_disk != fake_jpg
 
     detail = client.get("/boxes/1").text
     assert f"/uploads/{saved[0].name}" in detail
@@ -157,7 +165,7 @@ def test_delete_item_removes_row_and_photo(client):
         data={"name": "mug"},
         files={"photo": ("m.jpg", io.BytesIO(b"abc"), "image/jpeg")},
     )
-    upload_dir = Path(client.app_module.UPLOAD_DIR)
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
     photo = next(upload_dir.glob("*.jpg"))
 
     r = client.post("/items/1/delete", follow_redirects=False)
@@ -174,7 +182,7 @@ def test_delete_box_cascades_items_and_photos(client):
         data={"name": "mug"},
         files={"photo": ("m.jpg", io.BytesIO(b"abc"), "image/jpeg")},
     )
-    upload_dir = Path(client.app_module.UPLOAD_DIR)
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
     photo = next(upload_dir.glob("*.jpg"))
 
     r = client.post("/boxes/1/delete", data={"confirm": "Box A"}, follow_redirects=False)
@@ -203,7 +211,7 @@ def test_replace_item_photo(client):
         data={"name": "mug"},
         files={"photo": ("old.jpg", io.BytesIO(b"oldphoto"), "image/jpeg")},
     )
-    upload_dir = Path(client.app_module.UPLOAD_DIR)
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
     old_photo = next(upload_dir.glob("*.jpg"))
 
     r = client.post(
@@ -221,7 +229,9 @@ def test_replace_item_photo(client):
     assert item["photo"] == item["source_photo"]
     new_path = upload_dir / item["photo"]
     assert new_path.exists()
-    assert new_path.read_bytes() == b"newphoto"
+    # Verify cleartext via the served endpoint — disk bytes are
+    # encrypted ciphertext after phase 2.
+    assert client.get(f"/uploads/{item['photo']}").content == b"newphoto"
 
 
 def test_replace_photo_shows_in_box_detail(client):

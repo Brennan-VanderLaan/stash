@@ -68,23 +68,24 @@ def _fit_font_size(text: str, max_width_mm: float, ideal_size_mm: float, min_siz
     return max(scaled, min_size_mm)
 
 
-def _background_art_svg(art_path: Path | None) -> str:
+def _background_art_svg(art_bytes: bytes | None) -> str:
     """Render a faded illustration as the background of a label's text area.
 
     Embedded as base64 so a single SVG download is fully self-contained — no
     broken refs after `mv` or `scp` to a label-printing machine. The art is
     clipped to the right of the QR so the QR area stays pure white and the
     QR remains scannable. Opacity is intentionally low to keep text legible.
+
+    Takes decrypted bytes rather than a path because, post-phase-2, the
+    on-disk blob is ciphertext.  app.py decrypts once and hands the
+    plaintext in here.
     """
-    if not art_path or not art_path.exists():
+    if not art_bytes:
         return ""
-    try:
-        data = art_path.read_bytes()
-    except OSError:
-        return ""
-    suffix = art_path.suffix.lower()
-    mime = "image/png" if suffix == ".png" else "image/jpeg"
-    b64 = base64.b64encode(data).decode("ascii")
+    # Sniff JPEG magic; fallback to png. Box-art is generated as JPEG today
+    # but we accept both so a future generator change doesn't silently break.
+    mime = "image/jpeg" if art_bytes[:3] == b"\xff\xd8\xff" else "image/png"
+    b64 = base64.b64encode(art_bytes).decode("ascii")
     art_x = MARGIN_MM + QR_SIZE_MM + MARGIN_MM
     art_w = LABEL_W_MM - art_x - MARGIN_MM
     art_h = LABEL_H_MM - MARGIN_MM * 2
@@ -101,7 +102,7 @@ def _label_content(
     name: str,
     description: str,
     public_url: str,
-    background_art: Path | None = None,
+    background_art: bytes | None = None,
 ) -> str:
     qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
     vb_w = float(qr_vb.split()[2])
@@ -151,7 +152,7 @@ def render_label_svg(
     box_name: str,
     description: str = "",
     public_url: str = "",
-    background_art: Path | None = None,
+    background_art: bytes | None = None,
 ) -> str:
     inner = _label_content(box_id, box_name, description, public_url, background_art)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -162,12 +163,11 @@ def render_label_svg(
 </svg>"""
 
 
-def _resolve_art_path(b: dict, uploads_dir: Path | None) -> Path | None:
-    """Look up the on-disk art file for a box, if any. Tolerates missing dirs."""
-    art = b.get("background_art")
-    if not art or not uploads_dir:
-        return None
-    return uploads_dir / art
+def _resolve_art_bytes(b: dict) -> bytes | None:
+    """Pull pre-decrypted background-art bytes off the box dict.  app.py
+    populates ``art_bytes`` for each box before calling the label
+    renderers — labels.py never reads ciphertext directly."""
+    return b.get("art_bytes")
 
 
 def page_count(num_boxes: int) -> int:
@@ -180,7 +180,7 @@ def page_count(num_boxes: int) -> int:
 def render_sheet_svg(
     boxes: list[dict],
     public_url: str = "",
-    uploads_dir: Path | None = None,
+    uploads_dir: Path | None = None,  # legacy; unused after phase 2
 ) -> str:
     """Render every box across as many sheets as needed, stacked vertically.
 
@@ -205,7 +205,7 @@ def render_sheet_svg(
                 b = page_boxes[i]
                 inner = _label_content(
                     b["id"], b["name"], b.get("notes") or "", public_url,
-                    _resolve_art_path(b, uploads_dir),
+                    _resolve_art_bytes(b),
                 )
             else:
                 inner = (
@@ -226,7 +226,7 @@ def render_sheet_svg(
 def render_single_sheet_svg(
     boxes: list[dict],
     public_url: str = "",
-    uploads_dir: Path | None = None,
+    uploads_dir: Path | None = None,  # legacy; unused after phase 2
 ) -> str:
     """Render exactly one sheet (up to LABELS_PER_PAGE labels). Used by the print
     page so each sheet sits in its own page-break div."""
@@ -240,7 +240,7 @@ def render_single_sheet_svg(
             b = boxes[i]
             inner = _label_content(
                 b["id"], b["name"], b.get("notes") or "", public_url,
-                _resolve_art_path(b, uploads_dir),
+                _resolve_art_bytes(b),
             )
         else:
             inner = (
@@ -259,7 +259,7 @@ def render_single_sheet_svg(
 def render_sheet_pdf(
     boxes: list[dict],
     public_url: str = "",
-    uploads_dir: Path | None = None,
+    uploads_dir: Path | None = None,  # legacy; unused after phase 2
 ) -> bytes:
     """Render the same per-sheet layout as the print page, but as a real
     multi-page vector PDF. cairosvg renders each sheet's SVG to a vector

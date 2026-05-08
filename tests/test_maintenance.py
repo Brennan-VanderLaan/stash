@@ -18,6 +18,18 @@ def _fake_jpg() -> bytes:
 
 
 def _uploads(client) -> Path:
+    """The tenant-scoped upload directory for the conftest's default
+    Test tenant.  After phase 2 every photo lives under
+    UPLOAD_DIR/{tenant_id}/{name}, encrypted; tests that want to check
+    "did this file land on disk" should check this directory."""
+    p = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _uploads_root(client) -> Path:
+    """The undivided uploads root — used only by tests that explicitly
+    walk multi-tenant filesystem state (e.g. orphan-cleanup tests)."""
     return Path(client.app_module.UPLOAD_DIR)
 
 
@@ -154,8 +166,9 @@ def test_export_zip_contains_db_and_referenced_uploads(client):
                 "UNION SELECT photo FROM pending_items UNION SELECT photo FROM ingest_jobs"
             ).fetchall() if r[0]
         }
+    tid = client.test_tenant_id
     for name in referenced:
-        assert f"uploads/{name}" in names, f"missing {name} from export"
+        assert f"uploads/{tid}/{name}" in names, f"missing {name} from export"
 
 
 def test_export_excludes_orphan_files(client):
@@ -164,6 +177,8 @@ def test_export_excludes_orphan_files(client):
     r = client.get("/maintenance/export")
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = set(zf.namelist())
+    tid = client.test_tenant_id
+    assert f"uploads/{tid}/orphan.jpg" not in names
     assert "uploads/orphan.jpg" not in names
 
 
@@ -268,17 +283,18 @@ def test_export_includes_floorplans_and_background_art(client):
     floor_floorplan = f"{secrets.token_hex(8)}.jpg"
     (_uploads(client) / floor_floorplan).write_bytes(_fake_jpg())
 
+    tid = client.test_tenant_id
     with client.app_module.db() as conn:
         conn.execute("UPDATE boxes SET background_art = ? WHERE id = 1", (art_name,))
         cur = conn.execute(
-            "INSERT INTO locations (name, floorplan) VALUES ('home', ?)",
-            (loc_floorplan,),
+            "INSERT INTO locations (name, floorplan, tenant_id) VALUES ('home', ?, ?)",
+            (loc_floorplan, tid),
         )
         loc_id = cur.lastrowid
         conn.execute(
-            "INSERT INTO floors (location_id, name, floorplan, sort_order) "
-            "VALUES (?, 'main', ?, 0)",
-            (loc_id, floor_floorplan),
+            "INSERT INTO floors (location_id, name, floorplan, sort_order, tenant_id) "
+            "VALUES (?, 'main', ?, 0, ?)",
+            (loc_id, floor_floorplan, tid),
         )
         conn.commit()
 
@@ -288,7 +304,7 @@ def test_export_includes_floorplans_and_background_art(client):
         names = set(zf.namelist())
 
     for expected in (art_name, loc_floorplan, floor_floorplan):
-        assert f"uploads/{expected}" in names, f"{expected} missing from export"
+        assert f"uploads/{tid}/{expected}" in names, f"{expected} missing from export"
 
 
 def test_import_round_trip_restores_floorplans_and_background_art(client):
@@ -305,17 +321,18 @@ def test_import_round_trip_restores_floorplans_and_background_art(client):
     floor_floorplan = f"{secrets.token_hex(8)}.jpg"
     (_uploads(client) / floor_floorplan).write_bytes(_fake_jpg())
 
+    tid = client.test_tenant_id
     with client.app_module.db() as conn:
         conn.execute("UPDATE boxes SET background_art = ? WHERE id = 1", (art_name,))
         cur = conn.execute(
-            "INSERT INTO locations (name, floorplan) VALUES ('home', ?)",
-            (loc_floorplan,),
+            "INSERT INTO locations (name, floorplan, tenant_id) VALUES ('home', ?, ?)",
+            (loc_floorplan, tid),
         )
         loc_id = cur.lastrowid
         conn.execute(
-            "INSERT INTO floors (location_id, name, floorplan, sort_order) "
-            "VALUES (?, 'main', ?, 0)",
-            (loc_id, floor_floorplan),
+            "INSERT INTO floors (location_id, name, floorplan, sort_order, tenant_id) "
+            "VALUES (?, 'main', ?, 0, ?)",
+            (loc_id, floor_floorplan, tid),
         )
         conn.commit()
 
@@ -431,16 +448,26 @@ def test_version_endpoint_returns_running_version(client):
 
 
 def test_import_zip_skips_path_traversal_entries(client):
-    """A malicious zip with `uploads/../evil` must not write outside UPLOAD_DIR."""
-    # Build a minimal valid backup zip
+    """A malicious zip with `uploads/../evil` (or any path-traversal
+    variant) must not write outside UPLOAD_DIR.  Includes both the
+    phase-2 ``uploads/{tenant_id}/{name}`` shape and the legacy flat
+    ``uploads/{name}`` shape that pre-phase-2 backups still use."""
     client.post("/boxes", data={"name": "Box"})
     db_bytes = _read_db_bytes(client)
+    tid = client.test_tenant_id
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("stash.db", db_bytes)
+        # Both traversal styles — the phase-2 path-with-tenant shape and
+        # the legacy flat shape.
         zf.writestr("uploads/../escaped.txt", b"pwn")
-        zf.writestr("uploads/legit.jpg", _fake_jpg())
+        zf.writestr(f"uploads/{tid}/../escaped2.txt", b"pwn")
+        # Legitimate phase-2 entry.
+        zf.writestr(f"uploads/{tid}/legit.jpg", _fake_jpg())
+        # Legitimate legacy entry — restored to flat root, awaiting the
+        # next migrate_db sweep to relocate.
+        zf.writestr("uploads/legacy.jpg", _fake_jpg())
 
     r = client.post(
         "/maintenance/import",
@@ -448,5 +475,8 @@ def test_import_zip_skips_path_traversal_entries(client):
     )
     assert r.status_code == 200  # followed redirect to /maintenance
     uploads = _uploads(client)
+    root = _uploads_root(client)
     assert (uploads / "legit.jpg").exists()
-    assert not (uploads.parent / "escaped.txt").exists()
+    assert (root / "legacy.jpg").exists()
+    assert not (root.parent / "escaped.txt").exists()
+    assert not (root.parent / "escaped2.txt").exists()

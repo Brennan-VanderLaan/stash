@@ -29,34 +29,53 @@ def _add_box_with_photo(client) -> str:
         return conn.execute("SELECT photo FROM items WHERE id = 1").fetchone()[0]
 
 
+def _photo_path(client, photo: str) -> Path:
+    """On-disk encrypted-blob path for the test tenant's photo."""
+    return Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id) / photo
+
+
+def _thumb_path(client, photo: str) -> Path:
+    """On-disk encrypted-thumb path; same convention as the source."""
+    return client.app_module._thumb_path(client.test_tenant_id, photo)
+
+
+def _served_thumb_image(client, photo: str) -> Image.Image:
+    """Hit /thumbs/{photo} and decode the response (cleartext)."""
+    r = client.get(f"/thumbs/{photo}")
+    assert r.status_code == 200, f"GET /thumbs/{photo} → {r.status_code}"
+    return Image.open(io.BytesIO(r.content))
+
+
 # ── Pre-generation at upload time ────────────────────────────────────
+
 
 def test_upload_pregenerates_thumb(client):
     photo = _add_box_with_photo(client)
-    thumb = client.app_module._thumb_path(photo)
+    thumb = _thumb_path(client, photo)
     assert thumb.exists(), "thumb should be written alongside the source"
 
 
 def test_thumb_is_smaller_than_source(client):
     photo = _add_box_with_photo(client)
-    src = client.app_module.UPLOAD_DIR / photo
-    thumb = client.app_module._thumb_path(photo)
+    src = _photo_path(client, photo)
+    thumb = _thumb_path(client, photo)
     # The source 1600×1200 JPEG re-encodes to 2048-capped (no resize); thumb
-    # caps at THUMB_MAX_DIM (320). Bytes-on-disk should be much smaller.
+    # caps at THUMB_MAX_DIM (320). Bytes-on-disk should be much smaller —
+    # both are encrypted but the cleartext difference dominates.
     assert thumb.stat().st_size < src.stat().st_size, \
         f"thumb {thumb.stat().st_size} should be smaller than source {src.stat().st_size}"
 
 
 def test_thumb_max_dim_respected(client):
+    """Verified through the served (decrypted) bytes — disk is ciphertext."""
     photo = _add_box_with_photo(client)
-    thumb = client.app_module._thumb_path(photo)
-    with Image.open(thumb) as img:
-        max_dim = max(img.size)
-    assert max_dim <= client.app_module.THUMB_MAX_DIM, \
-        f"thumb longest side {max_dim} exceeds {client.app_module.THUMB_MAX_DIM}"
+    img = _served_thumb_image(client, photo)
+    assert max(img.size) <= client.app_module.THUMB_MAX_DIM, \
+        f"thumb longest side {max(img.size)} exceeds {client.app_module.THUMB_MAX_DIM}"
 
 
 # ── /thumbs endpoint ─────────────────────────────────────────────────
+
 
 def test_thumb_endpoint_serves_thumb_jpg(client):
     photo = _add_box_with_photo(client)
@@ -71,7 +90,7 @@ def test_thumb_endpoint_lazy_generates_for_existing_photos(client):
     """Pre-existing photos (from before this feature shipped) won't have a
     thumb file. Hitting the endpoint must generate one on demand."""
     photo = _add_box_with_photo(client)
-    thumb = client.app_module._thumb_path(photo)
+    thumb = _thumb_path(client, photo)
     thumb.unlink()  # simulate the pre-thumb-feature state
     assert not thumb.exists()
     r = client.get(f"/thumbs/{photo}")
@@ -112,15 +131,17 @@ def test_thumb_endpoint_falls_back_to_source_on_decode_failure(client):
 
 # ── Orphan handling ─────────────────────────────────────────────────
 
+
 def test_thumb_deleted_when_source_orphan_cleaned(client):
     photo = _add_box_with_photo(client)
-    thumb = client.app_module._thumb_path(photo)
-    assert (client.app_module.UPLOAD_DIR / photo).exists()
+    src = _photo_path(client, photo)
+    thumb = _thumb_path(client, photo)
+    assert src.exists()
     assert thumb.exists()
 
     # Deleting the item drops the only reference → source + thumb both go.
     client.post("/items/1/delete")
-    assert not (client.app_module.UPLOAD_DIR / photo).exists()
+    assert not src.exists()
     assert not thumb.exists(), "thumb leaked after source orphan cleanup"
 
 
@@ -129,7 +150,7 @@ def test_maintenance_cleanup_keeps_referenced_thumbs(client):
     referenced-uploads set. Thumbs need to be in that set or every cleanup
     nukes them."""
     photo = _add_box_with_photo(client)
-    thumb = client.app_module._thumb_path(photo)
+    thumb = _thumb_path(client, photo)
     assert thumb.exists()
 
     client.post("/maintenance/cleanup")
@@ -139,21 +160,23 @@ def test_maintenance_cleanup_keeps_referenced_thumbs(client):
 def test_thumb_handles_large_source_without_full_decode(client):
     """A pre-2048px-cap source (e.g. imported from an old backup zip that
     didn't go through save_photo_bytes) must still thumb cleanly. We use a
-    4000×3000 JPEG — without draft() this would balloon to ~36 MB raw RGB."""
-    # Drop a large JPEG straight into UPLOAD_DIR, bypassing save_photo_bytes
-    # (mirrors the import-zip-restores-uploads code path).
+    4000×3000 JPEG — without draft() this would balloon to ~36 MB raw RGB.
+
+    Drops the JPEG straight onto the encrypted layer (vault.encrypt_blob)
+    so the read path can decrypt it, mirroring how the migration step
+    relocates a pre-existing pile photo into the tenant's directory."""
     big = io.BytesIO()
     Image.new("RGB", (4000, 3000), color=(120, 60, 30)).save(big, format="JPEG", quality=85)
     big_bytes = big.getvalue()
     name = "abcdef0123456789.jpg"
-    (client.app_module.UPLOAD_DIR / name).write_bytes(big_bytes)
+    client.app_module._write_encrypted(client.test_tenant_id, name, big_bytes)
 
     r = client.get(f"/thumbs/{name}")
     assert r.status_code == 200
-    thumb = client.app_module._thumb_path(name)
+    thumb = _thumb_path(client, name)
     assert thumb.exists(), "thumb generation must succeed for large sources"
-    with Image.open(thumb) as t:
-        assert max(t.size) <= client.app_module.THUMB_MAX_DIM
+    img = _served_thumb_image(client, name)
+    assert max(img.size) <= client.app_module.THUMB_MAX_DIM
 
 
 def test_concurrent_thumb_requests_do_not_double_generate(client):
@@ -164,7 +187,7 @@ def test_concurrent_thumb_requests_do_not_double_generate(client):
     import threading
     photo = _add_box_with_photo(client)
     # Force a re-generate by deleting the pre-generated thumb
-    client.app_module._thumb_path(photo).unlink()
+    _thumb_path(client, photo).unlink()
 
     statuses = []
     def hit():
@@ -174,15 +197,15 @@ def test_concurrent_thumb_requests_do_not_double_generate(client):
     for t in threads: t.join()
 
     assert all(s == 200 for s in statuses), f"got non-200s: {statuses}"
-    assert client.app_module._thumb_path(photo).exists()
+    assert _thumb_path(client, photo).exists()
 
 
 def test_maintenance_cleanup_removes_orphaned_thumbs(client):
     """Conversely, a thumb whose source is gone (e.g. half-cleaned-up state
     from a crash) is itself an orphan and the sweep should remove it."""
     photo = _add_box_with_photo(client)
-    src = client.app_module.UPLOAD_DIR / photo
-    thumb = client.app_module._thumb_path(photo)
+    src = _photo_path(client, photo)
+    thumb = _thumb_path(client, photo)
 
     # Simulate a half-clean state — delete the source from disk only,
     # without going through the endpoint, leaving the thumb behind. Then

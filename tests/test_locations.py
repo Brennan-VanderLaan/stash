@@ -89,6 +89,68 @@ def test_personal_tenant_backfill_for_existing_data(tmp_path, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM tenant_members").fetchone()[0] == 1
 
 
+def test_filesystem_migration_relocates_and_encrypts_legacy_cleartext(tmp_path, monkeypatch):
+    """Pre-phase-2 cleartext photos in UPLOAD_DIR's flat root must be
+    relocated to UPLOAD_DIR/{tenant_id}/{name} and re-written as
+    encrypted blobs on the first migrate_db that sees them.  Idempotent
+    on subsequent runs."""
+    import importlib
+    import sqlite3
+    import sys
+
+    db_path = tmp_path / "single.db"
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setenv("STASH_DB", str(db_path))
+    monkeypatch.setenv("STASH_UPLOADS", str(upload_dir))
+    monkeypatch.setenv("STASH_BOOTSTRAP_MEMBER_EMAIL", "live@example.com")
+
+    # Pre-multi-tenancy schema with one item pointing at a cleartext
+    # photo file in the flat root.
+    cleartext = b"this is the photo's plaintext bytes"
+    cleartext_path = upload_dir / "abcdef0123.jpg"
+    cleartext_path.write_bytes(cleartext)
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "CREATE TABLE boxes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "name TEXT NOT NULL, location TEXT, notes TEXT, "
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+        "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "box_id INTEGER NOT NULL, name TEXT NOT NULL, notes TEXT, "
+        "photo TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+    )
+    conn.execute("INSERT INTO boxes (name) VALUES ('Garage')")
+    conn.execute("INSERT INTO items (box_id, name, photo) VALUES (1, 'drill', 'abcdef0123.jpg')")
+    conn.commit()
+    conn.close()
+
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app
+    importlib.reload(app)
+
+    # The original cleartext file is gone from the flat root, replaced
+    # by an encrypted blob in tenant 1's directory.
+    assert not cleartext_path.exists(), "cleartext file survived migration"
+    encrypted_path = upload_dir / "1" / "abcdef0123.jpg"
+    assert encrypted_path.exists(), "file did not relocate into tenant subdir"
+    on_disk = encrypted_path.read_bytes()
+    assert on_disk.startswith(app.vault.ENCRYPTED_MARKER), \
+        "relocated file is not encrypted"
+    assert cleartext not in on_disk, "cleartext bytes still present in ciphertext"
+
+    # And the cleartext can still be retrieved through the decrypt path.
+    decrypted = app._decrypt_for(1, on_disk)
+    assert decrypted == cleartext
+
+    # Idempotent: a second migrate_db run leaves the encrypted file as-is.
+    mtime_before = encrypted_path.stat().st_mtime
+    app.migrate_db()
+    assert encrypted_path.read_bytes() == on_disk
+    # mtime check is best-effort (filesystem timestamp resolution varies).
+
+
 def test_personal_tenant_falls_back_to_allowed_emails(tmp_path, monkeypatch):
     """Existing single-user deploys have STASH_ALLOWED_EMAILS set, not
     STASH_BOOTSTRAP_MEMBER_EMAIL.  The migration falls back to the first
@@ -376,7 +438,7 @@ def test_upload_floorplan_to_floor_saves_image(client):
     with client.app_module.db() as conn:
         plan = conn.execute("SELECT floorplan FROM floors WHERE id = ?", (floor_id,)).fetchone()[0]
     assert plan
-    assert (client.app_module.UPLOAD_DIR / plan).exists()
+    assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / plan).exists()
 
 
 def test_replace_floor_floorplan_cleans_up_old_file(client):
@@ -390,7 +452,7 @@ def test_replace_floor_floorplan_cleans_up_old_file(client):
     with client.app_module.db() as conn:
         second = conn.execute("SELECT floorplan FROM floors WHERE id = ?", (floor_id,)).fetchone()[0]
     assert first != second
-    assert not (client.app_module.UPLOAD_DIR / first).exists()
+    assert not (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / first).exists()
 
 
 def test_floorplan_files_are_protected_from_orphan_cleanup(client):
@@ -399,7 +461,7 @@ def test_floorplan_files_are_protected_from_orphan_cleanup(client):
     with client.app_module.db() as conn:
         plan = conn.execute("SELECT floorplan FROM floors WHERE id = ?", (floor_id,)).fetchone()[0]
     client.post("/maintenance/cleanup")
-    assert (client.app_module.UPLOAD_DIR / plan).exists(), \
+    assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / plan).exists(), \
         "cleanup deleted referenced floorplan"
 
 

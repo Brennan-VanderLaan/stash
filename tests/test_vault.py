@@ -207,3 +207,59 @@ def test_encrypt_for_tenant_separate_tenants_cannot_decrypt_each_other(tmp_path)
     blob = vault.encrypt_for_tenant(conn, tenant_a, kek, b"private to A")
     with pytest.raises(Exception):
         vault.decrypt_for_tenant(conn, tenant_b, kek, blob)
+
+
+# ── End-to-end: photos on disk are ciphertext ───────────────────────
+
+
+def test_uploaded_photos_are_ciphertext_on_disk(client):
+    """The ethos says casual disk access can't read user photos.  Verify
+    that any photo written through the standard upload path lands as a
+    blob carrying the ENCRYPTED_MARKER prefix, not raw JPEG bytes."""
+    import io
+    from PIL import Image as _Image
+    from pathlib import Path
+
+    client.post("/boxes", data={"name": "Box"})
+    real_jpg = io.BytesIO()
+    _Image.new("RGB", (200, 200), color=(80, 60, 200)).save(real_jpg, format="JPEG")
+    client.post(
+        "/boxes/1/items",
+        data={"name": "thing"},
+        files={"photo": ("p.jpg", io.BytesIO(real_jpg.getvalue()), "image/jpeg")},
+    )
+
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
+    files = list(upload_dir.glob("*.jpg"))
+    assert files, "no upload landed on disk"
+    for f in files:
+        body = f.read_bytes()
+        assert body.startswith(client.app_module.vault.ENCRYPTED_MARKER), \
+            f"{f.name} stored cleartext — encryption-at-rest broken"
+        assert b"\xff\xd8\xff" not in body[:10], \
+            f"{f.name} starts with JPEG magic — encryption broke down"
+
+
+def test_thumbs_are_also_ciphertext_on_disk(client):
+    """Thumbnails carry the same risk as sources — verify they're
+    encrypted too."""
+    import io
+    from PIL import Image as _Image
+    from pathlib import Path
+
+    client.post("/boxes", data={"name": "Box"})
+    real_jpg = io.BytesIO()
+    _Image.new("RGB", (1600, 1200), color=(80, 60, 200)).save(real_jpg, format="JPEG")
+    client.post(
+        "/boxes/1/items",
+        data={"name": "thing"},
+        files={"photo": ("p.jpg", io.BytesIO(real_jpg.getvalue()), "image/jpeg")},
+    )
+
+    upload_dir = Path(client.app_module.UPLOAD_DIR) / str(client.test_tenant_id)
+    thumbs = list(upload_dir.glob("*_thumb.jpg"))
+    assert thumbs, "no thumb pre-generated"
+    for t in thumbs:
+        body = t.read_bytes()
+        assert body.startswith(client.app_module.vault.ENCRYPTED_MARKER), \
+            f"thumb {t.name} stored cleartext"

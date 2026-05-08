@@ -216,7 +216,7 @@ def test_generate_art_endpoint_saves_and_links_image(client, monkeypatch):
     with client.app_module.db() as conn:
         row = conn.execute("SELECT background_art FROM boxes WHERE id = 1").fetchone()
     assert row["background_art"], "background_art column not set after generation"
-    assert (client.app_module.UPLOAD_DIR / row["background_art"]).exists()
+    assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / row["background_art"]).exists()
 
 
 def test_label_svg_embeds_background_art_when_set(client, monkeypatch):
@@ -245,14 +245,14 @@ def test_clear_art_drops_image_and_orphans_file(client, monkeypatch):
     client.post("/boxes/1/generate-art")
     with client.app_module.db() as conn:
         art = conn.execute("SELECT background_art FROM boxes WHERE id = 1").fetchone()[0]
-    assert (client.app_module.UPLOAD_DIR / art).exists()
+    assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / art).exists()
 
     r = client.post("/boxes/1/clear-art", follow_redirects=False)
     assert r.status_code == 303
     with client.app_module.db() as conn:
         row = conn.execute("SELECT background_art FROM boxes WHERE id = 1").fetchone()
     assert row["background_art"] is None
-    assert not (client.app_module.UPLOAD_DIR / art).exists(), "orphan art file leaked"
+    assert not (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / art).exists(), "orphan art file leaked"
 
 
 def test_generate_art_returns_json_for_ajax_clients(client, monkeypatch):
@@ -369,7 +369,7 @@ def test_art_files_are_protected_from_orphan_cleanup(client, monkeypatch):
         art = conn.execute("SELECT background_art FROM boxes WHERE id = 1").fetchone()[0]
 
     client.post("/maintenance/cleanup")
-    assert (client.app_module.UPLOAD_DIR / art).exists(), \
+    assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / art).exists(), \
         "cleanup deleted referenced background art"
 
 

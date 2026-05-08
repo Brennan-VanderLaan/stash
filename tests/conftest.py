@@ -1,4 +1,6 @@
+import base64
 import importlib
+import secrets
 import sys
 from pathlib import Path
 
@@ -18,6 +20,20 @@ TEST_EMAIL = "test@example.com"
 TEST_TENANT_NAME = "Test"
 
 
+@pytest.fixture(autouse=True)
+def _test_kek(monkeypatch):
+    """Every test gets a fresh KEK env var so app.py can import.  Tests
+    that reload `app` directly (i.e. don't use the `client` fixture)
+    inherit this; the DEK cache is also cleared so a tenant's wrapped
+    DEK from a previous test can't accidentally decrypt under a new
+    KEK."""
+    monkeypatch.setenv(
+        "STASH_KEK", base64.b64encode(secrets.token_bytes(32)).decode(),
+    )
+    import vault
+    vault.clear_dek_cache()
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("STASH_DB", str(tmp_path / "test.db"))
@@ -30,6 +46,8 @@ def client(tmp_path, monkeypatch):
         del sys.modules["app"]
     import app as app_module
     importlib.reload(app_module)
+    import vault
+    vault.clear_dek_cache()
 
     # Stand up a Test tenant + maintainer member for the default actor.
     # The migration only auto-creates a Personal tenant when there's
