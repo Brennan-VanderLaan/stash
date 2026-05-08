@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.9.0...v1.10.0) (2026-05-08)
+
+
+### Features
+
+* **ingest:** packing-session box picker pre-fills sort queue ([995ead0](https://github.com/Brennan-VanderLaan/stash/commit/995ead033f931bc0b64b3cea0665c4b928bece98))
+
 ## [1.9.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.8.1...v1.9.0) (2026-05-08)
 
 
