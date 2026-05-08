@@ -5,9 +5,10 @@ import secrets
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import labels
 import vault
@@ -98,6 +99,173 @@ def _trigger_watchtower_update() -> None:
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
+
+
+# ── Sassy error pages (404, 401, 429, …) ─────────────────────────────
+#
+# Browsers that navigate into a dead URL get a Siberian Forest cat or
+# a wise tortoise scoffing at them; API clients (Accept: !text/html,
+# /api/*, /mcp/*) keep the JSON ``{"detail": "..."}`` contract so
+# nothing programmatic breaks.  Per-status copy lives in a dict so a
+# new status code is one entry plus a quip — no new template work.
+#
+# Tone rules: sassy, never mean.  Lean into the cat-is-judging-you /
+# turtle-is-unbothered split.  No emoji walls, no tech jargon in the
+# user-visible quip — keep the apology short and the personality long.
+_ERROR_COPY = {
+    401: {
+        "mascot": "cat",
+        "headline": "Papers, please.",
+        "quip": (
+            "The cat does not recognize you.  Show valid credentials and "
+            "she may, eventually, allow you back in.  Maybe."
+        ),
+        "signature": "the cat, unblinking",
+    },
+    403: {
+        "mascot": "cat",
+        "headline": "She doesn't think so.",
+        "quip": (
+            "Big fluffy paw across the doorway.  You may be a Person of "
+            "Importance somewhere — but not here, not today."
+        ),
+        "signature": "the cat, with regrets (none, actually)",
+    },
+    404: {
+        "mascot": "turtle",
+        "headline": "You took a wrong turn at the pond.",
+        "quip": (
+            "Whatever you were looking for is not here.  Possibly never was.  "
+            "The tortoise has been here for forty years and would have noticed."
+        ),
+        "signature": "the tortoise, contemplating a leaf",
+    },
+    405: {
+        "mascot": "cat",
+        "headline": "Wrong door.",
+        "quip": (
+            "That URL exists, but it does not answer to that knock.  "
+            "Try the front entrance like everyone else."
+        ),
+        "signature": "the cat, unimpressed",
+    },
+    413: {
+        "mascot": "cat",
+        "headline": "That is a LOT of file.",
+        "quip": (
+            "Even the cat — who has personally knocked an entire dinner "
+            "off the counter — thinks that's excessive.  Try a smaller upload."
+        ),
+        "signature": "the cat, raising one judgmental eyebrow",
+    },
+    422: {
+        "mascot": "cat",
+        "headline": "She read the form. She has notes.",
+        "quip": (
+            "Some required field is missing or off.  The cat is willing to "
+            "wait while you fix it.  She has nowhere else to be."
+        ),
+        "signature": "the cat, tail twitching",
+    },
+    429: {
+        "mascot": "turtle",
+        "headline": "Slow your roll.",
+        "quip": (
+            "You're moving faster than the tortoise's worldview can tolerate.  "
+            "Step away from the keyboard, look out a window, return refreshed."
+        ),
+        "signature": "the tortoise, who got there eventually",
+    },
+    500: {
+        "mascot": "cat",
+        "headline": "She knocked something off the shelf.",
+        "quip": (
+            "The cat made direct eye contact and pushed something important "
+            "off the desk.  Engineers have been notified.  Try again in a moment."
+        ),
+        "signature": "the cat, deeply unsorry",
+    },
+    503: {
+        "mascot": "turtle",
+        "headline": "Currently napping.",
+        "quip": (
+            "The tortoise is taking a moment.  Service will resume when the "
+            "tortoise feels like it.  Probably soon."
+        ),
+        "signature": "the tortoise, eyes closed, vibing",
+    },
+}
+
+_DEFAULT_ERROR_COPY = {
+    "mascot": "cat",
+    "headline": "Something fluffy has gone wrong.",
+    "quip": (
+        "The cat blames the turtle.  The turtle blames the cat.  "
+        "Engineers are mediating."
+    ),
+    "signature": "house management",
+}
+
+
+def _wants_html(request: Request) -> bool:
+    """Decide whether to render HTML or fall back to JSON.
+
+    JSON wins for: /api/*, /mcp/*, ``Accept: application/json`` (no
+    HTML accepted), and explicit ``X-Requested-With: XMLHttpRequest``.
+    Everything else (browser nav, HTMX, plain ``<a>`` clicks) gets
+    the sassy HTML page."""
+    path = request.url.path
+    if path.startswith("/api/") or path.startswith("/mcp"):
+        return False
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return False
+    accept = request.headers.get("accept", "") or ""
+    if "text/html" in accept:
+        return True
+    if "application/json" in accept:
+        return False
+    # Browsers send ``*/*`` on direct navigation; treat that as HTML.
+    return True
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    status = exc.status_code
+    copy = _ERROR_COPY.get(status, _DEFAULT_ERROR_COPY)
+    if not _wants_html(request):
+        return JSONResponse(
+            status_code=status,
+            content={"detail": exc.detail or copy["headline"]},
+            headers=getattr(exc, "headers", None) or {},
+        )
+    referer = request.headers.get("referer", "")
+    detail = None
+    # We surface ``exc.detail`` only when it's a string and not the
+    # default Starlette message — those defaults ("Not Found", etc.)
+    # would clash with our headline.  Custom raise-site messages
+    # (``HTTPException(429, "AI quota exceeded …")``) are exactly the
+    # kind of thing the user wants to see.
+    raw = exc.detail
+    if isinstance(raw, str) and raw and raw.lower() not in (
+        "not found", "unauthorized", "forbidden", "method not allowed",
+        "internal server error", "service unavailable",
+    ):
+        detail = raw
+    response = templates.TemplateResponse(
+        request, "error.html",
+        {
+            "status": status,
+            "headline": copy["headline"],
+            "quip": copy["quip"],
+            "mascot": copy["mascot"],
+            "signature": copy.get("signature", ""),
+            "detail": detail,
+            "back_url": referer,
+        },
+        status_code=status,
+        headers=getattr(exc, "headers", None) or {},
+    )
+    return response
 
 # /api/v1 — bearer-auth JSON API (phase 11).  Routes live in api.py
 # so the surface stays self-contained for the eventual MCP server +

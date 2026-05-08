@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 220" width="240" height="220" role="img" aria-label="A fluffy Siberian Forest cat">
+  {# Siberian Forest cat — fluffy, regal, mildly judgmental.  Body is
+     a soft blob with a thick neck ruff; tail loops behind in a fluffy
+     S-curve.  Eyes are big amber circles with vertical pupils.  Built
+     entirely from paths so it scales cleanly and the dark/light
+     theme can recolor it via currentColor. #}
+  <defs>
+    <radialGradient id="cat-fur" cx="0.5" cy="0.4" r="0.7">
+      <stop offset="0%" stop-color="#c9a47a"/>
+      <stop offset="60%" stop-color="#8a6a4a"/>
+      <stop offset="100%" stop-color="#5a432d"/>
+    </radialGradient>
+    <radialGradient id="cat-eye" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#ffd76a"/>
+      <stop offset="100%" stop-color="#c2841f"/>
+    </radialGradient>
+  </defs>
+  <g>
+    {# Tail: fluffy curl behind the body #}
+    <path d="M 200 130 Q 230 110 215 75 Q 195 50 165 70 Q 175 95 195 110"
+          fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.5"/>
+    {# Body / neck ruff — extra fluff blob #}
+    <path d="M 60 200
+             Q 30 180 40 140
+             Q 35 110 60 95
+             Q 70 70 100 65
+             Q 130 60 150 75
+             Q 180 80 195 110
+             Q 205 150 195 185
+             Q 190 205 165 205
+             Q 100 215 60 200 Z"
+          fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.5"/>
+    {# Head #}
+    <path d="M 75 110
+             Q 55 100 60 75
+             Q 70 50 100 50
+             Q 120 35 140 50
+             Q 170 50 175 75
+             Q 180 100 165 115
+             Q 145 130 120 130
+             Q 90 130 75 110 Z"
+          fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.5"/>
+    {# Tufted ears #}
+    <path d="M 75 65 L 65 30 L 90 50 Z" fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.5"/>
+    <path d="M 145 50 L 165 25 L 165 60 Z" fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.5"/>
+    {# Inner ear hint #}
+    <path d="M 78 60 L 75 45 L 85 55 Z" fill="#3a2a1a" opacity="0.5"/>
+    <path d="M 152 50 L 158 38 L 158 55 Z" fill="#3a2a1a" opacity="0.5"/>
+    {# Eyes — big amber, vertical slit pupils #}
+    <ellipse cx="100" cy="88" rx="11" ry="13" fill="url(#cat-eye)" stroke="#3a2a1a" stroke-width="1.2"/>
+    <ellipse cx="140" cy="88" rx="11" ry="13" fill="url(#cat-eye)" stroke="#3a2a1a" stroke-width="1.2"/>
+    <ellipse cx="100" cy="88" rx="2" ry="10" fill="#1b1208"/>
+    <ellipse cx="140" cy="88" rx="2" ry="10" fill="#1b1208"/>
+    <ellipse cx="97" cy="83" rx="2" ry="2" fill="#fff" opacity="0.9"/>
+    <ellipse cx="137" cy="83" rx="2" ry="2" fill="#fff" opacity="0.9"/>
+    {# Nose + mouth #}
+    <path d="M 117 105 L 123 105 L 120 110 Z" fill="#a04848" stroke="#3a2a1a" stroke-width="0.8"/>
+    <path d="M 120 110 Q 113 116 108 113" stroke="#3a2a1a" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    <path d="M 120 110 Q 127 116 132 113" stroke="#3a2a1a" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    {# Whiskers — three each side #}
+    <g stroke="#e7d3b1" stroke-width="0.8" stroke-linecap="round" opacity="0.85">
+      <path d="M 90 108 L 60 105"/>
+      <path d="M 90 112 L 58 115"/>
+      <path d="M 90 116 L 60 124"/>
+      <path d="M 150 108 L 180 105"/>
+      <path d="M 150 112 L 182 115"/>
+      <path d="M 150 116 L 180 124"/>
+    </g>
+    {# Front paws peeking from the fluff #}
+    <ellipse cx="90" cy="200" rx="14" ry="9" fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.2"/>
+    <ellipse cx="140" cy="200" rx="14" ry="9" fill="url(#cat-fur)" stroke="#3a2a1a" stroke-width="1.2"/>
+  </g>
+</svg>

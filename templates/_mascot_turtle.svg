@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200" role="img" aria-label="A wise tortoise taking its time">
+  {# Wise tortoise — big domed shell with hex pattern, four stumpy
+     legs, head poking out with a half-lidded "I have all the time
+     in the world" expression.  Built from paths so the dark/light
+     theme can recolor it via currentColor. #}
+  <defs>
+    <radialGradient id="shell" cx="0.5" cy="0.3" r="0.8">
+      <stop offset="0%" stop-color="#7e9d4f"/>
+      <stop offset="55%" stop-color="#557031"/>
+      <stop offset="100%" stop-color="#314721"/>
+    </radialGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a2c069"/>
+      <stop offset="100%" stop-color="#6e8a3c"/>
+    </linearGradient>
+  </defs>
+  <g>
+    {# Legs — four stumps, two front & two back #}
+    <ellipse cx="55" cy="155" rx="18" ry="11" fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    <ellipse cx="195" cy="155" rx="18" ry="11" fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    <ellipse cx="80" cy="170" rx="14" ry="9"  fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    <ellipse cx="170" cy="170" rx="14" ry="9" fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    {# Tail — small wedge poking out the back #}
+    <path d="M 215 140 L 230 145 L 218 152 Z" fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    {# Head & neck poking out the front, slightly cocked #}
+    <path d="M 30 130
+             Q 5 120 10 100
+             Q 15 78 40 80
+             Q 60 78 65 100
+             Q 65 130 45 138
+             Q 32 138 30 130 Z"
+          fill="url(#skin)" stroke="#2d3e1a" stroke-width="1.2"/>
+    {# Eye — half lidded, contemplating #}
+    <ellipse cx="32" cy="98" rx="5" ry="4" fill="#fff" stroke="#2d3e1a" stroke-width="1"/>
+    <ellipse cx="32" cy="100" rx="2.5" ry="2.5" fill="#1b1208"/>
+    <path d="M 27 96 Q 32 92 37 96" stroke="#2d3e1a" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    {# Mouth — tight Mona Lisa line #}
+    <path d="M 16 115 Q 22 119 28 115" stroke="#2d3e1a" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    {# Shell — dome shape #}
+    <path d="M 60 140
+             Q 50 70 120 60
+             Q 195 65 200 140
+             Q 130 165 60 140 Z"
+          fill="url(#shell)" stroke="#1f2c14" stroke-width="1.5"/>
+    {# Hex tiles on the shell #}
+    <g fill="none" stroke="#1f2c14" stroke-width="1.2" opacity="0.7">
+      <path d="M 120 75 L 140 87 L 140 110 L 120 122 L 100 110 L 100 87 Z"/>
+      <path d="M 90 92 L 100 87 L 100 110 L 90 115 L 75 110 L 78 92 Z"/>
+      <path d="M 150 92 L 165 92 L 165 110 L 150 115 L 140 110 L 140 87 Z"/>
+      <path d="M 110 122 L 130 122 L 135 138 L 120 145 L 105 138 Z"/>
+      <path d="M 80 122 L 100 122 L 100 138 L 85 142 L 72 132 Z"/>
+      <path d="M 140 122 L 160 122 L 168 132 L 155 142 L 140 138 Z"/>
+    </g>
+    {# Highlight blob on the shell — gives it some depth #}
+    <ellipse cx="100" cy="80" rx="22" ry="6" fill="#bcdb7a" opacity="0.4"/>
+  </g>
+</svg>

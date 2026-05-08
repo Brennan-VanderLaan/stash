@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · {{ headline }}{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="error-mascot">
+    {% if mascot == 'cat' %}{% include '_mascot_cat.svg' %}{% else %}{% include '_mascot_turtle.svg' %}{% endif %}
+  </div>
+  <div class="error-status">{{ status }}</div>
+  <h1 class="error-headline">{{ headline }}</h1>
+  <p class="error-quip">{{ quip }}</p>
+  {% if detail %}
+  <p class="error-detail"><code>{{ detail }}</code></p>
+  {% endif %}
+  <div class="error-actions">
+    <a href="/" class="btn btn-primary">Back to safety</a>
+    {% if back_url and back_url != '/' %}
+    <a href="{{ back_url }}" class="btn btn-secondary">Try again</a>
+    {% endif %}
+  </div>
+  {% if signature %}
+  <p class="error-signature">— {{ signature }}</p>
+  {% endif %}
+</div>
+{% endblock %}

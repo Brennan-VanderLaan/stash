@@ -874,6 +874,69 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .badge-done { background: var(--accent); color: #0a1810; }
 .badge-failed { background: #3a1f1f; color: #d46f6f; }
 
+/* === Error pages ===
+   404, 401, 403, 413, 429, 500 — every error route renders templates/
+   error.html with a Siberian Forest cat or a wise tortoise mascot
+   plus a sassy headline + quip.  Centred column on desktop, full-
+   width on mobile; mascot is SVG so it scales sharply at any size. */
+.error-page {
+  max-width: 36rem;
+  margin: 3rem auto;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+.error-mascot {
+  display: block;
+  margin: 0 auto 1.25rem;
+  max-width: 14rem;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.45));
+}
+.error-mascot svg { width: 100%; height: auto; }
+.error-status {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.95rem;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+.error-headline {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+  line-height: 1.2;
+}
+.error-quip {
+  font-size: 1.05rem;
+  color: var(--text-muted, #aaa);
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+.error-detail {
+  font-size: 0.85rem;
+  color: var(--text-muted, #888);
+  margin: 0 0 1.5rem;
+  word-break: break-word;
+}
+.error-detail code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.25rem;
+}
+.error-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.error-signature {
+  font-style: italic;
+  color: var(--text-muted, #888);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 /* === Sort Queue === */
 .sort-card { padding: 0; overflow: hidden; }
 .sort-photo {
