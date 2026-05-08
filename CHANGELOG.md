@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.5.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.4.0...v1.5.0) (2026-05-08)
+
+
+### Features
+
+* **api:** /usage card for minting + revoking API tokens ([d5cd9af](https://github.com/Brennan-VanderLaan/stash/commit/d5cd9af082400e9637b64d5e9f43935696f84524))
+* **api:** auto-revoke leaked tokens + operator suspend/resume ([c7de9ec](https://github.com/Brennan-VanderLaan/stash/commit/c7de9ecbff2266bdac3ad9c5f3b0e8aa257ed421))
+* **api:** bearer-auth /api/v1 router for MCP-style agents ([25270c5](https://github.com/Brennan-VanderLaan/stash/commit/25270c53769f2bea04c179936696aabc20854005))
+* **audit:** backfill audit_log on box / item / location / floor / room mutations ([c962d38](https://github.com/Brennan-VanderLaan/stash/commit/c962d38a602244f3123914d89c5a86b19fe04f7c))
+* **logging:** structured logger + request-id middleware + context ([3a1505a](https://github.com/Brennan-VanderLaan/stash/commit/3a1505ace90a325e4effb389a8eebc9689ab1c91))
+* **quotas:** plan-default caps + soft warning + 429 enforcement ([d0a19f9](https://github.com/Brennan-VanderLaan/stash/commit/d0a19f92cf5ef4e8c5a3e093bde4cbfbfe1a0b35))
+* **quotas:** tenant-creation throttle + operator override editor + bug fix ([46dbb91](https://github.com/Brennan-VanderLaan/stash/commit/46dbb9188a5434d17db1ca40c37e2a1c703c0cdd))
+* **shares:** per-share file allow-list at access time ([57d837b](https://github.com/Brennan-VanderLaan/stash/commit/57d837b3778179c9431b9a79e61fb6d4f9865539))
+
+
+### Bug Fixes
+
+* **docker:** copy obs.py into the image ([d9dd5ab](https://github.com/Brennan-VanderLaan/stash/commit/d9dd5abc7b7094a00a45d3b411033b2f908afac5))
+* **security:** healthz + headers + samesite + invite-matcher + token cap + shares-unique + auth coverage ([c073b2b](https://github.com/Brennan-VanderLaan/stash/commit/c073b2b4714483d3b6bbacf5f041dabeb2b666c3))
+
 ## [1.4.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.3.0...v1.4.0) (2026-05-08)
 
 
