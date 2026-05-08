@@ -98,20 +98,75 @@ function finalizeCrop(id) {
   document.getElementById('crop-btn-' + id).textContent = 'Adjust crop';
   document.getElementById('reset-btn-' + id).style.display = 'none';
   document.getElementById('clear-btn-' + id).style.display = 'none';
-  // Snap the static overlay to the user's new crop and reveal it.  Without
-  // updating the CSS vars here the overlay reuses the AI's server-rendered
-  // values and looks like clicking Done reverted the adjustment — even
-  // though the form fields above are correct and Accept would still save
-  // the user's crop.
+  // Snap the static overlay to the user's new crop and reveal it.
+  // We update the data-* attributes (the canonical source for
+  // ``placeBboxOverlay``) and re-run placement so the overlay
+  // moves to the new crop bounds.  Without this update Accept
+  // would still save the user's crop, but the visible overlay
+  // would still show the AI's original suggestion.
   const overlay = document.getElementById('bbox-overlay-' + id);
   if (overlay && document.getElementById('skip-crop-' + id).value !== '1') {
-    overlay.style.setProperty('--bbox-x0', (cx0 / 10) + '%');
-    overlay.style.setProperty('--bbox-y0', (cy0 / 10) + '%');
-    overlay.style.setProperty('--bbox-x1', (cx1 / 10) + '%');
-    overlay.style.setProperty('--bbox-y1', (cy1 / 10) + '%');
+    overlay.dataset.bboxX0 = cx0;
+    overlay.dataset.bboxY0 = cy0;
+    overlay.dataset.bboxX1 = cx1;
+    overlay.dataset.bboxY1 = cy1;
+    placeBboxOverlay(id);
     overlay.hidden = false;
   }
 }
+
+// ── Bbox overlay placement ────────────────────────────────────────
+// Compute the overlay's pixel position from the rendered IMG
+// element's bounding rect and the bbox's 0-1000 normalized coords.
+// Doing this in JS instead of CSS percentages means the overlay
+// follows the actual image even when the surrounding frame is
+// sized differently (the inline-block flex-item case where the
+// frame's main-size came from the image's natural width while
+// max-height shrunk the rendered image, leaving the frame much
+// wider than the photo).  Re-runs on image load + window resize
+// + ResizeObserver so it stays glued through layout changes.
+function placeBboxOverlay(id) {
+  const img = document.getElementById('crop-img-' + id);
+  const overlay = document.getElementById('bbox-overlay-' + id);
+  if (!img || !overlay) return;
+  if (!img.complete || !img.naturalWidth) return;
+  const x0 = parseFloat(overlay.dataset.bboxX0);
+  const y0 = parseFloat(overlay.dataset.bboxY0);
+  const x1 = parseFloat(overlay.dataset.bboxX1);
+  const y1 = parseFloat(overlay.dataset.bboxY1);
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return;
+  const imgR = img.getBoundingClientRect();
+  const parentR = overlay.parentElement.getBoundingClientRect();
+  const w = imgR.width, h = imgR.height;
+  if (w === 0 || h === 0) return;
+  const left = (imgR.left - parentR.left) + (x0 / 1000) * w;
+  const top = (imgR.top - parentR.top) + (y0 / 1000) * h;
+  overlay.style.left = left + 'px';
+  overlay.style.top = top + 'px';
+  overlay.style.width = ((x1 - x0) / 1000 * w) + 'px';
+  overlay.style.height = ((y1 - y0) / 1000 * h) + 'px';
+  overlay.hidden = false;
+}
+
+function bindBboxOverlay(card) {
+  if (!card) return;
+  const img = card.querySelector('[id^="crop-img-"]');
+  const overlay = card.querySelector('[id^="bbox-overlay-"]');
+  if (!img || !overlay) return;
+  const id = img.id.replace(/^crop-img-/, '');
+  const place = () => placeBboxOverlay(id);
+  if (img.complete && img.naturalWidth) place();
+  else img.addEventListener('load', place, { once: true });
+  // Window resize covers viewport changes; ResizeObserver covers
+  // layout shifts that don't trigger window resize (e.g. another
+  // card growing/shrinking and reflowing this one).
+  window.addEventListener('resize', place);
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(place).observe(img);
+  }
+}
+
+document.querySelectorAll('.sort-card').forEach(bindBboxOverlay);
 
 function resetCrop(id) { if (croppers[id]) croppers[id].reset(); }
 
@@ -208,6 +263,9 @@ async function refreshQueueCards() {
   for (const card of incomingCards) {
     if (!presentIds.has(card.id)) {
       cardsContainer.appendChild(card);
+      // Newly-spliced cards need their bbox overlay bound — the
+      // initial-load forEach above only fires once at first render.
+      bindBboxOverlay(card);
     }
   }
 

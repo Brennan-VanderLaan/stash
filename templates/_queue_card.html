@@ -13,11 +13,22 @@
       <img src="/uploads/{{ p.photo }}" alt="" id="crop-img-{{ p.id }}">
       {% if p.bbox_y_min is not none and p.bbox_x_min is not none
             and p.bbox_y_max is not none and p.bbox_x_max is not none %}
+      {# bbox values stay on data-* attrs; the overlay's pixel
+         position is computed by ``placeBboxOverlay`` against the
+         IMG element's getBoundingClientRect on load + resize.
+         Earlier the overlay used CSS percentages relative to its
+         inline-block frame, but the frame's flex-basis derives
+         from the image's *natural* width capped at 100%, while
+         max-height shrinks the rendered image — so the frame
+         could end up much wider than the visible image and the
+         percentages landed in the letterbox area outside the
+         photo.  JS positioning bypasses that math entirely. #}
       <div class="sort-bbox-overlay" id="bbox-overlay-{{ p.id }}"
-           style="--bbox-x0: {{ p.bbox_x_min / 10 }}%;
-                  --bbox-y0: {{ p.bbox_y_min / 10 }}%;
-                  --bbox-x1: {{ p.bbox_x_max / 10 }}%;
-                  --bbox-y1: {{ p.bbox_y_max / 10 }}%;">
+           data-bbox-x0="{{ p.bbox_x_min }}"
+           data-bbox-y0="{{ p.bbox_y_min }}"
+           data-bbox-x1="{{ p.bbox_x_max }}"
+           data-bbox-y1="{{ p.bbox_y_max }}"
+           hidden>
         <span class="sort-bbox-label">AI detected</span>
       </div>
       {% endif %}

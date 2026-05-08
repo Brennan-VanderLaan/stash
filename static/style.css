@@ -912,15 +912,16 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 
 /* Bounding-box overlay drawn on top of the sort-queue photo. The AI returns
-   bbox in 0-1000 normalized coords; the template converts to percent and
-   stashes the four edges in CSS custom properties so positioning is pure
-   CSS — no JS measurement, no resize observers. */
+   bbox in 0-1000 normalized coords stashed on data-* attrs; the JS in
+   queue.html (``placeBboxOverlay``) computes pixel position from the IMG
+   element's bounding rect on load + resize and writes inline left/top/
+   width/height so the box sticks to the actual image regardless of how
+   the surrounding frame is sized.  The earlier CSS-percentages approach
+   broke when the inline-block frame ended up wider than the rendered
+   image (flex-basis: auto → image natural width capped at 100%, while
+   max-height shrunk the image but not the frame). */
 .sort-bbox-overlay {
   position: absolute;
-  left: var(--bbox-x0);
-  top: var(--bbox-y0);
-  width: calc(var(--bbox-x1) - var(--bbox-x0));
-  height: calc(var(--bbox-y1) - var(--bbox-y0));
   border: 3px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-radius: 4px;
