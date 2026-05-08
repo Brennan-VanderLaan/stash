@@ -32,16 +32,22 @@ def get_tenant(actor: Actor, tenant_id: int) -> dict:
 
 
 def list_members(actor: Actor, tenant_id: int) -> list[dict]:
-    """Members of a tenant.  Visible to any member of that tenant; the
-    UI surfaces it on /usage (and the maintenance page until /usage
-    ships in roadmap step 13)."""
+    """Members of a tenant + a ``last_active_at`` watermark per
+    member (the latest audit_log entry where that email is the
+    actor — covers UI mutations, MCP tool calls, OAuth flows,
+    everything that writes through ``obs.write_audit``).  Visible
+    to any member of the tenant; the UI surfaces it on /usage and
+    /admin."""
     if actor.has_membership(tenant_id) is None and not actor.is_operator:
         return []
     with db() as conn:
         rows = conn.execute(
-            "SELECT email, role, joined_at, invited_at, invited_by_email "
-            "FROM tenant_members WHERE tenant_id = ? "
-            "ORDER BY joined_at IS NULL, joined_at, email",
+            "SELECT m.email, m.role, m.joined_at, m.invited_at, "
+            "       m.invited_by_email, "
+            "       (SELECT MAX(a.created_at) FROM audit_log a "
+            "         WHERE a.actor_email = m.email) AS last_active_at "
+            "FROM tenant_members m WHERE m.tenant_id = ? "
+            "ORDER BY m.joined_at IS NULL, m.joined_at, m.email",
             (tenant_id,),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -66,11 +72,13 @@ def memberships_for_email(email: str) -> tuple[tuple[int, str], ...]:
 
 def list_all(actor: Actor) -> list[dict]:
     """Operator-only roster of every tenant on the deployment with
-    member / box / item counts and lifecycle state.  Hard-rule from
-    the spec: operators see counts + metadata only, *never* the
-    contents (no box names, item names, or photos).  This method
-    obeys that — only aggregate counters and the tenant's own name
-    leave the DAO."""
+    member / box / item counts, lifecycle state, and a
+    ``last_activity_at`` watermark (max audit_log timestamp across
+    that tenant — covers every mutation the DAO writes through
+    ``obs.write_audit``).  Hard-rule from the spec: operators see
+    counts + metadata only, *never* the contents (no box names,
+    item names, or photos).  This method obeys that — only
+    aggregate counters and the tenant's own name leave the DAO."""
     require_operator(actor)
     with db() as conn:
         rows = conn.execute(
@@ -84,7 +92,9 @@ def list_all(actor: Actor) -> list[dict]:
             "       (SELECT COUNT(*) FROM boxes "
             "         WHERE tenant_id = t.id) AS box_count, "
             "       (SELECT COUNT(*) FROM items "
-            "         WHERE tenant_id = t.id) AS item_count "
+            "         WHERE tenant_id = t.id) AS item_count, "
+            "       (SELECT MAX(created_at) FROM audit_log "
+            "         WHERE tenant_id = t.id) AS last_activity_at "
             "FROM tenants t "
             "ORDER BY t.created_at"
         ).fetchall()

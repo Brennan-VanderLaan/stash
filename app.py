@@ -14,6 +14,7 @@ import vault
 import vision
 from dao import Actor, ConflictError, ForbiddenError, NotFoundError
 from dao import api_tokens as dao_api_tokens
+from dao import audit as dao_audit
 from dao import backups as dao_backups
 from dao import boxes as dao_boxes
 from dao import floors as dao_floors
@@ -4682,12 +4683,15 @@ def admin_dashboard(
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
-    # Decorate each tenant row with its current effective caps so
-    # the inline override form can pre-fill with what's active.
+    # Decorate each tenant row with its current effective caps + the
+    # member roster (so the operator gets per-email last_active_at
+    # without a follow-up click into a per-tenant page).
     for t in tenants:
         t["caps"] = dao_quotas.get_caps(t["id"])
         t["usage"] = dao_quotas.usage_for_tenant(t["id"])
+        t["members"] = dao_tenants.list_members(actor, t["id"])
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
+    recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)
     try:
         dao_backups._b2_config()
         b2_configured = True
@@ -4698,6 +4702,7 @@ def admin_dashboard(
         {
             "tenants": tenants,
             "api_tokens": api_tokens,
+            "recent_activity": recent_activity,
             "current_email": actor.email,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,

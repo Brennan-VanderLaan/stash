@@ -226,6 +226,164 @@ def test_dao_create_tenant_audits(tmp_path, monkeypatch):
     assert row["target_id"] == tid
 
 
+def test_list_all_includes_last_activity(tmp_path, monkeypatch):
+    """``last_activity_at`` reflects the most recent audit_log
+    write for that tenant — that's what powers the new "Last
+    activity" column on /admin so an operator can spot a tenant
+    that's gone quiet."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute("INSERT INTO tenants (name, plan) VALUES ('T1', 'pro')")
+        t1 = cur.lastrowid
+        cur = conn.execute("INSERT INTO tenants (name, plan) VALUES ('Quiet', 'pro')")
+        t2 = cur.lastrowid
+        # Quiet tenant gets a dated audit row; T1 gets one a tick later.
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, "
+            " target_kind, target_id, created_at) "
+            "VALUES (?, 'a@example.com', 'box.create', 'box', 1, "
+            "        '2025-01-01T00:00:00Z')",
+            (t2,),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, "
+            " target_kind, target_id, created_at) "
+            "VALUES (?, 'a@example.com', 'box.create', 'box', 2, "
+            "        '2026-05-01T12:00:00Z')",
+            (t1,),
+        )
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    rows = {r["id"]: r for r in dao_tenants.list_all(op)}
+    assert rows[t1]["last_activity_at"] == "2026-05-01T12:00:00Z"
+    assert rows[t2]["last_activity_at"] == "2025-01-01T00:00:00Z"
+
+
+def test_list_members_includes_last_active(tmp_path, monkeypatch):
+    """Per-member ``last_active_at`` joins on ``actor_email`` so the
+    same email's activity across any tenant counts toward "active"
+    — the spec's identity is email-keyed, not membership-keyed."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute("INSERT INTO tenants (name, plan) VALUES ('T1', 'pro')")
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'busy@example.com', 'maintainer', CURRENT_TIMESTAMP), "
+            "       (?, 'idle@example.com', 'readonly',   CURRENT_TIMESTAMP)",
+            (tid, tid),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, "
+            " target_kind, target_id, created_at) "
+            "VALUES (?, 'busy@example.com', 'box.update', 'box', 1, "
+            "        '2026-04-15T10:00:00Z')",
+            (tid,),
+        )
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    rows = {r["email"]: r for r in dao_tenants.list_members(op, tid)}
+    assert rows["busy@example.com"]["last_active_at"] == "2026-04-15T10:00:00Z"
+    assert rows["idle@example.com"]["last_active_at"] is None
+
+
+def test_audit_recent_for_operator_requires_operator(tmp_path, monkeypatch):
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, ForbiddenError, audit as dao_audit
+    plain = Actor(
+        email="plain@example.com", tenant_id=1, role="maintainer",
+        is_operator=False, memberships=((1, "maintainer"),),
+    )
+    with pytest.raises(ForbiddenError):
+        dao_audit.list_recent_for_operator(plain)
+
+
+def test_audit_recent_for_operator_returns_joined_tenant_name(
+    tmp_path, monkeypatch,
+):
+    """Operator gets actor_email + tenant_name + action in one shot —
+    the recent-activity feed renders without a follow-up DB hit per
+    row."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, audit as dao_audit
+    with app_mod.db() as conn:
+        cur = conn.execute("INSERT INTO tenants (name, plan) VALUES ('Acme', 'pro')")
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, "
+            " target_kind, target_id, created_at) "
+            "VALUES (?, 'a@example.com', 'box.create', 'box', 7, "
+            "        '2026-05-01T00:00:00Z')",
+            (tid,),
+        )
+        # Cross-tenant operator action with NULL tenant_id still
+        # surfaces — we rely on this to spot oauth.client.register
+        # bursts.
+        conn.execute(
+            "INSERT INTO audit_log (tenant_id, actor_email, action, "
+            " target_kind, target_id, created_at) "
+            "VALUES (NULL, 'op@example.com', 'oauth.client.register', "
+            "        'oauth_client', 'abc', '2026-05-02T00:00:00Z')",
+        )
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    rows = dao_audit.list_recent_for_operator(op)
+    actions = [r["action"] for r in rows]
+    assert "oauth.client.register" in actions
+    box_row = next(r for r in rows if r["action"] == "box.create")
+    assert box_row["tenant_name"] == "Acme"
+    cross_row = next(r for r in rows if r["action"] == "oauth.client.register")
+    assert cross_row["tenant_name"] is None
+
+
+def test_admin_renders_filter_ui_and_recent_activity(tmp_path, monkeypatch):
+    """The admin page surfaces the API-token filter UI markup and
+    the recent-activity card — both are entirely client-rendered
+    after this so the filter JS has DOM to bind to.  Filter UI is
+    inside ``{% if api_tokens %}`` so we seed one row before
+    checking the markup."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with app_mod.db() as conn:
+        cur = conn.execute("INSERT INTO tenants (name, plan) VALUES ('Acme', 'pro')")
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO api_tokens (tenant_id, token_hash, name, role, "
+            " created_by_email) "
+            "VALUES (?, 'abc123', 'ci-bot', 'maintainer', 'op@example.com')",
+            (tid,),
+        )
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.get("/admin")
+        assert r.status_code == 200
+        # Filter bar is keyed by data-filter-target so the JS can
+        # find its tbody — the assertion guards against renames
+        # that would silently disable filtering.
+        assert 'data-filter-target="#api-tokens-tbody"' in r.text
+        assert 'data-filter-key="tenant"' in r.text
+        assert 'data-filter-key="state"' in r.text
+        assert 'data-filter-key="role"' in r.text
+        assert 'data-filter-key="name"' in r.text
+        assert "Recent activity" in r.text
+        assert "Last activity" in r.text
+
+
 def test_dao_invite_create_operator_bypass(tmp_path, monkeypatch):
     """An operator may mint into a tenant they don't belong to;
     a maintainer of *another* tenant cannot."""

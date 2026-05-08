@@ -84,13 +84,54 @@
         <th>Items</th>
         <th>State</th>
         <th>Created</th>
+        <th>Last activity</th>
         <th>Backup</th>
       </tr>
     </thead>
     <tbody>
       {% for t in tenants %}
       <tr>
-        <td>{{ t.name }}</td>
+        <td>
+          <details class="tenant-roster">
+            <summary>{{ t.name }}</summary>
+            {% if t.members %}
+            <table class="admin-member-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Joined</th>
+                  <th>Last active</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for m in t.members %}
+                <tr>
+                  <td><code>{{ m.email }}</code></td>
+                  <td>{{ m.role }}</td>
+                  <td>
+                    {% if m.joined_at %}
+                      {{ m.joined_at[:10] }}
+                    {% else %}
+                      <span class="text-muted">invited {{ m.invited_at[:10] if m.invited_at else '' }}</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if m.last_active_at %}
+                      <span title="{{ m.last_active_at }}">{{ m.last_active_at[:10] }}</span>
+                    {% else %}
+                      <span class="text-muted">never</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted text-sm">No members yet.</p>
+            {% endif %}
+          </details>
+        </td>
         <td>{{ t.plan }}</td>
         <td>{{ t.member_count }}</td>
         <td>{{ t.open_invites }}</td>
@@ -104,6 +145,13 @@
           {% endif %}
         </td>
         <td>{{ t.created_at[:10] if t.created_at else '' }}</td>
+        <td>
+          {% if t.last_activity_at %}
+            <span title="{{ t.last_activity_at }}">{{ t.last_activity_at[:10] }}</span>
+          {% else %}
+            <span class="text-muted">never</span>
+          {% endif %}
+        </td>
         <td>
           {% if b2_configured %}
           <form method="post" action="/admin/tenants/{{ t.id }}/backup"
@@ -174,6 +222,13 @@
 </div>
 
 {# ── Cross-tenant API token panel ────────────────────────────── #}
+{# Filter selects are populated from the table rows below at render
+   time — distinct tenant / role values come from a Python set so
+   the dropdown options track whatever is actually present.  The
+   filter is JS-driven so the operator can sift live without server
+   round-trips; the unfiltered baseline still works without JS. #}
+{% set token_tenants = api_tokens | map(attribute="tenant_name") | reject("none") | unique | sort | list %}
+{% set token_roles = api_tokens | map(attribute="role") | reject("none") | unique | sort | list %}
 <div class="card maintenance-card">
   <div class="card-title">API tokens ({{ api_tokens | length }})</div>
   <p class="text-sm text-muted">
@@ -185,7 +240,45 @@
     can spot misconfigured clients.
   </p>
   {% if api_tokens %}
-  <table class="admin-tenant-table">
+  <div class="admin-filter-bar" data-filter-target="#api-tokens-tbody">
+    <label>
+      Tenant
+      <select data-filter-key="tenant">
+        <option value="">All</option>
+        {% for name in token_tenants %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      State
+      <select data-filter-key="state">
+        <option value="">All</option>
+        <option value="active">Active</option>
+        <option value="suspended">Suspended</option>
+        <option value="revoked">Revoked</option>
+      </select>
+    </label>
+    <label>
+      Role
+      <select data-filter-key="role">
+        <option value="">All</option>
+        {% for r in token_roles %}
+        <option value="{{ r }}">{{ r }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="admin-filter-search">
+      Name
+      <input type="search" data-filter-key="name" placeholder="substring…"
+             autocomplete="off">
+    </label>
+    <span class="admin-filter-count" data-filter-count
+          data-total="{{ api_tokens | length }}">
+      {{ api_tokens | length }} of {{ api_tokens | length }}
+    </span>
+  </div>
+  <table class="admin-tenant-table" id="api-tokens-table">
     <thead>
       <tr>
         <th>Tenant</th>
@@ -196,9 +289,13 @@
         <th>Actions</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody id="api-tokens-tbody">
       {% for t in api_tokens %}
-      <tr>
+      {% set state = "revoked" if t.revoked_at else ("suspended" if t.suspended_at else "active") %}
+      <tr data-tenant="{{ t.tenant_name or '' }}"
+          data-role="{{ t.role or '' }}"
+          data-state="{{ state }}"
+          data-name="{{ t.name or '' }}">
         <td>{{ t.tenant_name }}</td>
         <td><code>{{ t.name }}</code></td>
         <td>{{ t.role }}</td>
@@ -254,6 +351,56 @@
   {% endif %}
 </div>
 
+{# ── Recent activity feed ───────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">Recent activity ({{ recent_activity | length }})</div>
+  <p class="text-sm text-muted">
+    Tail of the audit log across every tenant.  This is the same
+    stream that powers per-tenant /usage history; it surfaces here
+    so an operator can spot anomalies (burst of share creates from
+    one email, mass token issues against one client) at a glance
+    without paging through individual tenants.
+  </p>
+  {% if recent_activity %}
+  <table class="admin-tenant-table">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Tenant</th>
+        <th>Actor</th>
+        <th>Action</th>
+        <th>Target</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in recent_activity %}
+      <tr>
+        <td><span title="{{ a.created_at }}">{{ a.created_at[:19].replace('T', ' ') if a.created_at else '' }}</span></td>
+        <td>
+          {% if a.tenant_name %}
+            {{ a.tenant_name }}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td><code>{{ a.actor_email }}</code></td>
+        <td><code>{{ a.action }}</code></td>
+        <td>
+          {% if a.target_kind %}
+            {{ a.target_kind }}{% if a.target_id %}:{{ a.target_id }}{% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No audit-log entries yet.</p>
+  {% endif %}
+</div>
+
 <style>
   .admin-tenant-table {
     width: 100%;
@@ -270,6 +417,94 @@
     font-weight: 600;
     color: var(--text-muted, #aaa);
   }
+  .admin-member-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .admin-member-table th,
+  .admin-member-table td {
+    text-align: left;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .tenant-roster summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .admin-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+    margin-bottom: 0.75rem;
+  }
+  .admin-filter-bar label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.85rem;
+    color: var(--text-muted, #aaa);
+  }
+  .admin-filter-bar select,
+  .admin-filter-bar input[type="search"] {
+    min-width: 10rem;
+  }
+  .admin-filter-count {
+    font-size: 0.85rem;
+    color: var(--text-muted, #aaa);
+    margin-left: auto;
+  }
 </style>
+
+<script>
+  // Client-side filter for the API tokens table.  Each <tr data-*=>
+  // attribute is matched against its corresponding [data-filter-key]
+  // input; matching is exact for selects, case-insensitive substring
+  // for free-text search.  No server round-trip — the operator can
+  // sift through hundreds of tokens without hammering /admin.
+  (function () {
+    document.querySelectorAll(".admin-filter-bar").forEach((bar) => {
+      const tbody = document.querySelector(bar.dataset.filterTarget);
+      if (!tbody) return;
+      const counter = bar.querySelector("[data-filter-count]");
+      const total = counter ? parseInt(counter.dataset.total, 10) : 0;
+      const inputs = bar.querySelectorAll("[data-filter-key]");
+
+      function applyFilter() {
+        const filters = {};
+        inputs.forEach((el) => {
+          const v = (el.value || "").trim();
+          if (v) filters[el.dataset.filterKey] = v;
+        });
+        let visible = 0;
+        tbody.querySelectorAll("tr").forEach((row) => {
+          let show = true;
+          for (const [k, v] of Object.entries(filters)) {
+            const rowVal = (row.dataset[k] || "").toLowerCase();
+            const filterVal = v.toLowerCase();
+            // Free-text "name" is substring; everything else exact
+            // so "active" doesn't accidentally match "inactive".
+            if (k === "name") {
+              if (!rowVal.includes(filterVal)) { show = false; break; }
+            } else {
+              if (rowVal !== filterVal) { show = false; break; }
+            }
+          }
+          row.style.display = show ? "" : "none";
+          if (show) visible++;
+        });
+        if (counter) counter.textContent = `${visible} of ${total}`;
+      }
+
+      inputs.forEach((el) => {
+        el.addEventListener("input", applyFilter);
+        el.addEventListener("change", applyFilter);
+      });
+    });
+  })();
+</script>
 
 {% endblock %}
