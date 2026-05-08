@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 import labels
 import vault
 import vision
+from dao import Actor
 
 load_dotenv()
 
@@ -151,30 +152,13 @@ templates.env.filters["date"] = _format_date
 # panel — see spec § "Operator surface") gate on this flag; tenant-data
 # routes do NOT — operators access tenant data only via an explicit
 # maintainer invite from the user, by design.
-import dataclasses
-
 _OPERATOR_EMAILS = frozenset(
     e.strip().lower()
     for e in os.environ.get("STASH_OPERATOR_EMAILS", "").split(",")
     if e.strip()
 )
-
-
-@dataclasses.dataclass(frozen=True)
-class Actor:
-    """The resolved identity of the current request.
-
-    `tenant_id` and `role` reflect the *active* membership; a user who's
-    a member of multiple tenants picks via the switcher (roadmap
-    step 15), but for now we just take the first by joined_at.
-    `memberships` is the full list so the eventual switcher UI can
-    render without another DB hit.
-    """
-    email: str
-    tenant_id: int | None
-    role: str | None
-    is_operator: bool
-    memberships: tuple[tuple[int, str], ...]
+# Actor lives in dao/_base.py so DAO methods can take it without a
+# circular dao→app import.  Imported at the top of this module.
 
 
 @app.middleware("http")
