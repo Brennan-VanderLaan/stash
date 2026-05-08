@@ -1498,13 +1498,23 @@ def edit_box(
 
 @app.post("/items/{item_id}/move")
 def move_item(request: Request, item_id: int, box_id: int = Form(...)):
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone():
-            raise HTTPException(404)
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
-            raise HTTPException(400, "Unknown box")
-        conn.execute("UPDATE items SET box_id = ? WHERE id = ?", (box_id, item_id))
-        conn.commit()
+    actor: Actor = request.state.actor
+    # Distinguish "item gone" (404) from "target box bad" (400) — the
+    # legacy route did this via two separate SELECTs; we reproduce it
+    # by validating the target box first, then letting move_to_box
+    # raise NotFoundError only for missing items.
+    try:
+        dao_items.get_by_id(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    try:
+        dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(400, "Unknown box")
+    try:
+        dao_items.move_to_box(actor, item_id, box_id)
+    except ForbiddenError:
+        raise HTTPException(403)
     if "application/json" in request.headers.get("accept", ""):
         return {"ok": True, "item_id": item_id, "box_id": box_id}
     return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
@@ -1512,32 +1522,44 @@ def move_item(request: Request, item_id: int, box_id: int = Form(...)):
 
 @app.post("/boxes/{box_id}/move-items")
 async def bulk_move_items(request: Request, box_id: int):
+    """Bulk-move all submitted item ids out of `box_id` and into the
+    target.  Tenant-scoped: the UPDATE clause filters by tenant_id so a
+    crafted item_ids list pointing at another tenant's items can't move
+    them."""
+    actor: Actor = request.state.actor
     form_data = await request.form()
     target_box_id = int(form_data["target_box_id"])
     item_ids = [int(v) for v in form_data.getlist("item_ids")]
     if not item_ids:
         return RedirectResponse(f"/boxes/{box_id}", status_code=303)
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (target_box_id,)).fetchone():
-            raise HTTPException(400, "Unknown target box")
-        placeholders = ",".join("?" * len(item_ids))
-        conn.execute(
-            f"UPDATE items SET box_id = ? WHERE id IN ({placeholders}) AND box_id = ?",
-            [target_box_id, *item_ids, box_id],
-        )
-        conn.commit()
+    # Validate the target box belongs to the actor's tenant.
+    try:
+        dao_boxes.get_by_id(actor, target_box_id)
+    except NotFoundError:
+        raise HTTPException(400, "Unknown target box")
+    # Move each item via the DAO (tenant + box checks happen there).
+    for item_id in item_ids:
+        try:
+            dao_items.move_to_box(actor, item_id, target_box_id)
+        except (NotFoundError, ForbiddenError):
+            # Skip items that don't belong to this actor / tenant
+            # rather than failing the whole batch — the legacy SQL had
+            # the same lenient semantics via the `AND box_id = ?` clause.
+            continue
     return RedirectResponse(f"/boxes/{target_box_id}", status_code=303)
 
 
 @app.get("/boxes/{box_id}/audit", response_class=HTMLResponse)
 def audit_box(request: Request, box_id: int):
-    with db() as conn:
-        box = conn.execute("SELECT * FROM boxes WHERE id = ?", (box_id,)).fetchone()
-        if not box:
-            raise HTTPException(404)
-        items = conn.execute(
-            "SELECT * FROM items WHERE box_id = ? ORDER BY name", (box_id,)
-        ).fetchall()
+    actor: Actor = request.state.actor
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    items = sorted(
+        dao_items.list_for_box(actor, box_id),
+        key=lambda it: (it["name"] or ""),
+    )
     return templates.TemplateResponse(
         request, "audit.html", {"box": box, "items": items}
     )
@@ -1625,56 +1647,42 @@ def add_item_tag(request: Request, item_id: int, tag: str = Form(...)):
     if not entries:
         raise HTTPException(400, "Tag required")
     actor: Actor = request.state.actor
-    with db() as conn:
-        row = conn.execute(
-            "SELECT box_id, tenant_id FROM items WHERE id = ?", (item_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        set_item_tags(conn, row["tenant_id"] or actor.tenant_id, item_id, entries)
-        conn.commit()
-    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+        dao_tags.attach_to_item(actor, item_id, entries)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/tags/{tag_id}/delete")
-def remove_item_tag(item_id: int, tag_id: int):
-    with db() as conn:
-        row = conn.execute("SELECT box_id FROM items WHERE id = ?", (item_id,)).fetchone()
-        if not row:
-            raise HTTPException(404)
-        conn.execute(
-            "DELETE FROM item_tags WHERE item_id = ? AND tag_id = ?", (item_id, tag_id)
-        )
-        conn.commit()
-    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
+def remove_item_tag(request: Request, item_id: int, tag_id: int):
+    actor: Actor = request.state.actor
+    try:
+        box_id = dao_items.remove_tag(actor, item_id, tag_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
 
 
 @app.get("/boxes/{box_id}/preview", response_class=HTMLResponse)
 def box_preview(request: Request, box_id: int):
     """Compact box summary for the floorplan tile-click modal — name,
     location, item count, a few thumbs, and a link to open the box."""
-    with db() as conn:
-        box = conn.execute(
-            "SELECT b.*, r.name AS room_name, r.color AS room_color, "
-            "       l.id AS location_id, l.name AS location_name "
-            "FROM boxes b "
-            "LEFT JOIN rooms r ON r.id = b.room_id "
-            "LEFT JOIN locations l ON l.id = r.location_id "
-            "WHERE b.id = ?",
-            (box_id,),
-        ).fetchone()
-        if not box:
-            raise HTTPException(404)
-        items = conn.execute(
-            "SELECT id, name, photo FROM items "
-            "WHERE box_id = ? ORDER BY created_at DESC LIMIT 60",
-            (box_id,),
-        ).fetchall()
-        item_count = conn.execute(
-            "SELECT COUNT(*) FROM items WHERE box_id = ?", (box_id,),
-        ).fetchone()[0]
+    actor: Actor = request.state.actor
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    all_items = dao_items.list_for_box(actor, box_id)
+    # newest-first to match the previous ORDER BY DESC LIMIT 60.
+    all_items_desc = list(reversed(all_items))
+    items = all_items_desc[:60]
+    item_count = len(all_items)
     return templates.TemplateResponse(
         request, "_floorplan_box_preview.html",
         {"box": box, "items": items, "item_count": item_count},
@@ -1686,20 +1694,20 @@ def item_preview(request: Request, item_id: int):
     """HTML fragment rendering an item's detail card. Used by the search
     page to open a result in a modal instead of navigating away — the same
     actions (re-tag, move, replace photo, delete) work in place."""
-    with db() as conn:
-        item = conn.execute(
-            "SELECT i.*, b.name AS box_name, b.id AS box_id "
-            "FROM items i JOIN boxes b ON b.id = i.box_id "
-            "WHERE i.id = ?",
-            (item_id,),
-        ).fetchone()
-        if not item:
-            raise HTTPException(404)
-        tags = get_item_tags(conn, item_id)
-        other_boxes = conn.execute(
-            "SELECT id, name, location FROM boxes WHERE id != ? ORDER BY name",
-            (item["box_id"],),
-        ).fetchall()
+    actor: Actor = request.state.actor
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+        box = dao_boxes.get_by_id(actor, item["box_id"])
+    except NotFoundError:
+        raise HTTPException(404)
+    item = {**item, "box_name": box["name"]}
+    tags = dao_items.list_tags_for_item(actor, item_id)
+    other_boxes = sorted(
+        ({"id": b["id"], "name": b["name"], "location": b["location"]}
+         for b in dao_boxes.list_for_picker(actor)
+         if b["id"] != item["box_id"]),
+        key=lambda b: b["name"] or "",
+    )
     return templates.TemplateResponse(
         request, "_search_item_modal.html",
         {"it": item, "tags": tags, "other_boxes": other_boxes},
@@ -1708,10 +1716,11 @@ def item_preview(request: Request, item_id: int):
 
 @app.get("/items/{item_id}/recrop", response_class=HTMLResponse)
 def recrop_item(request: Request, item_id: int):
-    with db() as conn:
-        item = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
-        if not item:
-            raise HTTPException(404)
+    actor: Actor = request.state.actor
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
     return templates.TemplateResponse(
         request, "recrop.html", {"item": item}
     )
@@ -1728,40 +1737,31 @@ def apply_recrop(
     skip_crop: str = Form(""),
 ):
     actor: Actor = request.state.actor
-    with db() as conn:
-        item = conn.execute(
-            "SELECT photo, source_photo, box_id, tenant_id FROM items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if not item:
-            raise HTTPException(404)
-        # Tenancy guard: routes will move into the DAO in roadmap step 3 but
-        # until then we enforce here so a file path can't be reached
-        # cross-tenant.
-        if item["tenant_id"] is not None and item["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = item["tenant_id"] or actor.tenant_id
+    try:
+        item = dao_items.get_for_recrop(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    tenant_id = item["tenant_id"]
+    source = item["source_photo"] or item["photo"]
+    old_photo = item["photo"]
 
-        source = item["source_photo"] or item["photo"]
-        old_photo = item["photo"]
+    if skip_crop.strip() == "1":
+        # Undo crop — revert to full source image
+        new_photo = source
+    elif crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
+        bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
+        new_photo = crop_photo(tenant_id, source, bbox)
+    else:
+        # No change
+        return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
-        if skip_crop.strip() == "1":
-            # Undo crop — revert to full source image
-            new_photo = source
-        elif crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
-            bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
-            new_photo = crop_photo(tenant_id, source, bbox)
-        else:
-            # No change
-            return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
-
-        conn.execute(
-            "UPDATE items SET photo = ?, source_photo = ? WHERE id = ?",
-            (new_photo, source, item_id),
-        )
-        conn.commit()
-        # Old crop file may now be orphaned
-        if old_photo and old_photo != new_photo and old_photo != source:
+    try:
+        dao_items.apply_recrop(actor, item_id, new_photo, source)
+    except (NotFoundError, ForbiddenError):
+        raise HTTPException(404)
+    # Old crop file may now be orphaned
+    if old_photo and old_photo != new_photo and old_photo != source:
+        with db() as conn:
             _delete_upload_if_orphan(conn, tenant_id, old_photo)
     return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
 
@@ -1771,45 +1771,37 @@ async def replace_item_photo(request: Request, item_id: int, photo: UploadFile =
     if not photo or not photo.filename:
         raise HTTPException(400, "Photo required")
     actor: Actor = request.state.actor
+    try:
+        item = dao_items.get_for_recrop(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    tenant_id = item["tenant_id"]
+    new_photo = save_photo(tenant_id, photo)
+    try:
+        result = dao_items.replace_photo(actor, item_id, new_photo)
+    except (NotFoundError, ForbiddenError):
+        raise HTTPException(404)
     with db() as conn:
-        row = conn.execute(
-            "SELECT box_id, photo, source_photo, tenant_id FROM items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = row["tenant_id"] or actor.tenant_id
-        new_photo = save_photo(tenant_id, photo)
-        conn.execute(
-            "UPDATE items SET photo = ?, source_photo = ? WHERE id = ?",
-            (new_photo, new_photo, item_id),
-        )
-        conn.commit()
-        for old in {row["photo"], row["source_photo"]}:
-            _delete_upload_if_orphan(conn, tenant_id, old)
-    return RedirectResponse(f"/boxes/{row['box_id']}#item-{item_id}", status_code=303)
+        for old in {result["old_photo"], result["old_source"]}:
+            if old:
+                _delete_upload_if_orphan(conn, tenant_id, old)
+    return RedirectResponse(f"/boxes/{result['box_id']}#item-{item_id}", status_code=303)
 
 
 @app.post("/items/{item_id}/delete")
 def delete_item(request: Request, item_id: int):
     actor: Actor = request.state.actor
+    try:
+        result = dao_items.delete(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     with db() as conn:
-        row = conn.execute(
-            "SELECT box_id, photo, source_photo, tenant_id FROM items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = row["tenant_id"] or actor.tenant_id
-        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        conn.commit()
-        for photo_name in {row["photo"], row["source_photo"]}:
-            _delete_upload_if_orphan(conn, tenant_id, photo_name)
-    return RedirectResponse(f"/boxes/{row['box_id']}", status_code=303)
+        for photo_name in {result["photo"], result["source_photo"]}:
+            if photo_name:
+                _delete_upload_if_orphan(conn, actor.tenant_id, photo_name)
+    return RedirectResponse(f"/boxes/{result['box_id']}", status_code=303)
 
 
 _EXT_TO_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
