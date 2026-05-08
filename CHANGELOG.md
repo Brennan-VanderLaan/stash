@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.1...v1.10.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* **ingest:** timeout Gemini calls, recover stuck jobs, surface UI escape ([206b1f0](https://github.com/Brennan-VanderLaan/stash/commit/206b1f042ed4c779197e8ac50406bf84fbba93ed))
+* **queue:** bbox overlay sticks to the rendered photo ([05b7a36](https://github.com/Brennan-VanderLaan/stash/commit/05b7a361eb9a621fe09b7019f785093836709b99))
+
 ## [1.10.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.0...v1.10.1) (2026-05-08)
 
 
