@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.0.0...v1.0.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **crypto:** copy vault.py into the Docker image ([2f1850d](https://github.com/Brennan-VanderLaan/stash/commit/2f1850dce698ee7ce9cb4220b20d48d3b2b84437))
+* **crypto:** document STASH_KEK in deploy/.env.example + thread through compose ([826f9f8](https://github.com/Brennan-VanderLaan/stash/commit/826f9f863f4385f634eaafcccc29044ea0c00ed0))
+
 ## [1.0.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.2...v1.0.0) (2026-05-08)
 
 
