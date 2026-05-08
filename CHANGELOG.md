@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.2...v1.0.0) (2026-05-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* STASH_ALLOWED_EMAILS and FULLY_PUBLIC are removed. The new gate is tenant_members; emails not on that table get a 403. Operators are configured via STASH_OPERATOR_EMAILS but get no automatic access to any tenant's data — they must be invited as a member, by design.
+
+### Features
+
+* phase 1 + 2 land — multi-tenancy foundation + encryption at rest ([e4a953c](https://github.com/Brennan-VanderLaan/stash/commit/e4a953cf083978f2a20b08629a6c15f564e9d75d))
+
 ## [0.20.2](https://github.com/Brennan-VanderLaan/stash/compare/v0.20.1...v0.20.2) (2026-05-07)
 
 
