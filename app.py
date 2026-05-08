@@ -543,9 +543,32 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
 
     Crashes mid-migration are safe: each file is processed in
     isolation, with the cleartext original surviving until the new
-    encrypted blob has been roundtrip-verified."""
+    encrypted blob has been roundtrip-verified.
+
+    Logs to stdout: a banner before the scan, per-tenant
+    encrypted/relocated/orphaned/failed counts after.  When the
+    function is a no-op (no flat-root files left to process) it stays
+    quiet."""
+    import logging
+    log = logging.getLogger("stash.migrate")
+
     if not UPLOAD_DIR.exists():
         return
+
+    # Quick pre-check: anything in the flat root at all?  If not, the
+    # migration is a no-op and we don't need to log a thing.
+    flat_root_files = [
+        e for e in UPLOAD_DIR.iterdir()
+        if e.is_file() and e.suffix != ".tmp"
+    ]
+    if not flat_root_files:
+        return
+
+    log.warning(
+        "[migrate] phase-2 filesystem migration: %d cleartext file(s) in "
+        "UPLOAD_DIR root — relocating into per-tenant subdirs and encrypting",
+        len(flat_root_files),
+    )
 
     # Build a (filename → tenant_id) map from every reference column,
     # plus the thumb companion of each.
@@ -566,16 +589,15 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
                 file_owners[name] = tid
                 file_owners[f"{Path(name).stem}_thumb.jpg"] = tid
 
-    for entry in list(UPLOAD_DIR.iterdir()):
-        if entry.is_dir():
-            # Already a per-tenant dir — phase 2+ layout.
-            continue
-        if not entry.is_file():
-            continue
+    encrypted = relocated_only = orphaned = failed = tmp_swept = 0
+    by_tenant: dict[int, int] = {}
+
+    for entry in flat_root_files:
         if entry.suffix == ".tmp":
             # Atomic-rename intermediate from an interrupted write.
             try:
                 entry.unlink()
+                tmp_swept += 1
             except FileNotFoundError:
                 pass
             continue
@@ -584,6 +606,7 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
             # Orphan — leave for /maintenance/cleanup to deal with so a
             # bug here can't accidentally delete an unmapped file the
             # operator might want to rescue.
+            orphaned += 1
             continue
         target = _tenant_file(tenant_id, entry.name)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -601,6 +624,8 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
                 # Pre-encrypted (operator manually placed it, perhaps).
                 # Just move it.
                 entry.rename(target)
+                relocated_only += 1
+                by_tenant[tenant_id] = by_tenant.get(tenant_id, 0) + 1
                 continue
             ciphertext = _encrypt_for(tenant_id, blob)
             tmp = target.with_suffix(target.suffix + ".tmp")
@@ -608,13 +633,47 @@ def _migrate_uploads_to_encrypted_tenant_dirs() -> None:
             roundtrip = _decrypt_for(tenant_id, tmp.read_bytes())
             if roundtrip != blob:
                 tmp.unlink()
+                failed += 1
+                log.error(
+                    "[migrate] roundtrip-verify failed for %s; cleartext "
+                    "original kept in place for manual inspection",
+                    entry.name,
+                )
                 continue  # something went wrong; original stays put
             os.replace(tmp, target)
             entry.unlink()
-        except Exception:
+            encrypted += 1
+            by_tenant[tenant_id] = by_tenant.get(tenant_id, 0) + 1
+        except Exception as exc:
             # Don't crash startup on a single bad file.  An operator
             # can investigate via the filesystem if photos go missing.
+            failed += 1
+            log.error(
+                "[migrate] failed to encrypt %s: %s; cleartext kept "
+                "in place for manual inspection",
+                entry.name, exc,
+            )
             continue
+
+    log.warning(
+        "[migrate] phase-2 filesystem migration done: "
+        "encrypted=%d relocated_only=%d orphaned=%d failed=%d tmp_swept=%d "
+        "by_tenant=%s",
+        encrypted, relocated_only, orphaned, failed, tmp_swept, by_tenant,
+    )
+    if orphaned:
+        log.warning(
+            "[migrate] %d file(s) in UPLOAD_DIR root had no DB reference and "
+            "were left in place; run /maintenance/cleanup once you've "
+            "confirmed there's nothing in there worth rescuing",
+            orphaned,
+        )
+    if failed:
+        log.warning(
+            "[migrate] %d file(s) failed to migrate — cleartext originals "
+            "are still in UPLOAD_DIR root.  Investigate before re-running.",
+            failed,
+        )
 
 
 def _first_email_from_env(var: str) -> str:
