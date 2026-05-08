@@ -136,36 +136,59 @@ def list_for_tenant(actor: Actor) -> list[dict]:
 # ── Auth ────────────────────────────────────────────────────────────
 
 
-def authenticate(plaintext: str) -> Optional[dict]:
+def authenticate(
+    plaintext: str,
+    *,
+    expected_audience: str | None = None,
+) -> Optional[dict]:
     """Resolve a bearer plaintext to ``{"id": ..., "tenant_id": ...,
     "role": ..., "name": ...}``, or None if the token is unknown,
-    revoked, suspended, or malformed.
+    revoked, suspended, expired, or malformed.
+
+    Audience binding (OAuth 2.1 §RS validation): when
+    ``expected_audience`` is given (set by the route handling
+    /mcp), reject any token whose ``audience`` column is non-NULL
+    and doesn't match.  Tokens with NULL audience (the original
+    user-minted phase-11 surface) pass — they predate the OAuth
+    flow and are not bound to a resource.
+
+    Expiry: tokens with ``expires_at`` set are rejected after
+    that timestamp.  NULL = no expiry (existing user-minted
+    tokens stay long-lived).
 
     Bumps ``last_used_at`` as a side effect when auth succeeds —
     best-effort, we don't fail the request if the bump fails (the
     column is for forensics + the /usage table, not authorization).
-
-    Caller (the middleware) is responsible for translating None →
-    401.  The DAO never raises here; auth failures are the rule
-    not the exception (every browser hit on /api would otherwise
-    raise + log noise)."""
+    """
     if not plaintext or not plaintext.startswith(_TOKEN_PREFIX):
         return None
     token_hash = _hash(plaintext)
+    now = _now_iso()
     with db() as conn:
         row = conn.execute(
-            "SELECT id, tenant_id, role, name "
+            "SELECT id, tenant_id, role, name, audience, expires_at, "
+            "       oauth_client_id "
             "FROM api_tokens "
             "WHERE token_hash = ? "
             "  AND revoked_at IS NULL "
-            "  AND suspended_at IS NULL",
-            (token_hash,),
+            "  AND suspended_at IS NULL "
+            "  AND (expires_at IS NULL OR expires_at > ?)",
+            (token_hash, now),
         ).fetchone()
         if row is None:
             return None
-        # Best-effort timestamp bump.  Wrapped in its own try so a
-        # tight WAL contention can't make a successful auth look
-        # failed to the caller.
+        # Audience check (OAuth 2.1 §5.2).  Tokens issued via the
+        # OAuth flow carry a non-NULL audience; legacy user-minted
+        # tokens don't and stay valid for any tenant-scoped path.
+        if expected_audience and row["audience"]:
+            if row["audience"].rstrip("/") != expected_audience.rstrip("/"):
+                _log.warning(
+                    "api_token.audience_mismatch id=%s "
+                    "presented_audience=%s expected=%s",
+                    row["id"], row["audience"], expected_audience,
+                )
+                return None
+        # Best-effort timestamp bump.
         try:
             conn.execute(
                 "UPDATE api_tokens SET last_used_at = CURRENT_TIMESTAMP "
@@ -177,6 +200,14 @@ def authenticate(plaintext: str) -> Optional[dict]:
             _log.warning("api_token.last_used_bump_failed id=%s err=%s",
                          row["id"], exc)
     return dict(row)
+
+
+def _now_iso() -> str:
+    """SQLite-CURRENT_TIMESTAMP-shaped string so the
+    ``expires_at > ?`` comparison doesn't trip on the lex
+    difference between ``' '`` and ``'T'``."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def lookup_by_plaintext(plaintext: str) -> Optional[dict]:

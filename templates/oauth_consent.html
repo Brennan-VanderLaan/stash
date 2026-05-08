@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ _("Authorize") }} {{ client.name }}{% endblock %}
+{% block content %}
+
+<div class="card maintenance-card">
+  <div class="card-title">
+    {{ _("Authorize") }} <strong>{{ client.name }}</strong>?
+  </div>
+
+  <p>
+    {% if client.is_public %}
+      <strong>{{ client.name }}</strong> {{ _("(an external app)") }}
+    {% else %}
+      <strong>{{ client.name }}</strong>
+    {% endif %}
+    {{ _("is asking for access to your stash on your behalf.") }}
+  </p>
+
+  <dl class="stat-row">
+    <div>
+      <dt>{{ _("Signed in as") }}</dt>
+      <dd><code>{{ current_email }}</code></dd>
+    </div>
+    <div>
+      <dt>{{ _("Requested scope") }}</dt>
+      <dd><code>{{ scope or "mcp" }}</code></dd>
+    </div>
+    <div>
+      <dt>{{ _("Resource") }}</dt>
+      <dd><code>{{ resource }}</code></dd>
+    </div>
+    <div>
+      <dt>{{ _("Redirects to") }}</dt>
+      <dd><code>{{ redirect_uri }}</code></dd>
+    </div>
+  </dl>
+
+  <p class="text-sm text-muted">
+    {{ _("Approving issues an access token (1 hour lifetime) plus a refresh token (30 days) bound to the tenant you select below and your role on it.  You can revoke this access at any time from /usage.") }}
+  </p>
+
+  <form method="post" action="/oauth/authorize">
+    {# Round-trip the entire OAuth request shape so the POST has
+       everything it needs to mint the code + redirect.  The
+       browser sees these on the page; the values came from the
+       client's GET so there's no new disclosure. #}
+    <input type="hidden" name="client_id" value="{{ client.client_id }}">
+    <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+    <input type="hidden" name="state" value="{{ state }}">
+    <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+    <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <input type="hidden" name="resource" value="{{ resource }}">
+
+    <label>
+      {{ _("Grant access to") }}
+      <select name="tenant_id" required>
+        {% for m in memberships %}
+          <option value="{{ m.tenant_id }}">
+            {{ m.tenant_name }} ({{ m.role }})
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <button type="submit" name="decision" value="approve"
+            class="btn btn-primary btn-block">
+      {{ _("Approve + grant access") }}
+    </button>
+    <button type="submit" name="decision" value="deny"
+            class="btn btn-link btn-block"
+            style="margin-top:0.5rem;">
+      {{ _("Deny") }}
+    </button>
+  </form>
+</div>
+
+{% endblock %}

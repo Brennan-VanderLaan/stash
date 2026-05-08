@@ -174,27 +174,34 @@ def test_unauthenticated_request_is_rejected(
     )
 
 
-def test_healthz_is_the_only_unauthenticated_route(tmp_path, monkeypatch):
-    """``/healthz`` is intentionally exempt from auth.  Static files
-    + uploads + everything else still hit the auth wall.  This
-    test pins the exemption set so a future bypass addition has to
-    update it explicitly."""
+def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
+    """The auth-bypass set is intentionally tiny — anything new
+    here needs a security justification.  This test pins the set
+    so a future addition shows up as a code-review red flag."""
     app_mod, _ = _bootstrap(tmp_path, monkeypatch)
     with TestClient(app_mod.app) as c:
-        # /healthz: exempt, returns the lightweight liveness body.
+        # /healthz: liveness probe, no tenant data.
         r = c.get("/healthz")
         assert r.status_code == 200
         assert r.json()["ok"] is True
-        # Static files: not exempt — the auth wall fires for them too.
-        # That's intentional: a stash deployment is gated end-to-end
-        # by oauth2-proxy, so even the CSS shouldn't be reachable
-        # without authentication.
+        # /.well-known/oauth-* — public discovery surfaces (RFC
+        # 8414 + RFC 9728) so MCP clients can auto-discover.
+        r = c.get("/.well-known/oauth-protected-resource")
+        assert r.status_code == 200
+        assert r.json()["resource"].endswith("/mcp")
+        r = c.get("/.well-known/oauth-authorization-server")
+        assert r.status_code == 200
+        # Static files: not exempt — auth wall fires for them too.
         r = c.get("/static/style.css", follow_redirects=False)
         assert r.status_code in (401, 403)
-    # Sanity check the bypass list itself — adding a path here in
-    # the future should be a deliberate code change with a security
-    # justification.
-    assert app_mod._AUTH_BYPASS_PATHS == frozenset(("/healthz",))
+    # Pin the exact bypass set.
+    assert app_mod._AUTH_BYPASS_PATHS == frozenset((
+        "/healthz",
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-authorization-server",
+        "/oauth/token",
+        "/oauth/register",
+    ))
 
 
 # ── Cross-tenant isolation ──────────────────────────────────────────

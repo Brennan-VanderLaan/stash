@@ -59,9 +59,25 @@ services:
       # every Google identity in. The file alone is the gate; leave the
       # domain list unset so the only path through is an explicit listing.
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
-      # No skip-auth routes / regex configured by design — every path on this
-      # stack must pass auth. /oauth2/* paths are owned by oauth2-proxy itself
-      # for sign-in/callback flow and are not forwarded to the upstream.
+      # Skip-auth routes — paths that must reach stash *without* a
+      # Google session cookie because the caller authenticates a
+      # different way:
+      # * ``^/api/v1/`` — bearer-token API for scripted clients (phase 11).
+      # * ``^/mcp$``   — Model Context Protocol endpoint (phase 18); bearer.
+      # * ``^/oauth/(token|register)$`` — server-to-server OAuth endpoints
+      #   (phase 19).  /authorize is browser-driven and stays gated.
+      # * ``^/\.well-known/oauth-`` — RFC 8414 + 9728 discovery; public.
+      # * ``^/healthz$`` — container liveness probe.
+      # Each of these is also gated at the stash layer (current_actor
+      # middleware) — this list just lets the request through the
+      # outer Google-cookie wall.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: |-
+        ^/api/v1/
+        ^/mcp$
+        ^/oauth/token$
+        ^/oauth/register$
+        ^/\.well-known/oauth-
+        ^/healthz$
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

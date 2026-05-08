@@ -1131,20 +1131,22 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 + 18
+**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 + 18 + 19
 shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
 invites, per-tenant backup download, manual B2 upload from /admin,
 telemetry recording, and operator-dashboard bootstrap respectively).
 Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
-moved up to unblock immediate use.  Pre-MCP security audit (in
-``docs/`` lineage via commit history) drove a pass that closes
-the audit's P0/P1 list: per-share file allow-list, healthz bypass,
-bearer auto-revoke on HTTP/URL-leak, operator suspend/resume,
-SameSite=strict, app-level security headers, and the comprehensive
-auth-coverage test suite (69 cases).  Built-in MCP endpoint at
-``/mcp`` (spec rev 2025-11-25) is live with the full tool +
-resource catalogue from `Architecture · Agent / MCP integration`.
-See per-phase `[shipped]` / `[partial]` markers below.
+moved up to unblock immediate use.  Pre-MCP security audit drove a
+pass that closes the audit's P0/P1 list: per-share file allow-list,
+healthz bypass, bearer auto-revoke on HTTP/URL-leak, operator
+suspend/resume, SameSite=strict, app-level security headers, and
+the comprehensive auth-coverage test suite (69 cases).  Built-in
+MCP endpoint at ``/mcp`` (spec rev 2025-11-25) is live with the
+full tool + resource catalogue.  OAuth 2.1 authorization server at
+``/oauth/{authorize,token,register}`` plus the RFC 8414 + 9728
+discovery surfaces lets claude.ai's web custom-connector dialog
+talk to stash without per-user JSON config.  See per-phase
+`[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -1398,6 +1400,53 @@ See per-phase `[shipped]` / `[partial]` markers below.
     * Origin allow-list: ``STASH_PUBLIC_URL`` plus optional
       comma-separated ``STASH_MCP_ALLOWED_ORIGINS`` for dev
       clients (Claude Desktop loopback, IDE hosts).
+
+19. **[shipped]** **OAuth 2.1 authorization server.** Stash plays
+    both resource-server (``/mcp``) and authorization-server
+    roles for MCP per spec rev 2025-11-25 §"Authorization".  Lets
+    claude.ai's web custom-connector dialog (and any
+    discovery-aware MCP client) bootstrap without per-user JSON
+    config.
+    * Discovery (RFC 9728 + RFC 8414):
+      ``/.well-known/oauth-protected-resource`` and
+      ``/.well-known/oauth-authorization-server`` — both public.
+    * Authorization-code grant with PKCE (S256 only — spec
+      mandates).  Authorization codes are 60 s single-use,
+      tied to PKCE challenge + redirect_uri + client_id.
+    * Refresh token rotation per OAuth 2.1 §4.3.1 — the old
+      refresh token is consumed on every successful exchange.
+    * Resource indicators (RFC 8707) — every issued access
+      token is bound to ``audience=<public_url>/mcp``; the
+      bearer path on /mcp validates this.  Legacy user-minted
+      tokens (NULL audience) keep working for backwards
+      compatibility.
+    * Dynamic Client Registration (RFC 7591) at
+      ``POST /oauth/register`` — public clients (PKCE, no
+      client_secret) and confidential clients (with one-time
+      secret) both supported.  Disable via
+      ``STASH_OAUTH_DCR_ENABLED=false``.
+    * Consent UX: ``GET /oauth/authorize`` renders a tenant
+      picker so a user with multiple memberships chooses which
+      one the agent gets access to at consent time.  Approve
+      bounces to the client's ``redirect_uri?code=…&state=…``;
+      deny bounces with ``error=access_denied``.
+    * Bearer leak guards (phase 11) cover OAuth-issued tokens
+      automatically — same auto-revoke on HTTP, same operator
+      suspend/revoke from /admin.
+    * 401 responses on /mcp carry ``WWW-Authenticate: Bearer
+      resource_metadata=…`` so a discovery-aware client finds
+      the AS without manual config.
+    * Deploy: oauth2-proxy ``OAUTH2_PROXY_SKIP_AUTH_ROUTES`` lets
+      the OAuth + bearer endpoints reach stash without a Google
+      session cookie.  ``/oauth/authorize`` stays gated (it's
+      browser-driven and needs the user identity).
+    * **[deferred]** Operator OAuth client list at /admin
+      (registrations are visible via DCR audit-log but a
+      first-class panel is nicer).  Step-up authorization (spec
+      §"Scope Challenge Handling") for granular scopes
+      (``mcp.read`` / ``mcp.write``).  Client ID Metadata
+      Documents — overkill for a single-deploy stash.
+
 
 (Support / Sentry / in-app feedback link — deferred.)
 

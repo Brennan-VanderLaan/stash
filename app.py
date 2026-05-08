@@ -21,6 +21,7 @@ from dao import ingest_jobs as dao_ingest_jobs
 from dao import invites as dao_invites
 from dao import items as dao_items
 from dao import locations as dao_locations
+from dao import oauth as dao_oauth
 from dao import pending_items as dao_pending
 from dao import quotas as dao_quotas
 from dao import rooms as dao_rooms
@@ -320,10 +321,23 @@ async def security_headers(request: Request, call_next):
 
 
 # Paths that bypass current_actor entirely.  These either don't
-# need identity (healthz) or are static surfaces oauth2-proxy
-# already gates ahead of us.  Anything outside this set hits the
-# auth wall.
-_AUTH_BYPASS_PATHS = frozenset(("/healthz",))
+# need identity (healthz, OAuth discovery) or are pure
+# server-to-server endpoints that authenticate themselves
+# (/oauth/token via client_secret + PKCE; /oauth/register is
+# DCR which is intentionally public per RFC 7591).  Anything
+# outside this set hits the auth wall.
+#
+# Note for production deploys behind oauth2-proxy: these paths
+# also need to be listed in OAUTH2_PROXY_SKIP_AUTH_ROUTES so the
+# proxy forwards the request to stash without a Google session
+# cookie check.  See deploy/docker-compose.yml + .env.example.
+_AUTH_BYPASS_PATHS = frozenset((
+    "/healthz",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-authorization-server",
+    "/oauth/token",
+    "/oauth/register",
+))
 
 
 @app.middleware("http")
@@ -419,15 +433,46 @@ async def current_actor(request: Request, call_next):
                     media_type="text/plain",
                 )
 
-        token_row = dao_api_tokens.authenticate(token_plaintext)
+        # Audience binding for OAuth-issued tokens: the canonical
+        # /mcp resource on this deployment is the only audience an
+        # MCP-flow token is valid for.  Legacy user-minted tokens
+        # have NULL audience and pass any path.
+        path = request.url.path
+        expected_audience = None
+        if path.startswith("/mcp"):
+            base = (PUBLIC_URL or
+                    f"{request.url.scheme}://{request.url.netloc}").rstrip("/")
+            expected_audience = f"{base}/mcp"
+
+        token_row = dao_api_tokens.authenticate(
+            token_plaintext, expected_audience=expected_audience,
+        )
         if token_row is None:
             _LOG_ROUTE.warning(
                 "auth.bearer_invalid path=%s", request.url.path,
             )
+            # Spec § §"Authorization Server Discovery": an MCP
+            # client that gets a 401 with WWW-Authenticate carrying
+            # ``resource_metadata`` discovers the AS automatically.
+            # Stamp the header on /mcp 401s so claude.ai-style
+            # clients bootstrap into the OAuth flow without any
+            # operator hand-holding.
+            headers = {}
+            if path.startswith("/mcp"):
+                base = (PUBLIC_URL or
+                        f"{request.url.scheme}://{request.url.netloc}"
+                        ).rstrip("/")
+                headers["WWW-Authenticate"] = (
+                    f'Bearer resource_metadata='
+                    f'"{base}/.well-known/oauth-protected-resource", '
+                    f'scope="mcp"'
+                )
             return Response(
-                "Unauthorized — bearer token unknown or revoked.",
+                "Unauthorized — bearer token unknown, revoked, "
+                "expired, or for a different audience.",
                 status_code=401,
                 media_type="text/plain",
+                headers=headers,
             )
         actor_email = f"api_token:{token_row['id']}"
         request.state.actor = Actor(
@@ -680,6 +725,73 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant ON api_tokens(tenant_id);
 
+        -- ── OAuth 2.1 authorization server (phase 19) ───────────────
+        -- Stash acts as both resource server *and* authorization
+        -- server for MCP per spec rev 2025-11-25.  See spec.md §
+        -- "OAuth 2.1 authorization" for the contract.
+
+        -- Registered OAuth clients.  ``client_id`` is either a
+        -- DCR-assigned random string or a pre-registered name an
+        -- operator has approved.  Public clients (browser-based
+        -- like claude.ai) carry NULL ``client_secret_hash`` and
+        -- rely on PKCE.
+        CREATE TABLE IF NOT EXISTS oauth_clients (
+            client_id TEXT PRIMARY KEY,
+            client_secret_hash TEXT,
+            name TEXT NOT NULL,
+            -- JSON array of registered redirect URIs.  Each
+            -- /authorize request validates exact-match against
+            -- this list (open-redirect mitigation).
+            redirect_uris TEXT NOT NULL,
+            is_public INTEGER NOT NULL DEFAULT 1,
+            registered_by_email TEXT,
+            registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            revoked_at TEXT
+        );
+
+        -- Short-lived authorization codes the user produces by
+        -- approving the consent page.  TTL 60 s — long enough for
+        -- the redirect to bounce through claude.ai's callback,
+        -- short enough that a leaked code is mostly stale.  PKCE
+        -- challenge stored verbatim; verifier compared at /token.
+        CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+            code TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            code_challenge TEXT NOT NULL,
+            code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+            scope TEXT,
+            resource TEXT NOT NULL,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            user_email TEXT NOT NULL,
+            role TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_codes_client
+            ON oauth_authorization_codes(client_id);
+
+        -- Refresh tokens for the OAuth flow.  Same hash-only
+        -- storage as api_tokens — plaintext leaves once, in the
+        -- /token response.  Spec mandates rotation on every use
+        -- for public clients; ``consumed_at`` is set when a refresh
+        -- successfully exchanges for a new pair.
+        CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+            token_hash TEXT PRIMARY KEY,
+            oauth_client_id TEXT NOT NULL,
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            user_email TEXT NOT NULL,
+            role TEXT NOT NULL,
+            scope TEXT,
+            resource TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_oauth_refresh_client
+            ON oauth_refresh_tokens(oauth_client_id);
+
         CREATE TABLE IF NOT EXISTS object_shares (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -875,6 +987,16 @@ def migrate_db():
         # mint metadata.  Auth fails for both states.
         _add_column_if_missing(conn, "api_tokens", "revoked_reason", "TEXT")
         _add_column_if_missing(conn, "api_tokens", "suspended_at", "TEXT")
+        # OAuth 2.1 augments (phase 19).  Tokens issued via the
+        # OAuth flow carry an audience (the resource URI), an
+        # expiry, and a link back to the issuing oauth_clients row.
+        # User-minted tokens (the original phase-11 surface) keep
+        # NULL on all three — the auth path treats NULL audience as
+        # "valid for any tenant-scoped request" so existing tokens
+        # don't break on the upgrade.
+        _add_column_if_missing(conn, "api_tokens", "oauth_client_id", "TEXT")
+        _add_column_if_missing(conn, "api_tokens", "audience", "TEXT")
+        _add_column_if_missing(conn, "api_tokens", "expires_at", "TEXT")
         # Backfill source_photo for items created before this column existed
         conn.execute(
             "UPDATE items SET source_photo = photo WHERE source_photo IS NULL"
@@ -3858,6 +3980,370 @@ def mcp_delete(request: Request):
         media_type="text/plain",
         headers={"Allow": "POST"},
     )
+
+
+# ── OAuth 2.1 discovery (phase 19) ─────────────────────────────────
+
+
+def _public_url(request: Request) -> str:
+    """Resolve the canonical public URL for discovery responses.
+    ``STASH_PUBLIC_URL`` wins (set in deploy); otherwise fall back
+    to the request's reported base URL — fine for tests, may be
+    wrong behind a proxy that doesn't set X-Forwarded-Proto."""
+    return PUBLIC_URL or str(request.base_url).rstrip("/")
+
+
+@app.get("/.well-known/oauth-protected-resource")
+def well_known_protected_resource(request: Request):
+    """RFC 9728 Protected Resource Metadata for /mcp.  Discovered
+    via the WWW-Authenticate header on a /mcp 401, or by an MCP
+    client probing the well-known root.  Public — anyone can
+    fetch it (no tenant data leaks)."""
+    return dao_oauth.protected_resource_metadata(_public_url(request))
+
+
+@app.get("/.well-known/oauth-authorization-server")
+def well_known_authorization_server(request: Request):
+    """RFC 8414 Authorization Server Metadata.  Tells clients
+    where to send authorize / token / register requests + which
+    grants and PKCE methods we support."""
+    return dao_oauth.authorization_server_metadata(_public_url(request))
+
+
+# ── OAuth 2.1 flow endpoints (phase 19) ─────────────────────────────
+
+
+def _oauth_redirect_with_error(redirect_uri: str, *, error: str,
+                               error_description: str = "",
+                               state: str = "") -> RedirectResponse:
+    """OAuth's standard error-response shape: bounce back to the
+    client's redirect_uri with ``error``/``error_description``/
+    ``state`` query params.  Spec § 4.1.2.1 — never display the
+    error to the user, the client surfaces it."""
+    from urllib.parse import urlencode
+    params = {"error": error}
+    if error_description:
+        params["error_description"] = error_description
+    if state:
+        params["state"] = state
+    return RedirectResponse(
+        f"{redirect_uri}?{urlencode(params)}", status_code=303,
+    )
+
+
+@app.get("/oauth/authorize", response_class=HTMLResponse)
+def oauth_authorize_get(
+    request: Request,
+    response_type: str = "",
+    client_id: str = "",
+    redirect_uri: str = "",
+    scope: str = "",
+    state: str = "",
+    code_challenge: str = "",
+    code_challenge_method: str = "",
+    resource: str = "",
+):
+    """OAuth authorization-code flow start.  The user's browser
+    arrives here from the client (claude.ai's "connect" flow).
+    Validate the params, render the consent page.  oauth2-proxy
+    has already authenticated the user by the time we get here —
+    ``request.state.actor.email`` is who's approving."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None and not actor.memberships:
+        # Edge case: signed-in via oauth2-proxy but no membership
+        # anywhere.  Drop them on the auth-deny wall — operator
+        # needs to invite them to a tenant first.
+        raise HTTPException(403, "No tenant membership; ask an operator to invite you.")
+
+    # Validate response_type early — this is the only one we
+    # support and a misconfigured client should hit a clean error.
+    if response_type != "code":
+        raise HTTPException(400, "response_type must be 'code'")
+    if code_challenge_method and code_challenge_method != "S256":
+        raise HTTPException(400, "code_challenge_method must be 'S256'")
+    if not code_challenge:
+        raise HTTPException(400, "PKCE code_challenge required")
+
+    client = dao_oauth.get_client(client_id)
+    if client is None:
+        raise HTTPException(400, f"unknown client_id: {client_id!r}")
+
+    # Exact-match redirect_uri against the client's registered
+    # list — open-redirect mitigation per OAuth 2.1 §7.12.
+    if redirect_uri not in client["redirect_uris"]:
+        raise HTTPException(
+            400,
+            f"redirect_uri {redirect_uri!r} not registered for "
+            f"client {client_id!r}",
+        )
+
+    # Default the resource to /mcp on this deployment if the
+    # client didn't specify (most MCP clients will, but be lenient).
+    if not resource:
+        resource = f"{_public_url(request)}/mcp"
+
+    # Memberships dropdown: every tenant the user can grant
+    # access to.  We surface the tenant name (not just id) so
+    # the consent UX is human-readable.
+    memberships: list[dict] = []
+    for tid, role in actor.memberships:
+        try:
+            t = dao_tenants.get_tenant(actor, tid)
+            memberships.append({
+                "tenant_id": tid, "role": role, "tenant_name": t["name"],
+            })
+        except NotFoundError:
+            continue
+    if not memberships:
+        raise HTTPException(
+            403, "No tenant memberships available to grant.",
+        )
+
+    return templates.TemplateResponse(
+        request, "oauth_consent.html",
+        {
+            "client": client,
+            "current_email": actor.email,
+            "memberships": memberships,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method or "S256",
+            "scope": scope or "mcp",
+            "resource": resource,
+        },
+    )
+
+
+@app.post("/oauth/authorize")
+def oauth_authorize_post(
+    request: Request,
+    decision: str = Form(...),
+    client_id: str = Form(...),
+    redirect_uri: str = Form(...),
+    state: str = Form(""),
+    code_challenge: str = Form(...),
+    code_challenge_method: str = Form("S256"),
+    scope: str = Form(""),
+    resource: str = Form(...),
+    tenant_id: int = Form(...),
+):
+    """User approved or denied the consent.  On approve, mint a
+    code + redirect to the client's callback with it.  On deny,
+    redirect with ``error=access_denied``."""
+    actor: Actor = request.state.actor
+
+    client = dao_oauth.get_client(client_id)
+    if client is None or redirect_uri not in client["redirect_uris"]:
+        raise HTTPException(400, "client / redirect_uri invalid")
+
+    if decision != "approve":
+        return _oauth_redirect_with_error(
+            redirect_uri,
+            error="access_denied",
+            error_description="User denied authorization",
+            state=state,
+        )
+
+    # Verify the user actually has the membership they claim.
+    role = actor.has_membership(tenant_id)
+    if role is None:
+        raise HTTPException(
+            403,
+            "You don't have a membership on the selected tenant.",
+        )
+
+    code = dao_oauth.issue_authorization_code(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        scope=scope or "mcp",
+        resource=resource,
+        tenant_id=tenant_id,
+        user_email=actor.email,
+        role=role,
+    )
+
+    from urllib.parse import urlencode
+    params = {"code": code}
+    if state:
+        params["state"] = state
+    return RedirectResponse(
+        f"{redirect_uri}?{urlencode(params)}", status_code=303,
+    )
+
+
+@app.post("/oauth/token")
+async def oauth_token(request: Request):
+    """OAuth /token endpoint.  Server-to-server (or browser-to-AS
+    for public clients).  Reads form-encoded body per spec; we
+    don't accept JSON bodies here even though many SDKs offer
+    them — staying narrow keeps the parse path tight.
+
+    Grants supported:
+    * ``authorization_code`` — code → access + refresh.
+    * ``refresh_token`` — rotate the refresh, mint a fresh
+      access token.
+    """
+    form = await request.form()
+    grant_type = form.get("grant_type")
+    client_id = form.get("client_id") or ""
+    client_secret = form.get("client_secret") or ""
+
+    client = dao_oauth.get_client(client_id)
+    if client is None:
+        return Response(
+            content=json.dumps({"error": "invalid_client"}),
+            status_code=401,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+    if not dao_oauth.verify_client_secret(client, client_secret):
+        return Response(
+            content=json.dumps({"error": "invalid_client"}),
+            status_code=401,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    try:
+        if grant_type == "authorization_code":
+            code = form.get("code") or ""
+            redirect_uri = form.get("redirect_uri") or ""
+            code_verifier = form.get("code_verifier") or ""
+            ctx = dao_oauth.consume_authorization_code(
+                code=code, client_id=client_id,
+                redirect_uri=redirect_uri,
+                code_verifier=code_verifier,
+            )
+        elif grant_type == "refresh_token":
+            refresh = form.get("refresh_token") or ""
+            ctx = dao_oauth.consume_refresh_token(
+                refresh_token=refresh, client_id=client_id,
+            )
+        else:
+            return Response(
+                content=json.dumps({
+                    "error": "unsupported_grant_type",
+                    "error_description":
+                        f"grant_type {grant_type!r} not supported",
+                }),
+                status_code=400,
+                media_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
+    except ValueError as exc:
+        # ValueError carries the OAuth-shaped error message from
+        # the DAO (``invalid_grant: ...``); split into the spec's
+        # two-field shape for the response.
+        msg = str(exc)
+        err, _, desc = msg.partition(": ")
+        return Response(
+            content=json.dumps({
+                "error": err.strip() or "invalid_grant",
+                "error_description": desc.strip() or msg,
+            }),
+            status_code=400,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    pair = dao_oauth.issue_token_pair(
+        client_id=client_id,
+        tenant_id=ctx["tenant_id"],
+        user_email=ctx["user_email"],
+        role=ctx["role"],
+        scope=ctx.get("scope") or "mcp",
+        resource=ctx["resource"],
+    )
+    return Response(
+        content=json.dumps(pair),
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.post("/oauth/register")
+async def oauth_register(request: Request):
+    """Dynamic Client Registration (RFC 7591).  Public — anyone
+    can self-register, which is the spec's expectation for
+    interop.  Operators concerned about DCR abuse can revoke
+    individual clients from /admin (or set
+    ``STASH_OAUTH_DCR_ENABLED=false`` to disable entirely)."""
+    if os.environ.get(
+        "STASH_OAUTH_DCR_ENABLED", "true",
+    ).strip().lower() in ("false", "0", "no"):
+        return Response(
+            content=json.dumps({
+                "error": "registration_not_supported",
+                "error_description":
+                    "Dynamic Client Registration is disabled on this "
+                    "deployment.  Ask the operator to pre-register "
+                    "the client at /admin.",
+            }),
+            status_code=403,
+            media_type="application/json",
+        )
+    body = await request.json()
+    name = (body.get("client_name") or "Unregistered MCP client").strip()
+    redirect_uris = body.get("redirect_uris") or []
+    if not isinstance(redirect_uris, list) or not redirect_uris:
+        return Response(
+            content=json.dumps({
+                "error": "invalid_redirect_uri",
+                "error_description":
+                    "redirect_uris must be a non-empty array",
+            }),
+            status_code=400,
+            media_type="application/json",
+        )
+    # ``token_endpoint_auth_method == "none"`` means public
+    # client (PKCE only).  Most MCP clients are public; allow
+    # confidential clients too since the spec doesn't forbid them.
+    is_public = body.get("token_endpoint_auth_method", "none") == "none"
+    try:
+        result = dao_oauth.register_client(
+            name=name,
+            redirect_uris=redirect_uris,
+            is_public=is_public,
+            registered_by_email="<dcr>",
+        )
+    except ValueError as exc:
+        return Response(
+            content=json.dumps({
+                "error": "invalid_client_metadata",
+                "error_description": str(exc),
+            }),
+            status_code=400,
+            media_type="application/json",
+        )
+    out = {
+        "client_id": result["client_id"],
+        "client_id_issued_at": int(_unix_now()),
+        "client_name": result["name"],
+        "redirect_uris": result["redirect_uris"],
+        "token_endpoint_auth_method": (
+            "none" if result["is_public"] else "client_secret_post"
+        ),
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+    }
+    if "client_secret" in result:
+        out["client_secret"] = result["client_secret"]
+    return Response(
+        content=json.dumps(out),
+        status_code=201,
+        media_type="application/json",
+    )
+
+
+def _unix_now() -> float:
+    import time
+    return time.time()
 
 
 @app.get("/healthz")
