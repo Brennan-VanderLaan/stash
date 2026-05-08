@@ -39,14 +39,20 @@ services:
       # weaken the session.
       OAUTH2_PROXY_COOKIE_SECURE: "true"      # only sent over HTTPS
       OAUTH2_PROXY_COOKIE_HTTPONLY: "true"    # not readable from JS
-      # Strict prevents the session cookie from being sent on *any*
-      # cross-site navigation, not just form POSTs (Lax already
-      # covers form POST CSRF on modern browsers, but Strict closes
-      # the GET-then-redirect-to-POST chain too).  Tradeoff: the
-      # first stash visit from an external link in a session needs
-      # one extra round trip through OAuth — acceptable for a
-      # personal-stash deployment with no public landing pages.
-      OAUTH2_PROXY_COOKIE_SAMESITE: strict
+      # SameSite=Lax — required for the Google OAuth callback to
+      # work.  The CSRF cookie oauth2-proxy sets at sign-in start
+      # (``_oauth2_proxy_csrf``) has to survive Google's
+      # cross-site redirect back to ``/oauth2/callback``;
+      # SameSite=Strict drops it on cross-origin GET, which
+      # 403s the callback with "CSRF cookie was not found".
+      #
+      # Lax is still real CSRF protection on modern browsers —
+      # cross-origin form POSTs are blocked even with Lax (Chrome
+      # 80+, Firefox 96+, Safari).  Phase 16 originally tightened
+      # to Strict on the basis that "stash has no public landing
+      # pages" — that stopped being true the moment we shipped
+      # phase 19's OAuth callback.
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
       OAUTH2_PROXY_COOKIE_DOMAINS: ${DOMAIN}
       OAUTH2_PROXY_WHITELIST_DOMAINS: ${DOMAIN}
       # Re-validate the session against Google every 1h so a revoked Google

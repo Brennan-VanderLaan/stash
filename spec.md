@@ -1139,7 +1139,10 @@ Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
 moved up to unblock immediate use.  Pre-MCP security audit drove a
 pass that closes the audit's P0/P1 list: per-share file allow-list,
 healthz bypass, bearer auto-revoke on HTTP/URL-leak, operator
-suspend/resume, SameSite=strict, app-level security headers, and
+suspend/resume, SameSite=lax (oauth2-proxy needs Lax-not-Strict
+to survive Google's cross-site OAuth callback; Lax still blocks
+cross-origin form POST on modern browsers), app-level security
+headers, and
 the comprehensive auth-coverage test suite (69 cases).  Built-in
 MCP endpoint at ``/mcp`` (spec rev 2025-11-25) is live with the
 full tool + resource catalogue.  OAuth 2.1 authorization server at
