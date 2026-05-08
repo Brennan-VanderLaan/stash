@@ -37,6 +37,10 @@
     {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
   </summary>
   <form method="post" action="/boxes/{{ box.id }}/edit">
+    {# Optimistic concurrency: tells the server what version we
+       were editing.  If somebody else updated the box behind us,
+       the route returns 409 instead of silently overwriting. #}
+    <input type="hidden" name="if_match" value="{{ box.version }}">
     <label>Name<input type="text" name="name" value="{{ box.name }}" required></label>
     {% if rooms %}
     <label>Room

@@ -29,6 +29,53 @@ def test_edit_box_requires_name(client):
     assert r.status_code == 400
 
 
+def test_edit_box_with_stale_if_match_returns_409(client):
+    """Optimistic concurrency: if a tab tries to save a box edit using
+    a ``version`` that no longer matches the row (because another tab
+    or session already saved an edit), the route returns 409 instead
+    of clobbering the newer write."""
+    client.post("/boxes", data={"name": "Original"})
+    # First edit succeeds — bumps the row's version from 1 to 2.
+    r1 = client.post(
+        "/boxes/1/edit",
+        data={"name": "First edit", "if_match": "1"},
+        follow_redirects=False,
+    )
+    assert r1.status_code == 303
+    # Second edit posts with the now-stale version=1 token, which is what
+    # a stale tab would still hold. The DAO must refuse it.
+    r2 = client.post(
+        "/boxes/1/edit",
+        data={"name": "Second edit", "if_match": "1"},
+        follow_redirects=False,
+    )
+    assert r2.status_code == 409
+    # Original first-edit value is still in the DB — no silent overwrite.
+    assert "First edit" in client.get("/boxes/1").text
+    assert "Second edit" not in client.get("/boxes/1").text
+
+
+def test_edit_box_without_if_match_is_last_write_wins(client):
+    """The if_match field is optional — clients that don't send it
+    (legacy forms, scripted clients) get the old last-write-wins
+    semantic instead of a hard rejection.  This keeps the migration
+    backwards-compatible."""
+    client.post("/boxes", data={"name": "Original"})
+    r1 = client.post(
+        "/boxes/1/edit",
+        data={"name": "First"},
+        follow_redirects=False,
+    )
+    assert r1.status_code == 303
+    r2 = client.post(
+        "/boxes/1/edit",
+        data={"name": "Second"},
+        follow_redirects=False,
+    )
+    assert r2.status_code == 303
+    assert "Second" in client.get("/boxes/1").text
+
+
 def test_location_autocomplete_lists_distinct_locations(client):
     client.post("/boxes", data={"name": "A", "location": "Garage"})
     client.post("/boxes", data={"name": "B", "location": "Attic"})

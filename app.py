@@ -1323,6 +1323,31 @@ def _coerce_room_id(value: str) -> int | None:
         return None
 
 
+def _coerce_if_match(value: str) -> int | None:
+    """Pull the optional ``if_match`` form field into the int the DAO
+    wants, or None if the field wasn't sent.  Bad values fall through
+    to None — the caller's update is then a last-write-wins, but the
+    fallback matters less than not 500'ing on a flaky form payload."""
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _conflict_http(entity: str, entity_id: int) -> HTTPException:
+    """Friendly 409 for a stale-edit collision.  Phase-4 entry point —
+    one place to swap in a custom rendered page later if the bare
+    text isn't enough.  Spec § "Optimistic concurrency"."""
+    return HTTPException(
+        409,
+        f"This {entity} was edited under you. Refresh the page and "
+        f"reapply your changes — the previous edit happened in another "
+        f"tab or session.",
+    )
+
+
 @app.post("/boxes")
 def create_box(
     request: Request,
@@ -1455,6 +1480,7 @@ def edit_box(
     notes: str = Form(""),
     room_id: str = Form(""),
     color: str = Form(""),
+    if_match: str = Form(""),
 ):
     if not name.strip():
         raise HTTPException(400, "Name required")
@@ -1473,16 +1499,20 @@ def edit_box(
             location = dao_rooms.get_with_location(actor, rid)["name"]
         except NotFoundError:
             rid = None
+    expected_version = _coerce_if_match(if_match)
     try:
         dao_boxes.update(
             actor, box_id,
             name=name, location=location, notes=notes,
             room_id=rid, color=color_val,
+            if_match=expected_version,
         )
     except NotFoundError:
         raise HTTPException(404)
     except ForbiddenError:
         raise HTTPException(403)
+    except ConflictError:
+        raise _conflict_http("box", box_id)
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
 
 
