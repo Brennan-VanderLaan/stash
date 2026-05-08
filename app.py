@@ -1354,31 +1354,43 @@ def create_box(
 ):
     actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
-    with db() as conn:
-        # If a room is picked, denormalize its name into boxes.location so the
-        # plain text shows up everywhere that doesn't JOIN to rooms.
-        if rid is not None:
-            row = conn.execute("SELECT name FROM rooms WHERE id = ?", (rid,)).fetchone()
-            if row:
-                location = row["name"]
-            else:
-                rid = None
-        conn.execute(
-            "INSERT INTO boxes (name, location, notes, room_id, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (name.strip(), location.strip(), notes.strip(), rid, actor.tenant_id),
-        )
-        conn.commit()
+    # If a room is picked, denormalize its name into boxes.location so the
+    # plain text shows up everywhere that doesn't JOIN to rooms.  Allow
+    # legacy tenant_id-NULL rooms to match too — pre-multi-tenancy
+    # databases may still have those rows around.
+    if rid is not None:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT name FROM rooms WHERE id = ? "
+                "  AND (tenant_id = ? OR tenant_id IS NULL)",
+                (rid, actor.tenant_id),
+            ).fetchone()
+        if row:
+            location = row["name"]
+        else:
+            rid = None
+    try:
+        dao_boxes.create(actor, name, location, notes, room_id=rid)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse("/", status_code=303)
 
 
-def _known_locations(conn) -> list[str]:
-    return [
-        r["location"] for r in conn.execute(
-            "SELECT DISTINCT location FROM boxes "
-            "WHERE location IS NOT NULL AND location != '' ORDER BY location"
-        ).fetchall()
-    ]
+def _known_locations(actor: Actor) -> list[str]:
+    """Distinct denormalised box.location strings the actor's tenant has
+    used — feeds the location combobox on the box-edit form."""
+    if actor.tenant_id is None:
+        return []
+    with db() as conn:
+        return [
+            r["location"] for r in conn.execute(
+                "SELECT DISTINCT location FROM boxes "
+                "WHERE location IS NOT NULL AND location != '' "
+                "  AND tenant_id = ? "
+                "ORDER BY location",
+                (actor.tenant_id,),
+            ).fetchall()
+        ]
 
 
 @app.get("/boxes/{box_id}", response_class=HTMLResponse)
@@ -1401,8 +1413,7 @@ def box_detail(request: Request, box_id: int):
         if b["id"] != box_id
     ]
     other_boxes.sort(key=lambda b: b["name"])
-    with db() as conn:
-        locations = _known_locations(conn)
+    locations = _known_locations(actor)
     rooms = dao_rooms.list_for_picker(actor)
     all_tags = dao_tags.list_names(actor)
     return templates.TemplateResponse(
@@ -1626,18 +1637,23 @@ async def add_item(
     photo: UploadFile = File(None),
 ):
     actor: Actor = request.state.actor
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (box_id,)).fetchone():
-            raise HTTPException(404)
-        photo_name = save_photo(actor.tenant_id, photo)
-        cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo, source_photo, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (box_id, name.strip(), notes.strip(), photo_name, photo_name, actor.tenant_id),
+    try:
+        dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    photo_name = save_photo(actor.tenant_id, photo)
+    try:
+        new_id = dao_items.create(
+            actor, box_id,
+            name=name, notes=notes,
+            photo=photo_name, source_photo=photo_name,
         )
-        if tags.strip():
-            set_item_tags(conn, actor.tenant_id, cur.lastrowid, parse_tag_input(tags))
-        conn.commit()
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if tags.strip():
+        dao_tags.attach_to_item(actor, new_id, parse_tag_input(tags))
     return RedirectResponse(f"/boxes/{box_id}", status_code=303)
 
 
@@ -1839,36 +1855,25 @@ def _bytes_for_vision(tenant_id: int, photo_name: str) -> bytes:
 
 
 def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
-    """Background worker: vision pass → insert pending items → mark job done."""
-    with db() as conn:
-        conn.execute("UPDATE ingest_jobs SET status = 'processing' WHERE id = ?", (job_id,))
-        conn.commit()
+    """Background worker: vision pass → insert pending items → mark job done.
+    Runs after the request scope closes, so it routes through the no-actor
+    DAO entry points instead of going through Actor-gated mutations."""
+    dao_ingest_jobs.mark_processing(job_id)
     try:
         image_bytes = _bytes_for_vision(tenant_id, photo_name)
         detected = vision.detect_items(image_bytes, media_type="image/jpeg")
-        with db() as conn:
-            for item in detected:
-                bbox = item.bbox or [None, None, None, None]
-                conn.execute(
-                    "INSERT INTO pending_items "
-                    "(name, description, photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, tenant_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (item.name, item.description, photo_name, *bbox, tenant_id),
-                )
-            conn.execute(
-                "UPDATE ingest_jobs SET status = 'done', item_count = ?, "
-                "completed_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (len(detected), job_id),
+        for item in detected:
+            bbox = item.bbox or [None, None, None, None]
+            dao_ingest_jobs.insert_pending_item(
+                tenant_id,
+                name=item.name,
+                description=item.description,
+                photo=photo_name,
+                bbox=tuple(bbox),
             )
-            conn.commit()
+        dao_ingest_jobs.mark_done(job_id, len(detected))
     except Exception as e:
-        with db() as conn:
-            conn.execute(
-                "UPDATE ingest_jobs SET status = 'failed', error = ?, "
-                "completed_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (str(e)[:500], job_id),
-            )
-            conn.commit()
+        dao_ingest_jobs.mark_failed(job_id, str(e))
 
 
 @app.get("/ingest", response_class=HTMLResponse)
@@ -2660,62 +2665,6 @@ def _next_room_color(conn, location_id: int) -> str:
         "SELECT COUNT(*) FROM rooms WHERE location_id = ?", (location_id,),
     ).fetchone()[0]
     return _ROOM_COLORS[n % len(_ROOM_COLORS)]
-
-
-def _locations_with_room_counts(conn) -> list[dict]:
-    """Locations + per-location counts and a representative floorplan.
-
-    `floorplan` here is "what should we show on the locations index card",
-    not necessarily `locations.floorplan` — multi-floor support moved the
-    actual floorplan image onto floors.floorplan, leaving the legacy
-    locations.floorplan column populated only for pre-migration data
-    (and stale even there once a user replaces the floor's image).  Pick
-    the first floor's floorplan when one exists, fall back to the legacy
-    column otherwise, so the index card never reports "no floorplan" on a
-    location whose floors actually have one."""
-    rows = conn.execute(
-        "SELECT l.id, l.name, l.created_at, "
-        "       (SELECT COUNT(*) FROM rooms WHERE location_id = l.id) AS room_count, "
-        "       (SELECT COUNT(*) FROM boxes b "
-        "         JOIN rooms r ON r.id = b.room_id "
-        "         WHERE r.location_id = l.id) AS box_count, "
-        "       COALESCE("
-        "         (SELECT f.floorplan FROM floors f "
-        "           WHERE f.location_id = l.id AND f.floorplan IS NOT NULL "
-        "           ORDER BY f.sort_order, f.id LIMIT 1), "
-        "         l.floorplan"
-        "       ) AS floorplan "
-        "FROM locations l ORDER BY l.created_at"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _rooms_for_picker(conn) -> list[dict]:
-    """Flat list suitable for an optgroup'd select. Includes floor name so a
-    location with two rooms of the same name (e.g. two "Bathroom"s on
-    different floors) can be visually disambiguated in the dropdown."""
-    rows = conn.execute(
-        "SELECT r.id, r.name, "
-        "       l.id AS location_id, l.name AS location_name, "
-        "       f.name AS floor_name "
-        "FROM rooms r "
-        "JOIN locations l ON l.id = r.location_id "
-        "LEFT JOIN floors f ON f.id = r.floor_id "
-        "ORDER BY l.name, f.name IS NULL, f.name, r.name"
-    ).fetchall()
-    rooms = [dict(r) for r in rows]
-
-    # Mark each room with whether its name collides with another room in the
-    # same location — the template uses this flag to append the floor name so
-    # the user can tell them apart.
-    by_loc_name: dict[tuple, int] = {}
-    for r in rooms:
-        key = (r["location_id"], r["name"].casefold())
-        by_loc_name[key] = by_loc_name.get(key, 0) + 1
-    for r in rooms:
-        key = (r["location_id"], r["name"].casefold())
-        r["needs_floor_disambiguation"] = by_loc_name[key] > 1
-    return rooms
 
 
 @app.get("/locations", response_class=HTMLResponse)
