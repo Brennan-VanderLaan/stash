@@ -31,12 +31,16 @@ def test_single_label_404_for_unknown_box(client):
 
 
 def test_single_label_respects_persisted_orientation(client):
-    """Default landscape; flipping label_orientation to portrait
-    rotates the rendered cell content 90° within the same
-    physical cell."""
+    """Default landscape produces a wide viewBox; flipping
+    ``label_orientation`` to portrait swaps the SVG to a tall
+    upright canvas so the preview is readable without tilting
+    the user's head.  The printed-sheet path still rotates the
+    cell — see ``test_print_page_respects_persisted_orientation``."""
     client.post("/boxes", data={"name": "Portrait Box"})
     landscape = client.get("/boxes/1/label.svg").text
+    # Landscape: 101.6 × 50.8 viewBox, no rotation.
     assert "rotate(90" not in landscape
+    assert 'viewBox="0 0 101.6 50.8"' in landscape
 
     # Flip to portrait via the new endpoint.
     r = client.post(
@@ -47,9 +51,10 @@ def test_single_label_respects_persisted_orientation(client):
     assert r.status_code in (200, 303)
 
     portrait = client.get("/boxes/1/label.svg").text
-    # Portrait rendering rotates the inner content; a 90° rotation
-    # appears in the SVG transform list.
-    assert "rotate(90" in portrait
+    # Portrait preview swaps to a tall viewBox and skips the
+    # rotation transform so the user sees the label upright.
+    assert "rotate(90" not in portrait
+    assert 'viewBox="0 0 50.8 101.6"' in portrait
 
 
 def test_label_orientation_rejects_garbage(client):
@@ -239,35 +244,42 @@ def test_print_page_respects_persisted_orientation(client):
     back to landscape because ``_selected_boxes`` didn't pull
     ``label_orientation`` out of the row.  After the fix, a
     box flipped to portrait must produce a ``rotate(90)`` in
-    the print HTML; a landscape box must NOT."""
-    client.post("/boxes", data={"name": "Portrait Test"})
-    client.post("/boxes", data={"name": "Landscape Test"})
+    the print HTML; a landscape box must NOT.
+
+    Names are looked up word-by-word because the portrait layout
+    word-wraps into separate ``<text>`` elements — "Portrait
+    Test" never appears as a literal substring in the SVG, but
+    "Portrait" and "Test" each will."""
+    client.post("/boxes", data={"name": "PortraitWord"})
+    client.post("/boxes", data={"name": "LandscapeWord"})
     client.post("/boxes/1/label-orientation",
                 data={"orientation": "portrait"})
     html = client.get("/labels/print").text
     # Exactly one rotate — the portrait box.
     assert html.count("rotate(90)") == 1
-    assert "Portrait Test" in html
-    assert "Landscape Test" in html
+    assert "PortraitWord" in html
+    assert "LandscapeWord" in html
 
 
-def test_portrait_layout_qr_lands_in_cell_bounds(client):
-    """The portrait rotation must land the QR fully inside the
-    cell, not half-outside — that was the other half of the
-    rendering bug.  Look at the portrait box's label SVG and
-    confirm the rotation transform puts the rendered shape's
-    bounding box at exactly cell dimensions."""
-    client.post("/boxes", data={"name": "Portrait Test"})
-    client.post("/boxes/1/label-orientation",
-                data={"orientation": "portrait"})
-    svg = client.get("/boxes/1/label.svg").text
-    # The outer rotation group wraps the inner shape with a
-    # translate that moves it back into bounds.  The translate
-    # value MUST equal the cell width (101.6 for 5523 default).
-    assert "translate(101.6,0) rotate(90)" in svg
-    # The inner rect is the portrait canvas (50.8 wide ×
-    # 101.6 tall), not the rotated landscape rect.
-    assert 'width="50.8" height="101.6"' in svg
+def test_portrait_sheet_layout_lands_in_cell_bounds(client):
+    """On the printed sheet the portrait inner shape MUST be
+    rotated into the physical landscape cell — so the inner
+    portrait canvas (50.8 × 101.6) gets a ``translate(101.6,0)
+    rotate(90)`` wrapper that brings its bounding box back to
+    (0,0)..(101.6, 50.8) which equals the cell footprint.  This
+    used to be checked on the per-box SVG, but the per-box SVG
+    is now the *upright preview* — the rotation only lives on
+    the sheet path, so we assert it there."""
+    import labels
+    box = {
+        "id": 1, "name": "Portrait Test", "notes": "",
+        "art_bytes": None, "label_orientation": "portrait",
+    }
+    sheet = labels.render_single_sheet_svg([box])
+    assert "translate(101.6,0) rotate(90)" in sheet
+    # Portrait inner canvas (50.8 wide × 101.6 tall) should also
+    # appear — that's the rect the rotation wraps.
+    assert 'width="50.8" height="101.6"' in sheet
 
 
 # ── QR + content ──────────────────────────────────────────────────

@@ -149,6 +149,16 @@ _DESC_FONT_FRACTION = 0.13
 _ID_FONT_FRACTION = 0.10
 _CHARS_PER_FONT_UNIT = 1.7   # rough sans-serif width / font-size
 
+# Portrait labels: QR is smaller (so name has room to wrap below),
+# text fonts are slightly smaller (the column is narrower than in
+# landscape so wrapping needs to actually fit), and the ID badge
+# is much bigger because portrait has the headroom and the ID
+# doubles as a "find this box from across the room" marker.
+_QR_FRACTION_PORTRAIT = 0.72
+_NAME_FONT_FRACTION_PORTRAIT = 0.14
+_DESC_FONT_FRACTION_PORTRAIT = 0.10
+_ID_FONT_FRACTION_PORTRAIT = 0.18
+
 
 def _qr_data_for_box(box_id: int, public_url: str) -> str:
     """URL the QR points at.  With STASH_PUBLIC_URL set, scanning
@@ -186,25 +196,72 @@ def _fit_font(text: str, max_width: float, ideal: float,
     return max(ideal * max_width / width, minimum)
 
 
+def _wrap_text(text: str, max_width: float, font_size: float,
+               max_lines: int = 3) -> list[str]:
+    """Greedy word-wrap → list of lines that each fit ``max_width``.
+
+    Portrait labels in particular have a *narrow* text column, so
+    a naive single-line render of "Holiday Decorations - Garage
+    Bay 2" gets clipped at the cell edge.  Wrapping into 2-3 lines
+    is far more legible than a font shrink that ends up unreadable.
+
+    Width estimate is the same approximation ``_fit_font`` uses
+    (chars / ``_CHARS_PER_FONT_UNIT`` × font_size).  A word longer
+    than ``max_width`` on its own keeps its line — clipping one
+    word is still better than dropping it; in practice this only
+    fires on URLs or long compound nouns.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    words = text.split()
+    chars_per_mm = _CHARS_PER_FONT_UNIT / font_size
+    max_chars = max(1, int(max_width * chars_per_mm))
+    lines: list[str] = []
+    cur = ""
+    for word in words:
+        candidate = f"{cur} {word}".strip()
+        if len(candidate) <= max_chars or not cur:
+            cur = candidate
+            continue
+        lines.append(cur)
+        if len(lines) >= max_lines:
+            cur = ""
+            break
+        cur = word
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    # If words remain unrendered, append an ellipsis to the last
+    # visible line so the user knows it's truncated.
+    used_words = sum(len(line.split()) for line in lines)
+    if used_words < len(words) and lines:
+        tail = lines[-1]
+        if not tail.endswith("..."):
+            while tail and len(tail) + 3 > max_chars:
+                tail = tail[:-1]
+            lines[-1] = tail.rstrip() + "..."
+    return lines
+
+
 def _background_art_inner(art_bytes: bytes | None,
-                          canvas_w: float, canvas_h: float,
-                          margin: float) -> str:
-    """Background-art layer covering the full cell minus the
-    rounded-corner margin.  Earlier versions clipped the art to
-    the right of the QR which left a hard vertical cut line
-    (looked like a partly-loaded image).  The QR's black
-    squares stay 100% opaque on top of the faded art and
-    scan fine — the text + QR are still the focal points,
-    the art is wallpaper."""
-    if not art_bytes:
+                          x: float, y: float,
+                          w: float, h: float) -> str:
+    """Background-art layer placed within an explicit rect (the
+    text region of the label).  Centring on the text region, not
+    the whole cell, keeps the art's focal point behind the name +
+    description where the user is actually reading.  The rect
+    butts flush against the QR's edge so there's no white strip
+    between QR and art (which earlier rendered as a "loading
+    bug" hard line).  The QR's black squares stay 100% opaque
+    on top of the faded art and scan fine — the text + QR are
+    still the focal points, the art is wallpaper."""
+    if not art_bytes or w <= 0 or h <= 0:
         return ""
     mime = "image/jpeg" if art_bytes[:3] == b"\xff\xd8\xff" else "image/png"
     b64 = base64.b64encode(art_bytes).decode("ascii")
     return (
         f'<image href="data:{mime};base64,{b64}" '
-        f'x="{margin}" y="{margin}" '
-        f'width="{canvas_w - 2 * margin}" '
-        f'height="{canvas_h - 2 * margin}" '
+        f'x="{x}" y="{y}" width="{w}" height="{h}" '
         f'preserveAspectRatio="xMidYMid slice" opacity="0.3"/>'
     )
 
@@ -244,7 +301,15 @@ def _label_inner_landscape(
         f'<rect width="{canvas_w}" height="{canvas_h}" '
         f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
-    art = _background_art_inner(background_art, canvas_w, canvas_h, margin)
+    # Background art rect: butts flush against the QR's right edge
+    # (no white strip = no hard cut line) and extends to the right
+    # margin.  Vertical span is the cell minus margins.  Centred on
+    # the text region so the art's focal point is behind the name.
+    art_x = margin + qr_size
+    art = _background_art_inner(
+        background_art, art_x, margin,
+        canvas_w - margin - art_x, canvas_h - 2 * margin,
+    )
     if art:
         parts.append(art)
     parts.extend([
@@ -286,25 +351,34 @@ def _label_inner_portrait(
     axis of the printed cell ends up reading vertically.  Canvas
     here is "tall" — narrower than tall.
 
-    Sized off ``canvas_w`` (the short side of the rotated canvas,
-    which becomes the short side of the printed cell after
-    rotation) so QR + text proportions match what landscape
-    produces in the same cell."""
+    The narrow axis is the short side of the printed cell.  We
+    size QR off the short side; text margins are ``margin`` from
+    each edge so words wrap *inside* the cell instead of running
+    off the printed edge.  Box-ID badge is bumped to a 1.6×
+    multiplier of the landscape size since portrait has the
+    headroom and the ID is the "find this box from across the
+    room" handle.
+    """
     short_dim = canvas_w
     margin = short_dim * _MARGIN_FRACTION
-    qr_size = short_dim * _QR_FRACTION
+    qr_size = short_dim * _QR_FRACTION_PORTRAIT
     qr_x = (canvas_w - qr_size) / 2
     qr_y = margin
-    name_size = short_dim * _NAME_FONT_FRACTION
-    desc_size = short_dim * _DESC_FONT_FRACTION
-    id_size = short_dim * _ID_FONT_FRACTION
+    # Portrait's text column is much narrower than landscape's
+    # (50.8 mm wide vs ~58 mm) so we start name slightly smaller
+    # and rely on word-wrap to fill the vertical space rather than
+    # font-fit shrinking the name into illegibility.
+    name_size = short_dim * _NAME_FONT_FRACTION_PORTRAIT
+    desc_size = short_dim * _DESC_FONT_FRACTION_PORTRAIT
+    id_size = short_dim * _ID_FONT_FRACTION_PORTRAIT
 
     text_x = margin
     text_max = canvas_w - 2 * margin
-    # First text line sits a full ``margin`` below the QR.
-    name_y = qr_y + qr_size + margin + name_size
-
-    name_size = _fit_font(name, text_max, name_size)
+    # ID badge claims its own row at the bottom-right of the
+    # portrait canvas; reserve a strip above it so wrapped text
+    # can't collide with it.
+    id_band_y = canvas_h - margin
+    text_floor = id_band_y - id_size * 1.4
 
     qr_path, qr_vb = _qr_svg_path(_qr_data_for_box(box_id, public_url))
     vb_w = float(qr_vb.split()[2])
@@ -314,7 +388,16 @@ def _label_inner_portrait(
         f'<rect width="{canvas_w}" height="{canvas_h}" '
         f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
-    art = _background_art_inner(background_art, canvas_w, canvas_h, margin)
+    # Background art rect spans the text region: from just under
+    # the QR down to the bottom margin (above the ID strip), full
+    # text-column width.  Centred on the text region so the focal
+    # point sits behind the name.  Butts flush against the QR's
+    # bottom so there's no white strip / hard cut line.
+    art_y = qr_y + qr_size
+    art = _background_art_inner(
+        background_art, margin, art_y,
+        canvas_w - 2 * margin, id_band_y - art_y,
+    )
     if art:
         parts.append(art)
     parts.extend([
@@ -322,26 +405,47 @@ def _label_inner_portrait(
         f'scale({qr_size / vb_w},{qr_size / vb_h})">',
         f'  <path d="{qr_path}" fill="black"/>',
         f'</g>',
-        # ID badge sits at the bottom-right of the portrait
-        # canvas so it's away from the QR but still on a fixed
-        # corner you can find at a glance.
-        f'<text x="{canvas_w - margin}" '
-        f'y="{canvas_h - margin}" '
+        # Larger ID badge: portrait has the room and this is the
+        # "find from across the room" handle.
+        f'<text x="{canvas_w - margin}" y="{id_band_y}" '
         f'font-family="ui-monospace, Menlo, monospace" '
-        f'font-size="{id_size}" fill="#666" text-anchor="end">'
+        f'font-size="{id_size}" fill="#666" '
+        f'font-weight="bold" text-anchor="end">'
         f'#{box_id}</text>',
-        f'<text x="{text_x}" y="{name_y}" '
-        f'font-family="sans-serif" font-size="{name_size}" '
-        f'font-weight="bold" fill="#111">{_escape(name)}</text>',
     ])
-    if description:
-        desc_size = _fit_font(description, text_max, desc_size)
-        desc_y = name_y + desc_size + 1.5
+
+    # Name wrap.  We aim for up to 3 lines; if the text genuinely
+    # doesn't fit even at 3 lines the wrap helper truncates with
+    # an ellipsis.
+    name_lines = _wrap_text(name, text_max, name_size, max_lines=3)
+    name_y = qr_y + qr_size + margin + name_size
+    line_height = name_size * 1.1
+    for i, line in enumerate(name_lines):
+        y = name_y + i * line_height
+        if y > text_floor:
+            break
         parts.append(
-            f'<text x="{text_x}" y="{desc_y}" '
-            f'font-family="sans-serif" font-size="{desc_size}" '
-            f'fill="#666">{_escape(description)}</text>'
+            f'<text x="{text_x}" y="{y}" '
+            f'font-family="sans-serif" font-size="{name_size}" '
+            f'font-weight="bold" fill="#111">{_escape(line)}</text>'
         )
+    last_name_y = name_y + max(0, len(name_lines) - 1) * line_height
+
+    if description:
+        # Description wraps too; sits right below the last name
+        # line in a lighter weight, smaller size.
+        desc_lines = _wrap_text(description, text_max, desc_size, max_lines=2)
+        desc_y0 = last_name_y + desc_size + 1.0
+        desc_lh = desc_size * 1.1
+        for i, line in enumerate(desc_lines):
+            y = desc_y0 + i * desc_lh
+            if y > text_floor:
+                break
+            parts.append(
+                f'<text x="{text_x}" y="{y}" '
+                f'font-family="sans-serif" font-size="{desc_size}" '
+                f'fill="#666">{_escape(line)}</text>'
+            )
     return "\n    ".join(parts)
 
 
@@ -431,16 +535,35 @@ def render_label_svg(
 ) -> str:
     """Single-cell SVG, sized to the chosen format's cell.  Used
     for the per-box label preview thumbnails on /labels and the
-    /boxes/{id}/label.svg download."""
+    /boxes/{id}/label.svg download.
+
+    For portrait orientation the SVG is rendered *upright* — i.e.
+    the viewBox is the portrait canvas (50.8 × 101.6 for 5523)
+    and no rotation transform is applied — so the preview is
+    readable without tilting the user's head.  The sheet/PDF
+    paths still rotate the content into the physical landscape
+    cell because the printed sheet is landscape-celled regardless
+    of orientation choice.
+    """
     fmt = fmt or AVERY_FORMATS[DEFAULT_FORMAT_SKU]
-    box = {
-        "id": box_id,
-        "name": box_name,
-        "notes": description,
-        "art_bytes": background_art,
-        "label_orientation": orientation,
-    }
-    inner = _label_group(fmt, box, public_url)
+    o = (orientation or "landscape").lower()
+    if o == "portrait":
+        canvas_w = fmt.label_h_mm
+        canvas_h = fmt.label_w_mm
+        inner = _label_inner_portrait(
+            box_id, box_name, description or "", public_url,
+            canvas_w, canvas_h, background_art,
+        )
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="{canvas_w}mm" height="{canvas_h}mm"
+     viewBox="0 0 {canvas_w} {canvas_h}">
+  {inner}
+</svg>"""
+    inner = _label_inner_landscape(
+        box_id, box_name, description or "", public_url,
+        fmt.label_w_mm, fmt.label_h_mm, background_art,
+    )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      width="{fmt.label_w_mm}mm" height="{fmt.label_h_mm}mm"
