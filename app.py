@@ -188,22 +188,90 @@ _OPERATOR_EMAILS = frozenset(
 def _invite_token_in_path(path: str) -> str | None:
     """Pull the token segment out of ``/invite/<token>`` and
     ``/invite/<token>/accept``.  Returns None for any other path so
-    the middleware bypass only fires on the redemption surface — not
-    e.g. ``/api/invite/...`` or a future namespaced route."""
+    the middleware bypass only fires on the redemption surface —
+    not e.g. ``/api/invite/...`` or a future
+    ``/invite/<token>/<extra>`` route.
+
+    Tight match: ``parts == ["invite", token]`` or
+    ``parts == ["invite", token, "accept"]``.  Anything else falls
+    through to the auth wall.  Token charset is limited to the
+    url-safe alphabet ``secrets.token_urlsafe`` produces."""
     parts = path.strip("/").split("/")
-    if len(parts) >= 2 and parts[0] == "invite" and parts[1]:
-        # Reject /invite/ alone or query-shaped tails.
-        token = parts[1]
-        if token and all(c.isalnum() or c in "-_" for c in token):
-            return token
-    return None
+    if len(parts) not in (2, 3):
+        return None
+    if parts[0] != "invite":
+        return None
+    if len(parts) == 3 and parts[2] != "accept":
+        return None
+    token = parts[1]
+    if not token:
+        return None
+    if not all(c.isalnum() or c in "-_" for c in token):
+        return None
+    return token
 
 
 _LOG_ROUTE = obs.get_logger("route")
 
 
+# Defense-in-depth response headers.  Caddy sets some of these at
+# the edge in production deploys, but stamping them in the app too
+# means the protection holds for any future deployment topology
+# (LB without security headers, k8s ingress, etc.) without
+# remembering to copy the directives across.
+_SECURITY_HEADERS = {
+    # Refuse to render a stash response inside an iframe — kills
+    # clickjacking on the few state-mutating GET-shaped flows.
+    "X-Frame-Options": "DENY",
+    # Don't let browsers sniff /uploads/<name> as text/html when it
+    # claims image/jpeg.  Pairs with the explicit ``image/jpeg``
+    # media_type in serve_upload to keep stored-XSS shut.
+    "X-Content-Type-Options": "nosniff",
+    # Trim the Referer to the origin only on cross-origin nav.
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    # A baseline CSP — locks resource loads to same-origin (templates
+    # don't pull from CDNs), drops object/embed/applet, and
+    # explicitly forbids iframes (X-Frame-Options is the modern-
+    # browser path; this is the older-browser fallback).  Inline
+    # scripts are allowed because the existing templates have small
+    # snippets; tightening to nonces lands when there's bandwidth.
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "base-uri 'self'"
+    ),
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        # Don't clobber a header a route deliberately set.
+        response.headers.setdefault(k, v)
+    return response
+
+
+# Paths that bypass current_actor entirely.  These either don't
+# need identity (healthz) or are static surfaces oauth2-proxy
+# already gates ahead of us.  Anything outside this set hits the
+# auth wall.
+_AUTH_BYPASS_PATHS = frozenset(("/healthz",))
+
+
 @app.middleware("http")
 async def current_actor(request: Request, call_next):
+    # Healthcheck + a tiny set of unauthenticated probes bypass the
+    # auth wall entirely.  Container HEALTHCHECKs and external
+    # probes hit /healthz without any identity headers; the route's
+    # response carries no tenant data, so a bypass is safe.
+    if request.url.path in _AUTH_BYPASS_PATHS:
+        return await call_next(request)
+
     # Stamp a fresh request_id first so every log line emitted under
     # this request — including the 403 + invite-bypass paths below —
     # carries it.  Trust an inbound X-Request-Id when present (lets
@@ -454,6 +522,15 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_object_shares_target ON object_shares(target_kind, target_id);
         CREATE INDEX IF NOT EXISTS idx_object_shares_recipient ON object_shares(recipient_email);
+        -- Partial UNIQUE on the *active* triple — same shape spec §
+        -- "Sharing model" implied.  Two concurrent share-creates for
+        -- the same (kind, id, email) raced into duplicate active
+        -- rows under the previous schema; the constraint forces the
+        -- DAO's idempotent UPDATE-OR-INSERT path to be the only way
+        -- to land an active share.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_object_shares_active
+            ON object_shares(target_kind, target_id, recipient_email)
+            WHERE revoked_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3446,6 +3523,17 @@ def invite_accept(request: Request, token: str):
     # Newly-joined member needs a fresh request so the middleware
     # picks up the membership; redirect home.
     return RedirectResponse("/", status_code=303)
+
+
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated liveness probe for the container HEALTHCHECK
+    + external uptime monitors.  Bypasses ``current_actor`` (see
+    ``_AUTH_BYPASS_PATHS``) so it works without an
+    ``X-Forwarded-Email`` header from inside the container, and
+    returns no tenant data — just a fixed shape so curl --fail
+    succeeds when the process is up."""
+    return {"ok": True, "version": VERSION, "git_sha": GIT_SHA[:7] if GIT_SHA else ""}
 
 
 # ── /shared + share-mint routes (phase 6) ──────────────────────────

@@ -51,7 +51,7 @@ VOLUME ["/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/ >/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/healthz >/dev/null || exit 1
 
 # Version + SHA come last so a new commit only invalidates this layer (cheap
 # to rebuild — no file copies, no installs). The OCI labels make the image

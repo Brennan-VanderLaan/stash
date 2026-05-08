@@ -73,6 +73,11 @@ def create(actor: Actor, name: str, role: str = "maintainer") -> dict:
     name = name.strip()
     if not name:
         raise ValueError("token name required")
+    # Generous cap that covers anything human-typed (MCP server,
+    # Sister's iPad, etc.) without letting a malicious caller bloat
+    # the DB or break the listing UI with a 10MB string.
+    if len(name) > 100:
+        raise ValueError("token name must be 100 characters or fewer")
     if role not in ("maintainer", "readonly"):
         raise ValueError(f"unknown role {role!r}")
 
