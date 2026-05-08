@@ -2012,34 +2012,26 @@ def queue_items_fragment(request: Request):
 
 
 @app.post("/queue/{pending_id}/match")
-def queue_match(pending_id: int):
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM pending_items WHERE id = ?", (pending_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        boxes = [
-            dict(b) for b in conn.execute(
-                "SELECT id, name, location, notes FROM boxes"
-            ).fetchall()
-        ]
+def queue_match(request: Request, pending_id: int):
+    actor: Actor = request.state.actor
+    try:
+        row = dao_pending.get_by_id(actor, pending_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    boxes = dao_boxes.list_for_picker(actor)
 
     suggestion = vision.suggest_box(row["name"], row["description"] or "", boxes)
 
-    with db() as conn:
-        conn.execute(
-            "UPDATE pending_items SET suggested_box_id = ?, suggested_new_box_name = ?, "
-            "suggested_new_box_location = ?, suggestion_reason = ? WHERE id = ?",
-            (
-                suggestion.box_id if suggestion.match == "existing" else None,
-                suggestion.new_box_name if suggestion.match == "new" else None,
-                suggestion.new_box_location if suggestion.match == "new" else None,
-                suggestion.reason,
-                pending_id,
-            ),
+    try:
+        dao_pending.update_suggestion(
+            actor, pending_id,
+            suggested_box_id=suggestion.box_id if suggestion.match == "existing" else None,
+            suggested_new_box_name=suggestion.new_box_name if suggestion.match == "new" else None,
+            suggested_new_box_location=suggestion.new_box_location if suggestion.match == "new" else None,
+            suggestion_reason=suggestion.reason,
         )
-        conn.commit()
+    except (NotFoundError, ForbiddenError):
+        raise HTTPException(404)
     return RedirectResponse("/queue", status_code=303)
 
 
@@ -2063,47 +2055,47 @@ def queue_assign(
         raise HTTPException(400, "Name required")
     actor: Actor = request.state.actor
 
+    try:
+        row = dao_pending.get_for_assign(actor, pending_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    tenant_id = row["tenant_id"]
+    target_box_id = int(box_id)
+    try:
+        dao_boxes.get_by_id(actor, target_box_id)
+    except NotFoundError:
+        raise HTTPException(400, "Unknown box")
+
+    # Use manual crop coords if submitted, fall back to DB bbox, skip if cleared
+    source_photo = row["photo"]
+    photo = source_photo
+    if skip_crop.strip() != "1":
+        if crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
+            bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
+            photo = crop_photo(tenant_id, photo, bbox)
+        elif photo and row["bbox_y_min"] is not None:
+            bbox = (row["bbox_y_min"], row["bbox_x_min"], row["bbox_y_max"], row["bbox_x_max"])
+            photo = crop_photo(tenant_id, photo, bbox)
+
+    new_item_id = dao_items.create(
+        actor, target_box_id,
+        name=name, notes=description, photo=photo, source_photo=source_photo,
+    )
+    # Transfer tags from pending to the real item.  This is the one
+    # cross-table copy that doesn't fit any single DAO method cleanly,
+    # so we keep the SELECT/INSERT inline — both filters scope to the
+    # actor's tenant.
     with db() as conn:
-        row = conn.execute(
-            "SELECT photo, bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, tenant_id "
-            "FROM pending_items WHERE id = ?", (pending_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["tenant_id"] is not None and row["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = row["tenant_id"] or actor.tenant_id
-        target_box_id = int(box_id)
-        if not conn.execute("SELECT 1 FROM boxes WHERE id = ?", (target_box_id,)).fetchone():
-            raise HTTPException(400, "Unknown box")
-
-        # Use manual crop coords if submitted, fall back to DB bbox, skip if cleared
-        source_photo = row["photo"]
-        photo = source_photo
-        if skip_crop.strip() != "1":
-            if crop_y_min.strip() and crop_x_min.strip() and crop_y_max.strip() and crop_x_max.strip():
-                bbox = (int(crop_y_min), int(crop_x_min), int(crop_y_max), int(crop_x_max))
-                photo = crop_photo(tenant_id, photo, bbox)
-            elif photo and row["bbox_y_min"] is not None:
-                bbox = (row["bbox_y_min"], row["bbox_x_min"], row["bbox_y_max"], row["bbox_x_max"])
-                photo = crop_photo(tenant_id, photo, bbox)
-
-        cur = conn.execute(
-            "INSERT INTO items (box_id, name, notes, photo, source_photo, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (target_box_id, name.strip(), description.strip(), photo, source_photo, tenant_id),
-        )
-        new_item_id = cur.lastrowid
-        # Transfer tags from pending to the real item
         conn.execute(
             "INSERT INTO item_tags (item_id, tag_id, value, tenant_id) "
-            "SELECT ?, tag_id, value, ? FROM pending_item_tags WHERE pending_item_id = ?",
-            (new_item_id, tenant_id, pending_id),
+            "SELECT ?, tag_id, value, ? FROM pending_item_tags "
+            "WHERE pending_item_id = ? AND tenant_id = ?",
+            (new_item_id, tenant_id, pending_id, tenant_id),
         )
-        if tags.strip():
-            set_item_tags(conn, tenant_id, new_item_id, parse_tag_input(tags))
-        conn.execute("DELETE FROM pending_items WHERE id = ?", (pending_id,))
         conn.commit()
+    if tags.strip():
+        dao_tags.attach_to_item(actor, new_item_id, parse_tag_input(tags))
+    dao_pending.delete(actor, pending_id)
     return RedirectResponse("/queue", status_code=303)
 
 
@@ -2757,45 +2749,45 @@ def location_detail(
     edit: str = "",
     floor: int | None = None,
 ):
+    actor: Actor = request.state.actor
+    try:
+        loc = dao_locations.get_by_id(actor, location_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    floors = dao_floors.list_for_location(actor, location_id)
+
+    # Default the current floor: explicit ?floor= wins, else the first one.
+    current_floor = None
+    if floors:
+        if floor is not None:
+            current_floor = next((f for f in floors if f["id"] == floor), floors[0])
+        else:
+            current_floor = floors[0]
+
+    rooms = []
     with db() as conn:
-        loc = conn.execute(
-            "SELECT * FROM locations WHERE id = ?", (location_id,),
-        ).fetchone()
-        if not loc:
-            raise HTTPException(404)
-        floors = [dict(f) for f in conn.execute(
-            "SELECT * FROM floors WHERE location_id = ? "
-            "ORDER BY sort_order, id",
-            (location_id,),
-        ).fetchall()]
-
-        # Default the current floor: explicit ?floor= wins, else the first one.
-        current_floor = None
-        if floors:
-            if floor is not None:
-                current_floor = next((f for f in floors if f["id"] == floor), floors[0])
-            else:
-                current_floor = floors[0]
-
-        rooms = []
         if current_floor:
             rooms = [dict(r) for r in conn.execute(
                 "SELECT r.*, "
-                "       (SELECT COUNT(*) FROM boxes WHERE room_id = r.id) AS box_count "
-                "FROM rooms r WHERE r.floor_id = ? ORDER BY r.name",
-                (current_floor["id"],),
+                "       (SELECT COUNT(*) FROM boxes "
+                "         WHERE room_id = r.id AND tenant_id = ?) AS box_count "
+                "FROM rooms r "
+                "WHERE r.floor_id = ? AND r.tenant_id = ? "
+                "ORDER BY r.name",
+                (actor.tenant_id, current_floor["id"], actor.tenant_id),
             ).fetchall()]
             # Pull every box on this floor in one shot, then bucket by room
             # so each room rect can render its boxes as tiles inside it.
             box_rows = conn.execute(
                 "SELECT b.id, b.name, b.room_id, b.color, "
                 "       b.created_at, b.last_audited_at, "
-                "       (SELECT COUNT(*) FROM items WHERE box_id = b.id) AS item_count "
+                "       (SELECT COUNT(*) FROM items "
+                "         WHERE box_id = b.id AND tenant_id = ?) AS item_count "
                 "FROM boxes b "
                 "JOIN rooms r ON r.id = b.room_id "
-                "WHERE r.floor_id = ? "
+                "WHERE r.floor_id = ? AND b.tenant_id = ? "
                 "ORDER BY b.name",
-                (current_floor["id"],),
+                (actor.tenant_id, current_floor["id"], actor.tenant_id),
             ).fetchall()
             # Items (with photo) for the high-LOD tile mosaic. Pull id +
             # name so the rendered img can carry both — needed for the
@@ -2806,8 +2798,9 @@ def location_detail(
                 "JOIN boxes b ON b.id = i.box_id "
                 "JOIN rooms r ON r.id = b.room_id "
                 "WHERE r.floor_id = ? AND i.photo IS NOT NULL "
+                "  AND i.tenant_id = ? "
                 "ORDER BY i.box_id, i.created_at DESC",
-                (current_floor["id"],),
+                (current_floor["id"], actor.tenant_id),
             ).fetchall()
             # Cap at 64 per box (8x8 grid worth) — enough headroom that even
             # heavily-photographed boxes show every item, but bounded so a
@@ -2844,10 +2837,12 @@ def location_detail(
         # surface separately so the user can clean them up.
         unassigned = [dict(r) for r in conn.execute(
             "SELECT r.*, "
-            "       (SELECT COUNT(*) FROM boxes WHERE room_id = r.id) AS box_count "
-            "FROM rooms r WHERE r.location_id = ? AND r.floor_id IS NULL "
+            "       (SELECT COUNT(*) FROM boxes "
+            "         WHERE room_id = r.id AND tenant_id = ?) AS box_count "
+            "FROM rooms r "
+            "WHERE r.location_id = ? AND r.floor_id IS NULL AND r.tenant_id = ? "
             "ORDER BY r.name",
-            (location_id,),
+            (actor.tenant_id, location_id, actor.tenant_id),
         ).fetchall()]
     return templates.TemplateResponse(
         request, "location.html",
@@ -2864,36 +2859,38 @@ def location_detail(
 
 
 @app.post("/locations/{location_id}")
-def edit_location(location_id: int, name: str = Form(...)):
+def edit_location(request: Request, location_id: int, name: str = Form(...)):
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
-            raise HTTPException(404)
-        conn.execute("UPDATE locations SET name = ? WHERE id = ?", (name, location_id))
-        conn.commit()
+    actor: Actor = request.state.actor
+    try:
+        dao_locations.rename(actor, location_id, name)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse(f"/locations/{location_id}", status_code=303)
 
 
 @app.post("/locations/{location_id}/delete")
 def delete_location(request: Request, location_id: int, confirm: str = Form(...)):
     actor: Actor = request.state.actor
-    with db() as conn:
-        loc = conn.execute(
-            "SELECT name, floorplan, tenant_id FROM locations WHERE id = ?", (location_id,),
-        ).fetchone()
-        if not loc:
-            raise HTTPException(404)
-        if loc["tenant_id"] is not None and loc["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        if confirm.strip() != loc["name"]:
+    try:
+        result = dao_locations.delete(actor, location_id, confirm.strip())
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError as exc:
+        # The DAO raises ForbiddenError for both role denial AND for
+        # the type-the-name confirm mismatch — distinguish by message
+        # so the type-the-name path returns 400 (a user error) rather
+        # than 403 (an authz error).
+        if "type the location name" in str(exc).lower():
             raise HTTPException(400, "Type the location name to confirm deletion")
-        tenant_id = loc["tenant_id"] or actor.tenant_id
-        conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
-        conn.commit()
-        if loc["floorplan"]:
-            _delete_upload_if_orphan(conn, tenant_id, loc["floorplan"])
+        raise HTTPException(403)
+    if result.get("floorplan"):
+        with db() as conn:
+            _delete_upload_if_orphan(conn, actor.tenant_id, result["floorplan"])
     return RedirectResponse("/locations", status_code=303)
 
 
@@ -2903,45 +2900,31 @@ def create_floor(request: Request, location_id: int, name: str = Form(...)):
     if not name:
         raise HTTPException(400, "Name required")
     actor: Actor = request.state.actor
-    with db() as conn:
-        loc = conn.execute(
-            "SELECT tenant_id FROM locations WHERE id = ?", (location_id,),
-        ).fetchone()
-        if not loc:
-            raise HTTPException(404)
-        if loc["tenant_id"] is not None and loc["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        # Append at the end so floor ordering matches creation order by default.
-        next_sort = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM floors WHERE location_id = ?",
-            (location_id,),
-        ).fetchone()[0]
-        cur = conn.execute(
-            "INSERT INTO floors (location_id, name, sort_order, tenant_id) "
-            "VALUES (?, ?, ?, ?)",
-            (location_id, name, next_sort, loc["tenant_id"] or actor.tenant_id),
-        )
-        conn.commit()
+    try:
+        floor_id = dao_floors.create(actor, location_id, name)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse(
-        f"/locations/{location_id}?floor={cur.lastrowid}&edit=1", status_code=303,
+        f"/locations/{location_id}?floor={floor_id}&edit=1", status_code=303,
     )
 
 
 @app.post("/floors/{floor_id}")
-def edit_floor(floor_id: int, name: str = Form(...)):
+def edit_floor(request: Request, floor_id: int, name: str = Form(...)):
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    with db() as conn:
-        row = conn.execute(
-            "SELECT location_id FROM floors WHERE id = ?", (floor_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        conn.execute("UPDATE floors SET name = ? WHERE id = ?", (name, floor_id))
-        conn.commit()
+    actor: Actor = request.state.actor
+    try:
+        location_id = dao_floors.rename(actor, floor_id, name)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     return RedirectResponse(
-        f"/locations/{row['location_id']}?floor={floor_id}", status_code=303,
+        f"/locations/{location_id}?floor={floor_id}", status_code=303,
     )
 
 
@@ -2950,25 +2933,21 @@ async def upload_floor_floorplan(request: Request, floor_id: int, image: UploadF
     if not image or not image.filename:
         raise HTTPException(400, "Image required")
     actor: Actor = request.state.actor
-    with db() as conn:
-        floor = conn.execute(
-            "SELECT location_id, floorplan, tenant_id FROM floors WHERE id = ?", (floor_id,),
-        ).fetchone()
-        if not floor:
-            raise HTTPException(404)
-        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = floor["tenant_id"] or actor.tenant_id
-    new_name = save_photo_bytes(tenant_id, await image.read(), image.filename)
-    with db() as conn:
-        old = floor["floorplan"]
-        conn.execute(
-            "UPDATE floors SET floorplan = ? WHERE id = ?",
-            (new_name, floor_id),
-        )
-        conn.commit()
-        if old and old != new_name:
-            _delete_upload_if_orphan(conn, tenant_id, old)
+    try:
+        floor = dao_floors.get_by_id(actor, floor_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    new_name = save_photo_bytes(actor.tenant_id, await image.read(), image.filename)
+    try:
+        result = dao_floors.update_floorplan(actor, floor_id, new_name)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    old = result["old_floorplan"]
+    if old and old != new_name:
+        with db() as conn:
+            _delete_upload_if_orphan(conn, actor.tenant_id, old)
     return RedirectResponse(
         f"/locations/{floor['location_id']}?floor={floor_id}&edit=1", status_code=303,
     )
@@ -2977,20 +2956,16 @@ async def upload_floor_floorplan(request: Request, floor_id: int, image: UploadF
 @app.post("/floors/{floor_id}/delete")
 def delete_floor(request: Request, floor_id: int):
     actor: Actor = request.state.actor
-    with db() as conn:
-        floor = conn.execute(
-            "SELECT location_id, floorplan, tenant_id FROM floors WHERE id = ?", (floor_id,),
-        ).fetchone()
-        if not floor:
-            raise HTTPException(404)
-        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
-        tenant_id = floor["tenant_id"] or actor.tenant_id
-        conn.execute("DELETE FROM floors WHERE id = ?", (floor_id,))
-        conn.commit()
-        if floor["floorplan"]:
-            _delete_upload_if_orphan(conn, tenant_id, floor["floorplan"])
-    return RedirectResponse(f"/locations/{floor['location_id']}", status_code=303)
+    try:
+        result = dao_floors.delete(actor, floor_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if result.get("floorplan"):
+        with db() as conn:
+            _delete_upload_if_orphan(conn, actor.tenant_id, result["floorplan"])
+    return RedirectResponse(f"/locations/{result['location_id']}", status_code=303)
 
 
 @app.post("/floors/{floor_id}/rooms")
@@ -3005,27 +2980,24 @@ def create_room(
     if not name:
         raise HTTPException(400, "Name required")
     actor: Actor = request.state.actor
+    try:
+        floor = dao_floors.get_by_id(actor, floor_id)
+    except NotFoundError:
+        raise HTTPException(404)
     with db() as conn:
-        floor = conn.execute(
-            "SELECT location_id, tenant_id FROM floors WHERE id = ?", (floor_id,),
-        ).fetchone()
-        if not floor:
-            raise HTTPException(404)
-        if floor["tenant_id"] is not None and floor["tenant_id"] != actor.tenant_id:
-            raise HTTPException(404)
         color = _next_room_color(conn, floor["location_id"])
-        cur = conn.execute(
-            "INSERT INTO rooms (location_id, floor_id, name, x, y, w, h, color, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                floor["location_id"], floor_id, name,
-                _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), color,
-                floor["tenant_id"] or actor.tenant_id,
-            ),
+    try:
+        room_id = dao_rooms.create(
+            actor, floor_id, name,
+            x=_clamp01(x), y=_clamp01(y), w=_clamp01(w), h=_clamp01(h),
+            color=color,
         )
-        conn.commit()
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     if "application/json" in request.headers.get("accept", ""):
-        return {"ok": True, "id": cur.lastrowid, "color": color, "name": name}
+        return {"ok": True, "id": room_id, "color": color, "name": name}
     return RedirectResponse(
         f"/locations/{floor['location_id']}?floor={floor_id}&edit=1", status_code=303,
     )
@@ -3044,18 +3016,23 @@ def edit_room(
     if not name:
         raise HTTPException(400, "Name required")
     color_val = color.strip() if color and color.strip() in _ROOM_COLORS else None
-    with db() as conn:
-        row = conn.execute(
-            "SELECT location_id, floor_id, color FROM rooms WHERE id = ?", (room_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        new_color = color_val if color_val is not None else row["color"]
-        conn.execute(
-            "UPDATE rooms SET name = ?, x = ?, y = ?, w = ?, h = ?, color = ? WHERE id = ?",
-            (name, _clamp01(x), _clamp01(y), _clamp01(w), _clamp01(h), new_color, room_id),
+    actor: Actor = request.state.actor
+    try:
+        row = dao_rooms.get_with_location(actor, room_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    new_color = color_val if color_val is not None else row["color"]
+    try:
+        dao_rooms.update(
+            actor, room_id,
+            name=name,
+            x=_clamp01(x), y=_clamp01(y), w=_clamp01(w), h=_clamp01(h),
+            color=new_color,
         )
-        conn.commit()
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     if "application/json" in request.headers.get("accept", ""):
         return {"ok": True, "color": new_color}
     target = f"/locations/{row['location_id']}?edit=1"
@@ -3066,19 +3043,18 @@ def edit_room(
 
 @app.post("/rooms/{room_id}/delete")
 def delete_room(request: Request, room_id: int):
-    with db() as conn:
-        row = conn.execute(
-            "SELECT location_id, floor_id FROM rooms WHERE id = ?", (room_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404)
-        conn.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
-        conn.commit()
+    actor: Actor = request.state.actor
+    try:
+        result = dao_rooms.delete(actor, room_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
     if "application/json" in request.headers.get("accept", ""):
         return {"ok": True}
-    target = f"/locations/{row['location_id']}?edit=1"
-    if row["floor_id"]:
-        target = f"/locations/{row['location_id']}?floor={row['floor_id']}&edit=1"
+    target = f"/locations/{result['location_id']}?edit=1"
+    if result["floor_id"]:
+        target = f"/locations/{result['location_id']}?floor={result['floor_id']}&edit=1"
     return RedirectResponse(target, status_code=303)
 
 
