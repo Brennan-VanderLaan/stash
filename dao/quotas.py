@@ -34,6 +34,7 @@ matches.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -64,16 +65,30 @@ _PLAN_DEFAULTS = {
 # ── Window helpers ──────────────────────────────────────────────────
 
 
+# SQLite's ``CURRENT_TIMESTAMP`` produces ``YYYY-MM-DD HH:MM:SS`` —
+# space separator, no timezone suffix.  We compare timestamps as
+# strings (no datetime() casting) so the python-side strings need to
+# use the same shape; otherwise lexical compare flips within the
+# same date prefix (` ` < `T`).  ``_format_window`` produces matching
+# output.
+
+
+def _format_window(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _month_start_iso() -> str:
     now = datetime.now(timezone.utc)
-    return now.replace(day=1, hour=0, minute=0, second=0,
-                       microsecond=0).isoformat()
+    return _format_window(
+        now.replace(day=1, hour=0, minute=0, second=0, microsecond=0),
+    )
 
 
 def _day_start_iso() -> str:
     now = datetime.now(timezone.utc)
-    return now.replace(hour=0, minute=0, second=0,
-                       microsecond=0).isoformat()
+    return _format_window(
+        now.replace(hour=0, minute=0, second=0, microsecond=0),
+    )
 
 
 # ── Cap resolution ──────────────────────────────────────────────────
@@ -248,6 +263,55 @@ def check_or_raise(
                 used["monthly_upload_bytes"] + units_about_to_record, cap,
             )
     # core / backup surfaces are uncapped today.
+
+
+# ── Tenant-creation throttle ────────────────────────────────────────
+
+
+# Per-IP cap on POST /admin/tenants — defends against a stolen
+# operator credential being used to mass-mint tenants in a
+# scripted run.  Default 5/hour matches spec § "Anti-abuse".
+TENANT_CREATION_PER_HOUR = int(
+    os.environ.get("STASH_TENANT_CREATION_PER_HOUR", "5"),
+)
+
+
+def _hour_start_iso() -> str:
+    now = datetime.now(timezone.utc)
+    return _format_window(
+        now.replace(minute=0, second=0, microsecond=0),
+    )
+
+
+def check_tenant_creation_rate(client_ip: str) -> None:
+    """Raise :class:`QuotaExceeded` if the IP has minted more than
+    ``TENANT_CREATION_PER_HOUR`` tenants in the current hour.
+    Driven from audit_log (we already record ``tenant.create``);
+    no additional table needed.
+
+    IPs not present in the metadata fall into a single ``unknown``
+    bucket so a missing X-Forwarded-For doesn't let an attacker
+    bypass by stripping the header."""
+    if not client_ip:
+        client_ip = "unknown"
+    since = _hour_start_iso()
+    with db() as conn:
+        # SQLite's json_extract fishes the IP out of the metadata
+        # blob without parsing on the Python side.
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action = 'tenant.create' "
+            "  AND created_at >= ? "
+            "  AND COALESCE("
+            "        json_extract(metadata_json, '$.ip'), 'unknown'"
+            "      ) = ?",
+            (since, client_ip),
+        ).fetchone()
+    if row["n"] >= TENANT_CREATION_PER_HOUR:
+        raise QuotaExceeded(
+            "tenant", "creation_rate",
+            int(row["n"]), TENANT_CREATION_PER_HOUR,
+        )
 
 
 # ── Override editor (operator surface) ──────────────────────────────

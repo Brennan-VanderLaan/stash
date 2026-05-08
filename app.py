@@ -3929,6 +3929,11 @@ def admin_dashboard(
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
+    # Decorate each tenant row with its current effective caps so
+    # the inline override form can pre-fill with what's active.
+    for t in tenants:
+        t["caps"] = dao_quotas.get_caps(t["id"])
+        t["usage"] = dao_quotas.usage_for_tenant(t["id"])
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     try:
         dao_backups._b2_config()
@@ -3988,6 +3993,42 @@ def admin_resume_api_token(request: Request, token_id: int):
     return RedirectResponse("/admin", status_code=303)
 
 
+@app.post("/admin/tenants/{tenant_id}/quotas")
+def admin_set_quotas(
+    request: Request,
+    tenant_id: int,
+    monthly_ai_calls: str = Form(""),
+    monthly_upload_bytes: str = Form(""),
+    daily_ai_cost_micros: str = Form(""),
+):
+    """Operator quota override editor.  Empty form fields leave
+    the existing override unchanged; a literal ``-1`` clears the
+    field (reverts to plan default).  Numbers go through the DAO,
+    which audit-logs ``quota.override``."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+
+    def _parse(v: str) -> int | None:
+        v = v.strip()
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            raise HTTPException(400, f"Cap value must be integer or empty: {v!r}")
+
+    try:
+        dao_quotas.set_overrides(
+            actor, tenant_id,
+            monthly_ai_calls=_parse(monthly_ai_calls),
+            monthly_upload_bytes=_parse(monthly_upload_bytes),
+            daily_ai_cost_micros=_parse(daily_ai_cost_micros),
+        )
+    except ForbiddenError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
+
+
 @app.post("/admin/tenants/{tenant_id}/backup")
 def admin_backup_to_b2(request: Request, tenant_id: int):
     """Operator-triggered B2 upload of a tenant's backup zip.
@@ -4032,8 +4073,27 @@ def admin_create_tenant_and_invite(
     name = name.strip()
     if not name:
         raise HTTPException(400, "Tenant name required")
+    # Per-IP throttle: 5/hour by default.  Defends against a
+    # stolen operator credential being scripted into mass
+    # tenant creation.  Caddy stamps the real client IP on
+    # ``X-Forwarded-For``; ``request.client.host`` is the
+    # fallback for direct deploys.
+    client_ip = (
+        (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
     try:
-        tenant_id = dao_tenants.create_tenant(actor, name, plan=plan)
+        dao_quotas.check_tenant_creation_rate(client_ip)
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"Tenant creation rate limit hit ({exc.used} ≥ {exc.cap} "
+            "per hour from this IP).  Wait for the window reset.",
+        )
+    try:
+        tenant_id = dao_tenants.create_tenant(
+            actor, name, plan=plan, client_ip=client_ip,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     try:

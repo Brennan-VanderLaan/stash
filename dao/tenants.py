@@ -91,7 +91,13 @@ def list_all(actor: Actor) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def create_tenant(actor: Actor, name: str, *, plan: str = "free") -> int:
+def create_tenant(
+    actor: Actor,
+    name: str,
+    *,
+    plan: str = "free",
+    client_ip: str = "",
+) -> int:
     """Operator-driven tenant creation.  Returns the new id.
 
     Spec § "Sign-up + onboarding" path #1 covers self-serve creation
@@ -100,7 +106,11 @@ def create_tenant(actor: Actor, name: str, *, plan: str = "free") -> int:
     a friend on their own tenant) — and so the operator does NOT
     automatically become a member.  The expectation is that they
     immediately mint an invite for the intended owner; until that's
-    accepted, the new tenant has zero members."""
+    accepted, the new tenant has zero members.
+
+    ``client_ip`` is recorded in the audit_log metadata so the
+    per-IP throttle in :func:`dao.quotas.check_tenant_creation_rate`
+    can count cleanly against the same source."""
     require_operator(actor)
     name = name.strip()
     if not name:
@@ -123,9 +133,13 @@ def create_tenant(actor: Actor, name: str, *, plan: str = "free") -> int:
             action="tenant.create",
             target_kind="tenant",
             target_id=tenant_id,
-            metadata={"name": name, "plan": plan},
+            metadata={
+                "name": name,
+                "plan": plan,
+                "ip": client_ip or "unknown",
+            },
         )
         conn.commit()
-    _log.info("tenant.create id=%s name=%r plan=%s",
-              tenant_id, name, plan)
+    _log.info("tenant.create id=%s name=%r plan=%s ip=%s",
+              tenant_id, name, plan, client_ip or "unknown")
     return tenant_id

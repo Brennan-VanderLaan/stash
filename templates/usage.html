@@ -17,15 +17,32 @@
 <div class="card maintenance-card">
   <div class="card-title">{{ _("This month") }}</div>
   <p class="text-sm text-muted">
-    {{ _("Counters reset on the 1st of each month (UTC). Costs are operator-side estimates and round to the nearest cent.") }}
+    {{ _("Counters reset on the 1st of each month (UTC). Costs are operator-side estimates and round to the nearest cent.  Daily AI cost cap resets at UTC midnight.") }}
   </p>
   <dl class="stat-row">
     <div>
       <dt>{{ _("AI calls") }}</dt>
       <dd>
-        {{ usage.ai_calls }}
+        {{ usage.ai_calls }}{% if usage.monthly_ai_calls_cap %} / {{ usage.monthly_ai_calls_cap }}
+          ({{ usage.monthly_ai_calls_percent }}%){% endif %}
         {% if usage.ai_cost_micros %}
           <span class="text-muted text-sm">≈ ${{ "%.2f" | format(usage.ai_cost_micros / 1_000_000) }}</span>
+        {% endif %}
+        {% if usage.monthly_ai_calls_band == "warning" %}
+          <span class="notice notice-warning text-sm">{{ _("Approaching cap") }}</span>
+        {% elif usage.monthly_ai_calls_band == "exceeded" %}
+          <span class="notice text-sm">{{ _("Cap exceeded — new AI requests will 429 until reset") }}</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("AI cost today") }}</dt>
+      <dd>
+        ${{ "%.2f" | format(usage.daily_ai_cost_micros_used / 1_000_000) }}{% if usage.daily_ai_cost_micros_cap %}
+          / ${{ "%.2f" | format(usage.daily_ai_cost_micros_cap / 1_000_000) }}
+          ({{ usage.daily_ai_cost_micros_percent }}%){% endif %}
+        {% if usage.daily_ai_cost_micros_band == "exceeded" %}
+          <span class="notice text-sm">{{ _("Daily cost cap hit") }}</span>
         {% endif %}
       </dd>
     </div>
@@ -33,7 +50,9 @@
       <dt>{{ _("Photos uploaded") }}</dt>
       <dd>
         {% set mb = (usage.upload_bytes / (1024 * 1024)) %}
-        {{ "%.1f" | format(mb) }} MB
+        {{ "%.1f" | format(mb) }} MB{% if usage.monthly_upload_bytes_cap %}
+          / {{ "%.0f" | format(usage.monthly_upload_bytes_cap / (1024 * 1024)) }} MB
+          ({{ usage.monthly_upload_bytes_percent }}%){% endif %}
       </dd>
     </div>
     <div>

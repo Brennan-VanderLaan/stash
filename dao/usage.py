@@ -99,12 +99,13 @@ def record(
 
 
 def _month_start_utc() -> str:
-    """ISO-8601 timestamp for the first second of the current UTC
-    month.  Billing windows are calendar months in UTC for now —
-    timezone-aware caps land with quotas in phase 10."""
+    """``YYYY-MM-DD HH:MM:SS`` start of the current UTC month.
+    Format matches SQLite's ``CURRENT_TIMESTAMP`` so a string
+    compare doesn't trip on ``' '`` vs ``'T'`` lexical difference
+    within the same date prefix."""
     now = datetime.now(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0,
-                       microsecond=0).isoformat()
+                       microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def summary(actor: Actor, *, since: str | None = None) -> dict:

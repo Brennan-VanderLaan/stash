@@ -168,6 +168,36 @@ def test_no_x_quota_warning_under_80_percent(client):
 # ── Operator override (admin surface) ──────────────────────────────
 
 
+def test_tenant_creation_throttle_blocks_after_n_per_hour(client, monkeypatch):
+    """Spec § "Anti-abuse · tenant-creation throttle" — 5/hour
+    default per IP.  The 6th request from the same IP gets 429."""
+    monkeypatch.setenv("STASH_TENANT_CREATION_PER_HOUR", "3")
+    # Reload quotas module so it picks up the env override.
+    import importlib
+    from dao import quotas as dao_quotas
+    importlib.reload(dao_quotas)
+
+    # Seed three tenant.create audit rows with the same IP.
+    with client.app_module.db() as conn:
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO audit_log "
+                "(tenant_id, actor_email, action, target_kind, target_id, "
+                " metadata_json) "
+                "VALUES (NULL, 'op@example.com', 'tenant.create', 'tenant', "
+                " ?, ?)",
+                (1000 + i,
+                 '{"name":"x","plan":"free","ip":"203.0.113.7"}'),
+            )
+        conn.commit()
+    # Now the 4th attempt from the same IP should hit the throttle.
+    import pytest
+    with pytest.raises(dao_quotas.QuotaExceeded):
+        dao_quotas.check_tenant_creation_rate("203.0.113.7")
+    # A different IP is fine.
+    dao_quotas.check_tenant_creation_rate("203.0.113.99")
+
+
 def test_set_overrides_audits(client):
     """Operator quota overrides leave an audit_log row keyed to
     the targeted tenant."""

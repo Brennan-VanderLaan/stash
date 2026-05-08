@@ -126,6 +126,53 @@
   {% endif %}
 </div>
 
+{# ── Per-tenant quota editor ──────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">Quotas</div>
+  <p class="text-sm text-muted">
+    Per-tenant caps override the plan defaults.  Leave a field
+    blank to keep the current setting; enter <code>-1</code> to
+    clear the override (revert to plan default).  Resets land
+    on the 1st of next UTC month for monthly caps; daily AI
+    cost resets at UTC midnight.
+  </p>
+  {% for t in tenants %}
+  <details>
+    <summary class="disclosure">
+      {{ t.name }}
+      <span class="text-muted text-sm">
+        — AI {{ t.usage.monthly_ai_calls }}/{{ t.caps.monthly_ai_calls or '∞' }},
+        upload {{ "%.0f" | format(t.usage.monthly_upload_bytes / 1048576) }}MB/{{ (t.caps.monthly_upload_bytes / 1048576) | round | int if t.caps.monthly_upload_bytes else '∞' }}MB,
+        AI cost today ${{ "%.2f" | format(t.usage.daily_ai_cost_micros / 1000000) }}/${{ "%.2f" | format(t.caps.daily_ai_cost_micros / 1000000) if t.caps.daily_ai_cost_micros else '∞' }}
+      </span>
+    </summary>
+    <form method="post" action="/admin/tenants/{{ t.id }}/quotas">
+      <label>
+        Monthly AI calls
+        <input type="text" name="monthly_ai_calls"
+               placeholder="{{ t.caps.monthly_ai_calls }}"
+               autocomplete="off">
+      </label>
+      <label>
+        Monthly upload bytes
+        <input type="text" name="monthly_upload_bytes"
+               placeholder="{{ t.caps.monthly_upload_bytes }}"
+               autocomplete="off">
+      </label>
+      <label>
+        Daily AI cost (micro-dollars)
+        <input type="text" name="daily_ai_cost_micros"
+               placeholder="{{ t.caps.daily_ai_cost_micros }}"
+               autocomplete="off">
+      </label>
+      <button type="submit" class="btn btn-primary btn-sm">
+        Save overrides
+      </button>
+    </form>
+  </details>
+  {% endfor %}
+</div>
+
 {# ── Cross-tenant API token panel ────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">API tokens ({{ api_tokens | length }})</div>
