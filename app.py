@@ -1196,6 +1196,16 @@ def migrate_db():
             conn, "ingest_jobs", "target_box_id",
             "INTEGER REFERENCES boxes(id) ON DELETE SET NULL",
         )
+        # Detection scope hint from the /ingest form: 'auto' (default),
+        # 'single' (one item per photo), or 'many' (crowded pile).
+        # The worker reads it back when calling vision.detect_items so
+        # the prompt matches user intent — fixes the "took a photo of
+        # ONE thing and Gemini returned dozens of fake items" failure
+        # mode.  Also persisted so retries replay with the same scope.
+        _add_column_if_missing(
+            conn, "ingest_jobs", "scope",
+            "TEXT NOT NULL DEFAULT 'auto'",
+        )
         # Token-revocation hardening (phase 11+).  Reason is a short
         # tag; suspended_at is a separate temporal field so an
         # operator can pause-and-resume without losing the original
@@ -2660,6 +2670,20 @@ def _bytes_for_vision(tenant_id: int, photo_name: str) -> bytes:
         return plaintext
 
 
+import threading as _threading
+# Process-global ingest concurrency cap.  Each upload spawns a
+# BackgroundTask per photo; on a small VM N parallel Gemini calls
+# can saturate CPU, blow through API rate limits, or — in the user-
+# observed case — produce duplicate pending_items as multiple
+# workers race to detect items in the same photo (see fix(ingest):
+# restrict retry).  Default 1 = strict serialization, which keeps a
+# tiny droplet healthy.  Operators with headroom can raise it via
+# ``STASH_INGEST_CONCURRENCY``.
+_INGEST_SEMAPHORE = _threading.BoundedSemaphore(
+    max(1, int(os.environ.get("STASH_INGEST_CONCURRENCY", "1"))),
+)
+
+
 def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     """Background worker: vision pass → insert pending items → mark job done.
     Runs after the request scope closes, so it routes through the no-actor
@@ -2670,8 +2694,22 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
     ``suggested_box_id = target_box_id`` so the sort UI pre-fills
     the box selection (very similar to the AI suggest path).  We
     re-read it from the row (rather than threading another param)
-    so the retry handler doesn't have to re-discover state."""
+    so the retry handler doesn't have to re-discover state.
+
+    Acquires ``_INGEST_SEMAPHORE`` before doing real work — while
+    waiting the row stays in 'pending' status (mark_processing
+    fires after acquire) so the UI shows "Queued" rather than
+    "Looking…", which is honest about the state."""
     _log = obs.get_logger("stash.ingest")
+    _log.info("ingest.worker.queued job_id=%s tenant_id=%s photo=%s",
+              job_id, tenant_id, photo_name)
+    with _INGEST_SEMAPHORE:
+        _process_ingest_job_locked(job_id, photo_name, tenant_id, _log)
+
+
+def _process_ingest_job_locked(
+    job_id: int, photo_name: str, tenant_id: int, _log,
+) -> None:
     _log.info("ingest.worker.start job_id=%s tenant_id=%s photo=%s",
               job_id, tenant_id, photo_name)
     dao_ingest_jobs.mark_processing(job_id)
@@ -2682,10 +2720,13 @@ def process_ingest_job(job_id: int, photo_name: str, tenant_id: int) -> None:
         # symptom: photo uploaded, sits spinning, no logs after
         # ``ingest.worker.start``).
         target_box_id = dao_ingest_jobs.get_target_box_id(job_id)
+        scope = dao_ingest_jobs.get_scope(job_id)
         image_bytes = _bytes_for_vision(tenant_id, photo_name)
-        _log.info("ingest.worker.vision job_id=%s bytes=%s",
-                  job_id, len(image_bytes))
-        detected = vision.detect_items(image_bytes, media_type="image/jpeg")
+        _log.info("ingest.worker.vision job_id=%s bytes=%s scope=%s",
+                  job_id, len(image_bytes), scope)
+        detected = vision.detect_items(
+            image_bytes, media_type="image/jpeg", scope=scope,
+        )
         _log.info("ingest.worker.vision_done job_id=%s items=%s",
                   job_id, len(detected))
         dao_usage.record(tenant_id, "ai", "gemini_detect")
@@ -2757,13 +2798,16 @@ async def ingest(
     background_tasks: BackgroundTasks,
     photos: list[UploadFile] = File(...),
     target_box_id: str = Form(""),
+    scope: str = Form("auto"),
 ):
     """Photo upload + worker dispatch.  ``target_box_id`` is the
     packing-session hint from the box picker — empty string means
     "no session", otherwise the integer is validated against the
     actor's tenant inside ``dao_ingest_jobs.create`` and a forged
     cross-tenant id silently degrades to no hint (crash toward
-    happy path)."""
+    happy path).  ``scope`` ('auto' / 'single' / 'many') tunes the
+    Gemini prompt: 'single' fixes the "took a photo of one thing,
+    AI returned a dozen items" failure mode."""
     valid = [p for p in photos if p and p.filename]
     if not valid:
         raise HTTPException(400, "Photo required")
@@ -2774,6 +2818,9 @@ async def ingest(
         target_id = int(target_box_id) if target_box_id.strip() else None
     except ValueError:
         target_id = None
+    scope_clean = (scope or "auto").strip().lower()
+    if scope_clean not in ("auto", "single", "many"):
+        scope_clean = "auto"
 
     # Pre-flight AI quota check — block obvious overages here
     # rather than burning the encode + per-photo background-job
@@ -2798,7 +2845,9 @@ async def ingest(
         photo_name = save_photo_bytes(actor.tenant_id, image_bytes, photo.filename)
         try:
             job_id = dao_ingest_jobs.create(
-                actor, photo_name, target_box_id=target_id,
+                actor, photo_name,
+                target_box_id=target_id,
+                scope=scope_clean,
             )
         except ForbiddenError:
             raise HTTPException(403)

@@ -36,9 +36,34 @@
   </div>
   {% endif %}
 
+  {# ── Detection scope ────────────────────────────────────────
+     Hints the Gemini prompt.  "Single item" was added because
+     an over-zealous detect-everything prompt would split a
+     single bag of parts into a dozen fake items (plastic,
+     label, contents, shadow, …).  Defaults to Auto so the
+     existing pile-of-stuff workflow is unchanged.  The radios
+     live OUTSIDE the upload forms; JS mirrors the chosen value
+     into a hidden ``scope`` field on each form so both
+     "Take photo" and "Select from gallery" pick it up. #}
+  <div class="ingest-scope-row" role="radiogroup" aria-label="Detection scope">
+    <label class="ingest-scope-option">
+      <input type="radio" name="ingest-scope" value="auto" checked data-scope-input>
+      <span>Auto</span>
+    </label>
+    <label class="ingest-scope-option">
+      <input type="radio" name="ingest-scope" value="single" data-scope-input>
+      <span>Single item</span>
+    </label>
+    <label class="ingest-scope-option">
+      <input type="radio" name="ingest-scope" value="many" data-scope-input>
+      <span>Many items</span>
+    </label>
+  </div>
+
   <div class="btn-row">
     <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
       <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
+      <input type="hidden" name="scope" value="auto" data-scope-mirror>
       <label class="btn btn-primary btn-block">
         Take photo
         <input type="file" name="photos" accept="image/*" capture="environment" hidden data-auto-submit>
@@ -46,6 +71,7 @@
     </form>
     <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
       <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
+      <input type="hidden" name="scope" value="auto" data-scope-mirror>
       <label class="btn btn-secondary btn-block">
         Select from gallery
         <input type="file" name="photos" accept="image/*" multiple hidden data-auto-submit>
@@ -83,6 +109,37 @@
     border: 1px solid rgba(63, 169, 245, 0.4);
     border-radius: 0.4rem;
     font-size: 0.9rem;
+  }
+  /* CSS ``display: flex`` overrides the implicit ``display: none``
+     that the [hidden] attribute provides, so without this rule
+     ``banner.hidden = true`` does nothing visually — End session
+     would clear the picker but leave the banner stuck on screen. */
+  .ingest-packing-banner[hidden] {
+    display: none;
+  }
+  .ingest-scope-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .ingest-scope-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.4rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    user-select: none;
+  }
+  .ingest-scope-option:has(input:checked) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .ingest-scope-option input {
+    margin: 0;
   }
 </style>
 
@@ -124,6 +181,20 @@
     });
   }
 
+  // Detection-scope radios → hidden ``scope`` field on each form.
+  // Same single-source-of-truth pattern as the box picker so both
+  // upload buttons carry the chosen scope.
+  const scopeMirrors = document.querySelectorAll('[data-scope-mirror]');
+  function syncScope() {
+    const checked = document.querySelector('[data-scope-input]:checked');
+    const v = checked ? checked.value : 'auto';
+    scopeMirrors.forEach(el => { el.value = v; });
+  }
+  document.querySelectorAll('[data-scope-input]').forEach(el => {
+    el.addEventListener('change', syncScope);
+  });
+  syncScope();
+
   // ── Auto-submit file pickers without nuking the page ─────────────
   // The forms set hidden=true on inputs and used onchange="this.form.submit()"
   // before. With the JS poller below we don't need the meta-refresh that
@@ -133,9 +204,10 @@
     input.addEventListener('change', () => {
       if (input.files && input.files.length > 0) {
         uploading = true;
-        // Re-sync just before submit in case the select changed
-        // after the page first loaded.
+        // Re-sync just before submit in case the picker / radio
+        // changed after the page first loaded.
         syncTarget();
+        syncScope();
         input.form.submit();
       }
     });

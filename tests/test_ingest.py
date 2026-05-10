@@ -84,15 +84,13 @@ def test_ingest_retry_rejects_non_failed_job(client):
     assert r.status_code == 404
 
 
-def test_ingest_retry_unwedges_processing(client):
-    """A job stuck in 'processing' (worker hung mid-call) must be
-    retryable from the UI.  Without this the user has to restart
-    the server to clear the row — the orphan-sweep on boot is the
-    fallback, not the primary recovery path.
-
-    We upload a photo so the encrypted blob exists, then flip the
-    job back to 'processing' before retry to simulate a hung
-    worker."""
+def test_ingest_retry_rejects_processing_to_avoid_duplicates(client):
+    """Retrying a job already in 'processing' would spawn a
+    duplicate worker that re-detects the same items — visible to
+    the user as "rejected items keep coming back" because each
+    parallel worker re-creates near-identical pending_items rows.
+    Retry is restricted to 'failed' rows; genuinely stuck
+    processing rows recover via Dismiss or restart's orphan-sweep."""
     with patch("app.vision.detect_items", side_effect=RuntimeError("transient")):
         client.post(
             "/ingest",
@@ -104,12 +102,8 @@ def test_ingest_retry_unwedges_processing(client):
             "WHERE id = 1",
         )
         conn.commit()
-    with patch("app.vision.detect_items", return_value=[
-        DetectedItem(name="recovered", description="d"),
-    ]):
-        r = client.post("/ingest/1/retry", follow_redirects=False)
-    assert r.status_code == 303
-    assert "recovered" in client.get("/queue").text
+    r = client.post("/ingest/1/retry", follow_redirects=False)
+    assert r.status_code == 404
 
 
 def test_ingest_dismiss_processing_job(client):
@@ -332,6 +326,162 @@ def test_ingest_page_renders_box_picker(client):
     assert 'id="ingest-target-box"' in page
     assert "PickerBox" in page
     assert 'name="target_box_id"' in page
+
+
+# ── Scope picker (single / many / auto) ───────────────────────────
+
+
+def test_ingest_scope_single_threads_through_to_vision(client):
+    """``scope=single`` on the form lands as ``scope='single'`` on
+    the ingest_jobs row and is passed to ``vision.detect_items``
+    so the prompt asks for one item only."""
+    captured = {}
+    def fake_detect(image_bytes, media_type="image/jpeg", *, scope="auto"):
+        captured["scope"] = scope
+        return [DetectedItem(name="thing", description="d")]
+    with patch("app.vision.detect_items", side_effect=fake_detect):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"scope": "single"},
+        )
+    assert captured["scope"] == "single"
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT scope FROM ingest_jobs WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["scope"] == "single"
+
+
+def test_ingest_scope_unknown_value_coerces_to_auto(client):
+    """A garbled scope value silently degrades to 'auto' so a
+    forged hidden input can't break the worker — same crash-toward-
+    happy-path rule we use for target_box_id."""
+    captured = {}
+    def fake_detect(image_bytes, media_type="image/jpeg", *, scope="auto"):
+        captured["scope"] = scope
+        return []
+    with patch("app.vision.detect_items", side_effect=fake_detect):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+            data={"scope": "diagonal"},
+        )
+    assert captured["scope"] == "auto"
+
+
+def test_ingest_page_renders_scope_picker(client):
+    page = client.get("/ingest").text
+    assert "Single item" in page
+    assert "Many items" in page
+    assert 'name="ingest-scope"' in page
+
+
+def test_vision_scope_single_changes_prompt(monkeypatch):
+    """Direct unit test on vision.detect_items: the prompt body
+    differs between scope='single' and scope='auto' so a malformed
+    refactor that drops the branch fails loudly."""
+    import vision
+    captured = {}
+
+    class FakeResp:
+        text = '{"items": []}'
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            captured["contents"] = contents
+            return FakeResp()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(vision, "_gemini_client", FakeClient())
+    vision.detect_items(b"x", scope="single")
+    text_part = captured["contents"][1]
+    text = getattr(text_part, "text", "") or str(text_part)
+    assert "ONE physical item" in text
+    captured.clear()
+    vision.detect_items(b"x", scope="auto")
+    text2 = getattr(captured["contents"][1], "text", "") or str(captured["contents"][1])
+    assert "ONE physical item" not in text2
+
+
+# ── Concurrency cap ───────────────────────────────────────────────
+
+
+def test_ingest_concurrency_semaphore_serializes_workers(monkeypatch):
+    """Two ingest jobs scheduled back-to-back must NOT both call
+    Gemini at the same moment when the cap is 1.  We instrument the
+    detect_items call to record overlap and assert it's zero."""
+    monkeypatch.setenv("STASH_INGEST_CONCURRENCY", "1")
+    # Reload app so the module-level semaphore picks up the env.
+    import sys, importlib, base64, secrets, tempfile
+    monkeypatch.setenv(
+        "STASH_KEK", base64.b64encode(secrets.token_bytes(32)).decode(),
+    )
+    tmp = tempfile.mkdtemp()
+    monkeypatch.setenv("STASH_DB", f"{tmp}/stash.db")
+    monkeypatch.setenv("STASH_UPLOADS", f"{tmp}/uploads")
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app as app_module
+    importlib.reload(app_module)
+
+    import threading
+    active = {"count": 0, "max_overlap": 0}
+    lock = threading.Lock()
+
+    def fake_detect(image_bytes, media_type="image/jpeg", *, scope="auto"):
+        with lock:
+            active["count"] += 1
+            active["max_overlap"] = max(active["max_overlap"], active["count"])
+        # Hold the call for a beat so a second worker has a chance
+        # to enter if the semaphore is broken.
+        import time
+        time.sleep(0.05)
+        with lock:
+            active["count"] -= 1
+        return [DetectedItem(name="thing", description="d")]
+
+    monkeypatch.setattr(app_module.vision, "detect_items", fake_detect)
+    # The worker normally reads the encrypted blob off disk; stub
+    # to skip that since this test cares only about scheduler
+    # serialization, not the photo pipeline.
+    monkeypatch.setattr(
+        app_module, "_bytes_for_vision", lambda tid, name: b"\xff\xd8x",
+    )
+    # Drive two jobs through the worker on parallel threads.
+    threads = []
+    # Stand up a tenant + job rows.
+    with app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('T', 'pro')",
+        )
+        tid = cur.lastrowid
+        ids = []
+        for _ in range(2):
+            cur = conn.execute(
+                "INSERT INTO ingest_jobs (photo, status, tenant_id) "
+                "VALUES ('p.jpg', 'pending', ?)",
+                (tid,),
+            )
+            ids.append(cur.lastrowid)
+        conn.commit()
+
+    def runner(jid):
+        app_module.process_ingest_job(jid, "p.jpg", tid)
+
+    for jid in ids:
+        t = threading.Thread(target=runner, args=(jid,))
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+
+    assert active["max_overlap"] == 1, (
+        f"semaphore failed to serialize: max_overlap={active['max_overlap']}"
+    )
 
 
 def test_match_existing_box(client):

@@ -17,11 +17,12 @@
         <span class="text-sm text-muted">Queued</span>
       {% endif %}
     </div>
-    {# Retry + Dismiss are also surfaced on ``processing`` rows so
-       a worker that hung (e.g. Gemini timeout that never raised)
-       has a UI escape hatch.  Without this the user can't clear
-       the row without a server restart. #}
-    {% if j.status in ['failed', 'processing'] %}
+    {# Retry is failed-only — retrying a still-running worker
+       would spawn a duplicate that detects the same items again.
+       Genuinely stuck 'processing' rows recover via Dismiss
+       (drops the row) or a restart (boot orphan-sweep flips them
+       to failed). #}
+    {% if j.status == 'failed' %}
     <form method="post" action="/ingest/{{ j.id }}/retry">
       <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
     </form>

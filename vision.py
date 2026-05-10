@@ -66,23 +66,69 @@ class BoxMatch(BaseModel):
     reason: str = Field(description="One sentence explaining the choice")
 
 
-def detect_items(image_bytes: bytes, media_type: str = "image/jpeg") -> list[DetectedItem]:
-    """Stage 1: Gemini vision — detect items with bounding boxes."""
+def detect_items(
+    image_bytes: bytes,
+    media_type: str = "image/jpeg",
+    *,
+    scope: str = "auto",
+) -> list[DetectedItem]:
+    """Stage 1: Gemini vision — detect items with bounding boxes.
+
+    ``scope`` hints the prompt:
+
+    * ``"auto"`` (default) — list every distinct item.  Used when
+      the photo's contents are unknown.
+    * ``"single"`` — assume the photo shows ONE item, return
+      exactly one entry.  Use when the user knows they shot a
+      single thing on a counter and the AI was over-detecting
+      (e.g. seeing the texture of the bag as another item).
+    * ``"many"`` — explicitly tell the AI to expect a pile, list
+      everything, group sets generously.  Same baseline behaviour
+      as auto but stronger framing for crowded photos.
+    """
+    s = (scope or "auto").lower()
+    if s == "single":
+        instruction = (
+            "This photo shows ONE physical item the user wants to catalog. "
+            "Return exactly ONE entry — the primary subject — with a bounding "
+            "box around it. Do NOT split it into parts, do not detect packaging "
+            "or backgrounds as separate items.\n\n"
+            "Respond with ONLY valid JSON, no markdown fences:\n"
+            '{"items": [{"name": "short name", "description": "brief description", '
+            '"bbox": [y_min, x_min, y_max, x_max]}]}\n\n'
+            "Bounding box coordinates must be in the range 0-1000 "
+            "(normalized to image dimensions)."
+        )
+    elif s == "many":
+        instruction = (
+            "This photo shows MANY items spread out for cataloging. "
+            "List every distinct physical item. Group obvious sets "
+            "(e.g. 'set of 4 mugs') as one item. Skip background, "
+            "furniture, and the container/surface holding items. "
+            "Be thorough but do not invent items that aren't visible.\n\n"
+            "Respond with ONLY valid JSON, no markdown fences:\n"
+            '{"items": [{"name": "short name", "description": "brief description", '
+            '"bbox": [y_min, x_min, y_max, x_max]}]}\n\n'
+            "Bounding box coordinates must be in the range 0-1000 "
+            "(normalized to image dimensions)."
+        )
+    else:
+        instruction = (
+            "List every distinct physical item in this photo that someone might want to "
+            "store and catalog. For each item, provide a bounding box.\n\n"
+            "Group obvious sets (e.g. 'set of 4 mugs') as one item. "
+            "Skip background, furniture, and the container/surface holding items.\n\n"
+            "Respond with ONLY valid JSON, no markdown fences:\n"
+            '{"items": [{"name": "short name", "description": "brief description", '
+            '"bbox": [y_min, x_min, y_max, x_max]}]}\n\n'
+            "Bounding box coordinates must be in the range 0-1000 "
+            "(normalized to image dimensions)."
+        )
     response = get_gemini().models.generate_content(
         model=GEMINI_MODEL,
         contents=[
             genai.types.Part.from_bytes(data=image_bytes, mime_type=media_type),
-            genai.types.Part.from_text(
-                text="List every distinct physical item in this photo that someone might want to "
-                "store and catalog. For each item, provide a bounding box.\n\n"
-                "Group obvious sets (e.g. 'set of 4 mugs') as one item. "
-                "Skip background, furniture, and the container/surface holding items.\n\n"
-                "Respond with ONLY valid JSON, no markdown fences:\n"
-                '{"items": [{"name": "short name", "description": "brief description", '
-                '"bbox": [y_min, x_min, y_max, x_max]}]}\n\n'
-                "Bounding box coordinates must be in the range 0-1000 "
-                "(normalized to image dimensions)."
-            ),
+            genai.types.Part.from_text(text=instruction),
         ],
     )
 

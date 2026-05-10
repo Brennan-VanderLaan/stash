@@ -40,6 +40,7 @@ def create(
     photo_filename: str,
     *,
     target_box_id: int | None = None,
+    scope: str = "auto",
 ) -> int:
     """Insert a fresh pending job for a just-uploaded photo.  Returns
     the job id so the caller can hand it to the background worker.
@@ -67,11 +68,15 @@ def create(
             # hint" rather than a 500.  The user still gets to sort
             # the items normally; only the pre-fill is lost.
             target_box_id = None
+    if scope not in ("auto", "single", "many"):
+        # Unknown scope is silently coerced to auto — the user might
+        # be on an older client that didn't send the field.
+        scope = "auto"
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO ingest_jobs (photo, status, tenant_id, target_box_id) "
-            "VALUES (?, 'pending', ?, ?)",
-            (photo_filename, actor.tenant_id, target_box_id),
+            "INSERT INTO ingest_jobs (photo, status, tenant_id, target_box_id, scope) "
+            "VALUES (?, 'pending', ?, ?, ?)",
+            (photo_filename, actor.tenant_id, target_box_id, scope),
         )
         conn.commit()
     return cur.lastrowid
@@ -157,25 +162,42 @@ def get_target_box_id(job_id: int) -> int | None:
     return row["target_box_id"] if row else None
 
 
+def get_scope(job_id: int) -> str:
+    """Worker hook: read the detection-scope hint stamped onto the
+    job at create time.  Returns 'auto' if the row's missing or the
+    column was added by an older migration that defaulted it."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT scope FROM ingest_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None or not row["scope"]:
+        return "auto"
+    return row["scope"]
+
+
 def get_for_retry(actor: Actor, job_id: int) -> dict:
-    """Pull the bits the retry path needs.  Accepts ``failed`` or
-    ``processing`` rows: ``processing`` is included because a
-    worker that hung mid-call (e.g. a Gemini timeout the network
-    layer never returned from) leaves the row stuck — Retry must
-    be able to abandon-and-respawn it without forcing the user
-    through a server restart."""
+    """Pull the bits the retry path needs.  Failed-only.
+
+    Earlier we extended this to ``processing`` rows as an "unstick"
+    affordance, but retrying a still-running worker just spawns a
+    duplicate that detects the same items again — the user sees
+    those duplicates as "rejected items keep coming back" because
+    each parallel worker re-creates near-identical pending_items
+    rows.  Genuinely stuck jobs are recovered via Dismiss (which
+    drops the row) or a server restart (which fires the boot-time
+    orphan sweep)."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         raise NotFoundError(f"job {job_id}")
     with db() as conn:
         row = conn.execute(
-            "SELECT photo, tenant_id, target_box_id FROM ingest_jobs "
-            "WHERE id = ? AND tenant_id = ? "
-            "  AND status IN ('failed', 'processing')",
+            "SELECT photo, tenant_id, target_box_id, scope FROM ingest_jobs "
+            "WHERE id = ? AND tenant_id = ? AND status = 'failed'",
             (job_id, actor.tenant_id),
         ).fetchone()
     if row is None:
-        raise NotFoundError(f"job {job_id} (or not retry-able)")
+        raise NotFoundError(f"job {job_id} (or not in failed state)")
     return dict(row)
 
 
