@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.11.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.2...v1.11.0) (2026-05-10)
+
+
+### Features
+
+* **errors:** sassy 4xx/5xx pages starring a Siberian cat + a tortoise ([693396e](https://github.com/Brennan-VanderLaan/stash/commit/693396e734e716af43aa39125d49b5d7e59e8250))
+
+
+### Bug Fixes
+
+* **ingest:** retry-only-on-failed, serialize workers, add scope picker ([dca2ba3](https://github.com/Brennan-VanderLaan/stash/commit/dca2ba324557c4f6af2279a205fbf0128fa42962))
+
 ## [1.10.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.1...v1.10.2) (2026-05-08)
 
 
