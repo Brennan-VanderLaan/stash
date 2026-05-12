@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.12.0...v1.13.0) (2026-05-12)
+
+
+### Features
+
+* **usage,tenants:** monthly sparklines + tenant switcher ([b9cc9c7](https://github.com/Brennan-VanderLaan/stash/commit/b9cc9c78bb916209d0776266de5d567e79841710))
+* **usage:** bandwidth metering + on-disk storage footprint ([5768291](https://github.com/Brennan-VanderLaan/stash/commit/5768291c214acbbd1018bb1a1a5339be198c5d4d))
+
 ## [1.12.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.11.0...v1.12.0) (2026-05-12)
 
 
