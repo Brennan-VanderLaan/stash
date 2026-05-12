@@ -351,8 +351,9 @@ def test_label_svg_embeds_background_art_when_set(client, monkeypatch):
     # Embedded as a base64 data URI so the SVG is self-contained.
     assert "<image" in svg
     assert "data:image/jpeg;base64," in svg
-    # Faded so QR + text remain readable, but visible after print.
-    assert 'opacity="0.3"' in svg
+    # Bumped from 0.3 → 0.5 so the art is actually visible on
+    # printed labels — at 0.3 it disappeared on most papers.
+    assert 'opacity="0.5"' in svg
 
 
 def test_clear_art_drops_image_and_orphans_file(client, monkeypatch):
@@ -481,6 +482,136 @@ def test_art_files_are_protected_from_orphan_cleanup(client, monkeypatch):
     client.post("/maintenance/cleanup")
     assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id)
             / art).exists(), "cleanup deleted referenced background art"
+
+
+# ── Room-color tint ────────────────────────────────────────────────
+
+
+def test_label_color_tint_only_renders_with_room_query_param(client):
+    """A box in a room with a colour: ``?colors=room`` produces a
+    tinted ``<rect>`` in the SVG; the same URL without the flag
+    keeps the label clean."""
+    # Stand up a location/floor/room with a colour, then a box in it.
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO locations (name, tenant_id) VALUES ('Home', ?)",
+            (client.test_tenant_id,),
+        )
+        loc = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO floors (location_id, name, tenant_id) "
+            "VALUES (?, 'Main', ?)",
+            (loc, client.test_tenant_id),
+        )
+        floor = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, floor_id, name, color, tenant_id) "
+            "VALUES (?, ?, 'Living', '#60a5fa', ?)",
+            (loc, floor, client.test_tenant_id),
+        )
+        room = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO boxes (name, room_id, tenant_id) VALUES ('B1', ?, ?)",
+            (room, client.test_tenant_id),
+        )
+        conn.commit()
+    bid = cur.lastrowid
+    plain = client.get(f"/boxes/{bid}/label.svg").text
+    assert "#60a5fa" not in plain
+    tinted = client.get(f"/boxes/{bid}/label.svg?colors=room").text
+    assert "#60a5fa" in tinted
+    # Pastel wash, not opaque — text + QR still need to read.
+    assert 'opacity="0.18"' in tinted
+
+
+def test_label_per_box_color_overrides_room_color(client):
+    """``boxes.color`` is the per-box override.  When set, it wins
+    over the room colour."""
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO locations (name, tenant_id) VALUES ('Home', ?)",
+            (client.test_tenant_id,),
+        )
+        loc = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO floors (location_id, name, tenant_id) "
+            "VALUES (?, 'Main', ?)",
+            (loc, client.test_tenant_id),
+        )
+        floor = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, floor_id, name, color, tenant_id) "
+            "VALUES (?, ?, 'Living', '#60a5fa', ?)",
+            (loc, floor, client.test_tenant_id),
+        )
+        room = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO boxes (name, room_id, color, tenant_id) "
+            "VALUES ('B1', ?, '#fbbf24', ?)",
+            (room, client.test_tenant_id),
+        )
+        conn.commit()
+    bid = cur.lastrowid
+    tinted = client.get(f"/boxes/{bid}/label.svg?colors=room").text
+    assert "#fbbf24" in tinted
+    assert "#60a5fa" not in tinted
+
+
+def test_label_color_tint_rejects_non_hex(monkeypatch):
+    """A forged box.color that isn't a hex string is silently
+    dropped — the renderer never echoes arbitrary attribute
+    payload into the SVG."""
+    import labels
+    # Bogus value should NOT appear in the rendered SVG, but a
+    # valid hex should.
+    out_bad = labels.render_label_svg(
+        1, "X", "", "", color_tint='red"/><script>alert(1)</script>',
+    )
+    assert "alert" not in out_bad
+    out_good = labels.render_label_svg(
+        1, "X", "", "", color_tint='#abc',
+    )
+    assert "#abc" in out_good
+
+
+def test_labels_page_renders_room_tint_toggle(client):
+    client.post("/boxes", data={"name": "X"})
+    page = client.get("/labels").text
+    assert 'id="room-tint-toggle"' in page
+    assert "Room colours" in page
+
+
+def test_labels_pdf_propagates_room_tint(client):
+    """``?colors=room`` on the PDF route must thread through to the
+    sheet renderer.  Easiest to assert via the SVG sheet (which
+    shares the same payload-building path)."""
+    _require_cairo_runtime()
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO locations (name, tenant_id) VALUES ('Home', ?)",
+            (client.test_tenant_id,),
+        )
+        loc = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO floors (location_id, name, tenant_id) "
+            "VALUES (?, 'Main', ?)",
+            (loc, client.test_tenant_id),
+        )
+        floor = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, floor_id, name, color, tenant_id) "
+            "VALUES (?, ?, 'Living', '#22d3ee', ?)",
+            (loc, floor, client.test_tenant_id),
+        )
+        room = cur.lastrowid
+        conn.execute(
+            "INSERT INTO boxes (name, room_id, tenant_id) VALUES ('B1', ?, ?)",
+            (room, client.test_tenant_id),
+        )
+        conn.commit()
+    r = client.get("/labels/sheet.pdf?colors=room")
+    assert r.status_code == 200
+    assert r.content[:5] == b"%PDF-"
 
 
 def _fake_jpg_bytes() -> bytes:

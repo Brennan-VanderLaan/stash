@@ -259,10 +259,50 @@ def _background_art_inner(art_bytes: bytes | None,
         return ""
     mime = "image/jpeg" if art_bytes[:3] == b"\xff\xd8\xff" else "image/png"
     b64 = base64.b64encode(art_bytes).decode("ascii")
+    # Opacity: bumped from 0.3 → 0.5 because at 0.3 the AI-
+    # generated art was nearly invisible on most papers; 0.5 keeps
+    # text + QR readable while making the art a real visual cue.
     return (
         f'<image href="data:{mime};base64,{b64}" '
         f'x="{x}" y="{y}" width="{w}" height="{h}" '
-        f'preserveAspectRatio="xMidYMid slice" opacity="0.3"/>'
+        f'preserveAspectRatio="xMidYMid slice" opacity="0.5"/>'
+    )
+
+
+_COLOR_HEX_RE = None  # initialised lazily to avoid an import at module load
+
+
+def _sanitize_color(color: str | None) -> str | None:
+    """Whitelist hex-color strings (``#abc`` / ``#abcdef``) so a
+    forged box.color from a malformed write can't inject arbitrary
+    SVG attributes into the rendered label.  Anything that doesn't
+    match the regex returns None and the renderer skips the tint."""
+    global _COLOR_HEX_RE
+    if _COLOR_HEX_RE is None:
+        import re
+        _COLOR_HEX_RE = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+    if not color:
+        return None
+    color = color.strip()
+    return color if _COLOR_HEX_RE.match(color) else None
+
+
+def _color_tint_rect(color: str | None,
+                     canvas_w: float, canvas_h: float,
+                     margin: float) -> str:
+    """Pastel wash of the room color sitting between the white
+    label background and the (optional) AI art.  Drawn at 18%
+    opacity so QR + text contrast stays intact; full saturation
+    would make text hard to read on a printed sticker."""
+    sanitized = _sanitize_color(color)
+    if not sanitized:
+        return ""
+    return (
+        f'<rect x="{margin}" y="{margin}" '
+        f'width="{canvas_w - 2 * margin}" '
+        f'height="{canvas_h - 2 * margin}" '
+        f'rx="1.2" ry="1.2" '
+        f'fill="{sanitized}" opacity="0.18"/>'
     )
 
 
@@ -274,6 +314,7 @@ def _label_inner_landscape(
     canvas_w: float,
     canvas_h: float,
     background_art: bytes | None = None,
+    color_tint: str | None = None,
 ) -> str:
     """Landscape-canvas layout: QR on the left, name + notes
     fill the right.  Used for the canvas being wider than tall —
@@ -301,6 +342,12 @@ def _label_inner_landscape(
         f'<rect width="{canvas_w}" height="{canvas_h}" '
         f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
+    # Pastel room-color wash sits directly above the white base
+    # rect so the AI art (drawn next) layers on top and gets
+    # tinted naturally without us having to blend manually.
+    tint = _color_tint_rect(color_tint, canvas_w, canvas_h, margin)
+    if tint:
+        parts.append(tint)
     # Background art rect: butts flush against the QR's right edge
     # (no white strip = no hard cut line) and extends to the right
     # margin.  Vertical span is the cell minus margins.  Centred on
@@ -345,6 +392,7 @@ def _label_inner_portrait(
     canvas_w: float,
     canvas_h: float,
     background_art: bytes | None = None,
+    color_tint: str | None = None,
 ) -> str:
     """Portrait-canvas layout: QR on TOP, name + notes stack
     below.  Used inside a cell after a 90° rotation so the long
@@ -388,6 +436,9 @@ def _label_inner_portrait(
         f'<rect width="{canvas_w}" height="{canvas_h}" '
         f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
     ]
+    tint = _color_tint_rect(color_tint, canvas_w, canvas_h, margin)
+    if tint:
+        parts.append(tint)
     # Background art rect spans the text region: from just under
     # the QR down to the bottom margin (above the ID strip), full
     # text-column width.  Centred on the text region so the focal
@@ -472,6 +523,12 @@ def _label_group(
     name = box.get("name", "")
     description = box.get("notes") or ""
     art_bytes = box.get("art_bytes")
+    # ``color_tint`` is the resolved hex string the caller plumbed
+    # through ("box.color, fallback room.color" — see
+    # ``_attach_color_tint`` in app.py).  Already sanitised by
+    # ``_color_tint_rect`` at render time, so a None here just
+    # skips the wash.
+    color_tint = box.get("color_tint")
     box_id = box["id"]
 
     if orientation == "portrait":
@@ -484,7 +541,7 @@ def _label_group(
         canvas_h = fmt.label_w_mm    # 101.6 for 5523
         inner = _label_inner_portrait(
             box_id, name, description, public_url,
-            canvas_w, canvas_h, art_bytes,
+            canvas_w, canvas_h, art_bytes, color_tint,
         )
         # SVG transform reads right-to-left for application
         # order: rotate first, then translate.  rotate(90)
@@ -500,7 +557,7 @@ def _label_group(
 
     return _label_inner_landscape(
         box_id, name, description, public_url,
-        fmt.label_w_mm, fmt.label_h_mm, art_bytes,
+        fmt.label_w_mm, fmt.label_h_mm, art_bytes, color_tint,
     )
 
 
@@ -532,6 +589,7 @@ def render_label_svg(
     *,
     fmt: AveryFormat | None = None,
     orientation: str = "landscape",
+    color_tint: str | None = None,
 ) -> str:
     """Single-cell SVG, sized to the chosen format's cell.  Used
     for the per-box label preview thumbnails on /labels and the
@@ -552,7 +610,7 @@ def render_label_svg(
         canvas_h = fmt.label_w_mm
         inner = _label_inner_portrait(
             box_id, box_name, description or "", public_url,
-            canvas_w, canvas_h, background_art,
+            canvas_w, canvas_h, background_art, color_tint,
         )
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
@@ -562,7 +620,7 @@ def render_label_svg(
 </svg>"""
     inner = _label_inner_landscape(
         box_id, box_name, description or "", public_url,
-        fmt.label_w_mm, fmt.label_h_mm, background_art,
+        fmt.label_w_mm, fmt.label_h_mm, background_art, color_tint,
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"

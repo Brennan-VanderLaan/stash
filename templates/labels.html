@@ -103,14 +103,27 @@
       sheet<span id="label-pages-s">s</span> of Avery {{ fmt.sku }}
     </div>
     <div class="label-toolbar-actions">
+      {# Room-tint toggle.  When on, each label gets a pastel wash
+         of its room's colour (per-box `color` override wins).  JS
+         keeps the per-tile thumbnails in sync by appending
+         `?colors=room` to their src; the PDF + print URLs pick up
+         the same query param so what you see is what you print. #}
+      <label class="label-tint-toggle" title="Tint each label with its room's colour">
+        <input type="checkbox" id="room-tint-toggle"
+               {% if use_room_tint %}checked{% endif %}>
+        <span>Room colours</span>
+      </label>
       <button type="button" class="btn btn-secondary btn-sm" id="toggle-all">
         Toggle all
       </button>
-      <a href="/labels/sheet.pdf?format={{ fmt.sku }}"
+      <a href="/labels/sheet.pdf?format={{ fmt.sku }}{% if use_room_tint %}&colors=room{% endif %}"
          class="btn btn-secondary btn-sm" id="download-pdf" download
          title="Multi-page PDF, one Avery {{ fmt.sku }} sheet per page.  Open + print.">
         PDF
       </a>
+      {% if use_room_tint %}
+      <input type="hidden" name="colors" value="room" id="hidden-colors">
+      {% endif %}
       <button type="submit" class="btn btn-primary" id="print-button"
               formaction="/labels/print" formtarget="_blank">
         Print labels
@@ -162,6 +175,11 @@
   const toggleAll = document.getElementById('toggle-all');
   const modal = document.getElementById('label-preview-modal');
   const formatSelect = document.getElementById('format-select');
+  const roomTintToggle = document.getElementById('room-tint-toggle');
+  // Track the current room-tint state in JS so refreshSummary
+  // and the thumbnail bumps can append `?colors=room` without
+  // reading the DOM each time.
+  let roomTint = roomTintToggle ? roomTintToggle.checked : false;
 
   // Format dropdown: change the format query param + reload
   // (no JS-only state here so a back/forward keeps the right
@@ -171,7 +189,36 @@
     formatSelect.addEventListener('change', () => {
       const params = new URLSearchParams();
       params.set('format', formatSelect.value);
+      if (roomTint) params.set('colors', 'room');
       window.location.search = params.toString();
+    });
+  }
+
+  function refreshThumbsForTint() {
+    // Re-stamp every thumbnail's src so the room-tint flip lands
+    // immediately instead of waiting for a manual page reload.
+    document.querySelectorAll('.label-card').forEach(bumpThumb);
+  }
+
+  if (roomTintToggle) {
+    roomTintToggle.addEventListener('change', () => {
+      roomTint = roomTintToggle.checked;
+      // Hidden ``colors`` field on the print form so the Print
+      // button POSTs (well, GETs) with the right param without us
+      // having to rewrite formaction.
+      let hidden = document.getElementById('hidden-colors');
+      if (roomTint && !hidden) {
+        hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'colors';
+        hidden.value = 'room';
+        hidden.id = 'hidden-colors';
+        form.appendChild(hidden);
+      } else if (!roomTint && hidden) {
+        hidden.remove();
+      }
+      refreshSummary();
+      refreshThumbsForTint();
     });
   }
 
@@ -188,6 +235,7 @@
     printButton.disabled = n === 0;
     const params = new URLSearchParams();
     params.set('format', formatSku);
+    if (roomTint) params.set('colors', 'room');
     ids.forEach(id => params.append('box_ids', id));
     if (pdfLink) pdfLink.href = '/labels/sheet.pdf?' + params.toString();
   }
@@ -200,14 +248,22 @@
   refreshSummary();
 
   // ── Per-box orientation toggle (AJAX) ─────────────────────────────
+  function thumbUrl(card) {
+    const img = card.querySelector('[data-thumb]');
+    if (!img) return '';
+    const base = img.src.split('?')[0];
+    let url = base + '?format=' + formatSku + '&t=' + Date.now();
+    if (roomTint) url += '&colors=room';
+    return url;
+  }
   function bumpThumb(card) {
     const img = card.querySelector('[data-thumb]');
     if (!img) return;
-    const base = img.src.split('?')[0];
-    img.src = base + '?format=' + formatSku + '&t=' + Date.now();
+    const url = thumbUrl(card);
+    img.src = url;
     if (modal.dataset.boxId === card.dataset.boxId) {
       const m = modal.querySelector('[data-modal-thumb]');
-      if (m) m.src = base + '?format=' + formatSku + '&t=' + Date.now();
+      if (m) m.src = url;
     }
   }
 
@@ -331,15 +387,18 @@
   // ── Modal preview ─────────────────────────────────────────────────
   function openPreview(card) {
     modal.dataset.boxId = card.dataset.boxId;
-    const stamp = '?format=' + formatSku + '&t=' + Date.now();
+    let stamp = '?format=' + formatSku + '&t=' + Date.now();
+    if (roomTint) stamp += '&colors=room';
     modal.querySelector('[data-modal-thumb]').src =
       `/boxes/${card.dataset.boxId}/label.svg${stamp}`;
     modal.querySelector('[data-modal-name]').textContent = card.dataset.boxName;
     const notesEl = modal.querySelector('[data-modal-notes]');
     notesEl.textContent = card.dataset.boxNotes;
     notesEl.hidden = !card.dataset.boxNotes;
+    let downloadQs = `?format=${formatSku}`;
+    if (roomTint) downloadQs += '&colors=room';
     modal.querySelector('[data-modal-download]').href =
-      `/boxes/${card.dataset.boxId}/label.svg?format=${formatSku}`;
+      `/boxes/${card.dataset.boxId}/label.svg${downloadQs}`;
     syncModalArtControls();
     modal.showModal();
   }

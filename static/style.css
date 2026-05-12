@@ -1614,6 +1614,24 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+.label-tint-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted, #aaa);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.3rem;
+  user-select: none;
+}
+.label-tint-toggle:has(input:checked) {
+  color: var(--text, #fff);
+}
+.label-tint-toggle input {
+  margin: 0;
 }
 
 /* === Label preview modal === */

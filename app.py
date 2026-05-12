@@ -3329,6 +3329,14 @@ def _attach_art_bytes(box_dict: dict) -> dict:
     return box_dict
 
 
+def _resolve_room_tint(request: Request) -> bool:
+    """Read the ``?colors=room`` toggle off the query string.
+    Anything else (default, missing, ``none``) means "no tint" so
+    the /labels page can always link out with a clean URL when the
+    checkbox is off."""
+    return request.query_params.get("colors", "").lower() == "room"
+
+
 @app.get("/boxes/{box_id}/label.svg")
 def box_label_svg(request: Request, box_id: int):
     """Single-cell label SVG.  Respects the box's persisted
@@ -3341,10 +3349,13 @@ def box_label_svg(request: Request, box_id: int):
         raise HTTPException(404)
     fmt = _resolve_label_format(request)
     orientation = box.get("label_orientation") or "landscape"
+    color_tint = None
+    if _resolve_room_tint(request):
+        color_tint = box.get("color") or box.get("room_color")
     svg = labels.render_label_svg(
         box["id"], box["name"], box["notes"] or "", PUBLIC_URL,
         background_art=_box_art_bytes(box),
-        fmt=fmt, orientation=orientation,
+        fmt=fmt, orientation=orientation, color_tint=color_tint,
     )
     return Response(
         content=svg,
@@ -3361,23 +3372,44 @@ def _selected_boxes(conn, actor: Actor, box_ids_raw: list[str]) -> list:
     Pulls ``label_orientation`` so the print + PDF paths render
     each box at the orientation the user chose on /labels —
     without it, ``_label_group`` would fall back to landscape
-    for every box.
+    for every box.  Joins ``rooms`` to surface the room's colour
+    so the room-tint toggle on /labels can paint each label its
+    room's hue (with the per-box ``color`` overriding when set).
     """
-    cols = ("id, name, notes, background_art, label_orientation, "
-            "tenant_id")
+    cols = (
+        "b.id, b.name, b.notes, b.background_art, b.label_orientation, "
+        "b.tenant_id, b.color, r.color AS room_color"
+    )
     if box_ids_raw:
         placeholders = ",".join("?" * len(box_ids_raw))
         return conn.execute(
-            f"SELECT {cols} FROM boxes "
-            f"WHERE id IN ({placeholders}) AND tenant_id = ? "
-            f"ORDER BY name",
+            f"SELECT {cols} FROM boxes b "
+            f"LEFT JOIN rooms r ON r.id = b.room_id "
+            f"WHERE b.id IN ({placeholders}) AND b.tenant_id = ? "
+            f"ORDER BY b.name",
             [*[int(b) for b in box_ids_raw], actor.tenant_id],
         ).fetchall()
     return conn.execute(
-        f"SELECT {cols} FROM boxes "
-        f"WHERE tenant_id = ? ORDER BY name",
+        f"SELECT {cols} FROM boxes b "
+        f"LEFT JOIN rooms r ON r.id = b.room_id "
+        f"WHERE b.tenant_id = ? ORDER BY b.name",
         (actor.tenant_id,),
     ).fetchall()
+
+
+def _attach_color_tint(box_dict: dict, *, enabled: bool) -> dict:
+    """When room-tinting is enabled, resolve the effective hex on
+    each box and set ``color_tint`` for the label renderer.
+    Resolution order: per-box ``color`` override, then the room's
+    ``color``, else nothing.  Off → strip any tint so a stale
+    field can't sneak into the SVG."""
+    if not enabled:
+        box_dict["color_tint"] = None
+        return box_dict
+    box_dict["color_tint"] = (
+        box_dict.get("color") or box_dict.get("room_color") or None
+    )
+    return box_dict
 
 
 def _resolve_label_format(request: Request) -> labels.AveryFormat:
@@ -3396,9 +3428,12 @@ def labels_page(request: Request):
     5164 directly."""
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
+    use_room_tint = _resolve_room_tint(request)
     with db() as conn:
         boxes = conn.execute(
-            "SELECT * FROM boxes WHERE tenant_id = ? ORDER BY name",
+            "SELECT b.*, r.color AS room_color "
+            "FROM boxes b LEFT JOIN rooms r ON r.id = b.room_id "
+            "WHERE b.tenant_id = ? ORDER BY b.name",
             (actor.tenant_id,),
         ).fetchall()
     return templates.TemplateResponse(
@@ -3409,6 +3444,7 @@ def labels_page(request: Request):
             "all_formats": list(labels.AVERY_FORMATS.values()),
             "labels_per_page": fmt.labels_per_page,
             "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
+            "use_room_tint": use_room_tint,
         },
     )
 
@@ -3447,10 +3483,14 @@ def labels_sheet_pdf(request: Request):
     not rasterised."""
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
+    use_room_tint = _resolve_room_tint(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = _selected_boxes(conn, actor, box_ids_raw)
-    payload = [_attach_art_bytes(dict(b)) for b in boxes]
+    payload = [
+        _attach_color_tint(_attach_art_bytes(dict(b)), enabled=use_room_tint)
+        for b in boxes
+    ]
     try:
         pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL, fmt=fmt)
     except ImportError:
@@ -3476,10 +3516,13 @@ def labels_print(request: Request):
     dialog covers the whole batch."""
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
+    use_room_tint = _resolve_room_tint(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = [
-            _attach_art_bytes(dict(b))
+            _attach_color_tint(
+                _attach_art_bytes(dict(b)), enabled=use_room_tint,
+            )
             for b in _selected_boxes(conn, actor, box_ids_raw)
         ]
     pages = []
