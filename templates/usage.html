@@ -110,6 +110,55 @@
   </dl>
 </div>
 
+{# ── Trends (last 12 months) ────────────────────────────────────
+   Inline-SVG sparklines for the metrics the user is most likely
+   to want to watch trend over time: AI calls, AI cost, uploads
+   in, and downloads out.  Server-side render so the chart's
+   visible immediately and survives JS-off / printable views.
+   Storage isn't in here because we don't keep historical
+   snapshots — adding that would mean a nightly storage-snapshot
+   job, which is a separate roadmap item. #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Trends (last 12 months)") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Each spark covers the last 12 UTC months including this one.  Quiet months still render as a flat baseline so a gap is visible, not hidden.") }}
+  </p>
+  {% set ai_series = months | map(attribute="ai_calls") | list %}
+  {% set ai_cost_series = months | map(attribute="ai_cost_micros") | list %}
+  {% set upload_series = months | map(attribute="upload_bytes") | list %}
+  {% set download_series = months | map(attribute="download_bytes") | list %}
+  <dl class="stat-row trend-row">
+    <div>
+      <dt>{{ _("AI calls / month") }}</dt>
+      <dd class="trend-cell">
+        <span class="trend-value">{{ ai_series[-1] }}</span>
+        <span class="trend-spark">{{ sparkline(ai_series) | safe }}</span>
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("AI cost / month") }}</dt>
+      <dd class="trend-cell">
+        <span class="trend-value">${{ "%.2f" | format(ai_cost_series[-1] / 1_000_000) }}</span>
+        <span class="trend-spark">{{ sparkline(ai_cost_series) | safe }}</span>
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Uploaded in / month") }}</dt>
+      <dd class="trend-cell">
+        <span class="trend-value">{{ "%.1f" | format(upload_series[-1] / (1024 * 1024)) }} MB</span>
+        <span class="trend-spark">{{ sparkline(upload_series) | safe }}</span>
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Served out / month") }}</dt>
+      <dd class="trend-cell">
+        <span class="trend-value">{{ "%.1f" | format(download_series[-1] / (1024 * 1024)) }} MB</span>
+        <span class="trend-spark">{{ sparkline(download_series) | safe }}</span>
+      </dd>
+    </div>
+  </dl>
+</div>
+
 {# ── Storage footprint ──────────────────────────────────────────
    On-disk total — not cumulative-uploads.  Walks UPLOAD_DIR/{tid}/
    on render so deletes are reflected immediately, unlike the

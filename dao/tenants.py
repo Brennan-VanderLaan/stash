@@ -56,7 +56,8 @@ def list_members(actor: Actor, tenant_id: int) -> list[dict]:
 def memberships_for_email(email: str) -> tuple[tuple[int, str], ...]:
     """All (tenant_id, role) pairs the email is a member of, sorted
     so the first entry is the natural "active" choice (oldest joined
-    membership wins until the switcher in roadmap step 15)."""
+    membership wins; the switcher cookie picks a different one when
+    the user prefers)."""
     with db() as conn:
         rows = conn.execute(
             "SELECT tenant_id, role FROM tenant_members "
@@ -65,6 +66,26 @@ def memberships_for_email(email: str) -> tuple[tuple[int, str], ...]:
             (email,),
         ).fetchall()
     return tuple((r["tenant_id"], r["role"]) for r in rows)
+
+
+def tenant_names_for_email(email: str) -> dict[int, str]:
+    """``{tenant_id: name}`` for every tenant the email belongs to.
+    Powers the header tenant switcher's dropdown labels — the
+    middleware fetches this once per request and stashes it on
+    ``request.state.tenant_names`` so base.html doesn't have to
+    round-trip to the DB.  Soft-deleted tenants stay in the map
+    so the switcher can grey them out instead of vanishing."""
+    if not email:
+        return {}
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.name "
+            "FROM tenant_members m "
+            "JOIN tenants t ON t.id = m.tenant_id "
+            "WHERE m.email = ?",
+            (email,),
+        ).fetchall()
+    return {int(r["id"]): r["name"] for r in rows}
 
 
 # ── Operator surface (spec § "Operator surface") ────────────────────

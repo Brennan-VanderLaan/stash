@@ -259,6 +259,75 @@ def test_storage_footprint_reflects_files_on_disk(client, tmp_path):
     assert after["file_count"] >= 1
 
 
+# ── Monthly summary (sparkline data source) ───────────────────────
+
+
+def test_monthly_summary_returns_12_months_filled(client):
+    """``monthly_summary`` always returns N entries (defaults to
+    12), one per UTC month, oldest first.  Quiet months stay in
+    the list with zero counters so the sparkline draws a flat
+    baseline instead of compressing the x-axis."""
+    from dao import usage as dao_usage
+    out = dao_usage.monthly_summary(client.test_tenant_id, months_back=12)
+    assert len(out) == 12
+    keys = [m["month"] for m in out]
+    # Strictly increasing month keys.
+    assert keys == sorted(keys)
+    # Every entry has the four counters present + zero by default.
+    for entry in out:
+        assert "ai_calls" in entry
+        assert "upload_bytes" in entry
+        assert "download_bytes" in entry
+        assert "ai_cost_micros" in entry
+
+
+def test_monthly_summary_buckets_current_month_correctly(client):
+    """An AI event recorded now must land in the CURRENT month's
+    bucket — not the previous one (off-by-one) and not all
+    months (broken GROUP BY)."""
+    from dao import usage as dao_usage
+    from datetime import datetime, timezone
+    dao_usage.record(client.test_tenant_id, "ai", "gemini_detect")
+    out = dao_usage.monthly_summary(client.test_tenant_id, months_back=3)
+    current = datetime.now(timezone.utc).strftime("%Y-%m")
+    by_month = {m["month"]: m for m in out}
+    assert by_month[current]["ai_calls"] == 1
+    # Previous months stay at zero.
+    for m, entry in by_month.items():
+        if m != current:
+            assert entry["ai_calls"] == 0
+
+
+def test_monthly_summary_pulls_downloads_from_rollups(client):
+    """Download bytes live in ``usage_rollups``, not
+    ``usage_events`` — ``monthly_summary`` must union both
+    sources, otherwise the bandwidth sparkline would be empty
+    even when the rollup table has data."""
+    from dao import usage as dao_usage
+    from datetime import datetime, timezone
+    dao_usage.record_rollup(
+        client.test_tenant_id, "download", "download_bytes", units=12345,
+    )
+    out = dao_usage.monthly_summary(client.test_tenant_id, months_back=3)
+    current = datetime.now(timezone.utc).strftime("%Y-%m")
+    by_month = {m["month"]: m for m in out}
+    assert by_month[current]["download_bytes"] == 12345
+
+
+def test_sparkline_helper_renders_svg(client):
+    """End-to-end smoke through the Jinja global — /usage renders
+    a Trends section with at least one ``<svg`` payload (the
+    polyline output of ``_sparkline_svg``)."""
+    r = client.get("/usage")
+    assert r.status_code == 200
+    assert "Trends" in r.text
+    assert "<svg" in r.text
+    # The polyline tag is the load-bearing piece — verify the
+    # helper rendered the trend shape itself, not just the
+    # container.
+    assert "polyline" in r.text or "circle" in r.text
+
+
 def _download_units(client) -> int:
     with client.app_module.db() as conn:
         row = conn.execute(

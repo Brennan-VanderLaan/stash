@@ -738,8 +738,29 @@ async def current_actor(request: Request, call_next):
             )
             return response
 
+        # Tenant-switcher cookie: respect the user's preferred
+        # active tenant if the cookie's tenant_id is one they're
+        # genuinely a member of.  Falls back to memberships[0]
+        # silently when missing/invalid so a stale cookie can't
+        # lock anyone out — the worst case is a brief "wrong
+        # tenant" view before the next switch.
         active_tenant_id, active_role = (
             memberships[0] if memberships else (None, None)
+        )
+        preferred = request.cookies.get("stash_active_tenant")
+        if preferred and memberships:
+            try:
+                preferred_id = int(preferred)
+            except ValueError:
+                preferred_id = None
+            if preferred_id is not None:
+                for tid, role in memberships:
+                    if tid == preferred_id:
+                        active_tenant_id = tid
+                        active_role = role
+                        break
+        request.state.tenant_names = (
+            dao_tenants.tenant_names_for_email(email) if email else {}
         )
         request.state.actor = Actor(
             email=email, tenant_id=active_tenant_id, role=active_role,
@@ -817,6 +838,55 @@ def _static_version() -> str:
 
 
 templates.env.globals["static_version"] = _static_version
+
+
+def _sparkline_svg(values, *, width: int = 100, height: int = 24) -> str:
+    """Inline-SVG sparkline.  Server-rendered (no JS) so the markup
+    is part of the response payload and the meter is visible
+    immediately.  Empty / all-zero series renders as a flat
+    baseline so the user sees "I have telemetry, nothing happened"
+    instead of a layout hole."""
+    vals = [max(0.0, float(v or 0)) for v in (values or [])]
+    if not vals:
+        return ""
+    peak = max(vals) or 1.0
+    n = len(vals)
+    if n == 1:
+        # One point can't make a line; centre a dot so the row's
+        # not visually blank.
+        return (
+            f'<svg viewBox="0 0 {width} {height}" '
+            f'width="{width}" height="{height}" '
+            f'class="sparkline" aria-hidden="true">'
+            f'<circle cx="{width / 2}" cy="{height / 2}" r="1.5" '
+            f'fill="currentColor"/></svg>'
+        )
+    pad = 1.5
+    span_w = width - 2 * pad
+    span_h = height - 2 * pad
+    pts = []
+    for i, v in enumerate(vals):
+        x = pad + (i / (n - 1)) * span_w
+        y = height - pad - (v / peak) * span_h
+        pts.append(f"{x:.1f},{y:.1f}")
+    polyline = " ".join(pts)
+    # Last point as a dot so "where we are now" is unambiguous —
+    # otherwise the trend's right edge fades into the chart's
+    # right margin.
+    last_x, last_y = pts[-1].split(",")
+    return (
+        f'<svg viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" '
+        f'class="sparkline" aria-hidden="true">'
+        f'<polyline points="{polyline}" fill="none" '
+        f'stroke="currentColor" stroke-width="1.4" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle cx="{last_x}" cy="{last_y}" r="2" '
+        f'fill="currentColor"/></svg>'
+    )
+
+
+templates.env.globals["sparkline"] = _sparkline_svg
 
 
 def db():
@@ -4185,6 +4255,7 @@ def _render_usage_page(
         outbound_shares = dao_shares.list_outbound(actor)
         api_tokens = dao_api_tokens.list_for_tenant(actor)
     summary = dao_usage.summary(actor)
+    months = dao_usage.monthly_summary(actor.tenant_id, months_back=12)
     return templates.TemplateResponse(
         request, "usage.html",
         {
@@ -4198,6 +4269,7 @@ def _render_usage_page(
             "current_role": actor.role,
             "is_maintainer": actor.role == "maintainer",
             "usage": summary,
+            "months": months,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
         },
@@ -4348,6 +4420,62 @@ def invite_accept_page(request: Request, token: str):
             "token": token,
         },
     )
+
+
+# ── Tenant switcher ────────────────────────────────────────────
+
+
+_TENANT_SWITCH_COOKIE = "stash_active_tenant"
+_TENANT_SWITCH_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+
+
+def _safe_switch_redirect(target: str) -> str:
+    """Open-redirect guard for ``next`` on /tenants/switch — only
+    relative paths beneath this app, never a //host or a foreign
+    scheme."""
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+@app.post("/tenants/switch")
+def tenants_switch(
+    request: Request,
+    tenant_id: str = Form(...),
+    next: str = Form("/"),
+):
+    """Set the active-tenant cookie + bounce back where the user
+    came from.  Cookie value is validated against the actor's
+    memberships so a tampered request can't grant access to a
+    tenant the user isn't in — the middleware re-checks every
+    request anyway, but we reject early here so the cookie never
+    holds a junk value."""
+    actor: Actor = request.state.actor
+    try:
+        wanted = int(tenant_id)
+    except ValueError:
+        raise HTTPException(400, "tenant_id must be integer")
+    if not any(tid == wanted for tid, _role in actor.memberships):
+        # 404 (not 403) matches the operator-surface opacity rule —
+        # we don't disclose whether a tenant exists.
+        raise HTTPException(404)
+    target = _safe_switch_redirect(next)
+    response = RedirectResponse(target, status_code=303)
+    # Secure is True only when the request arrived over HTTPS so
+    # local dev (http://testserver / http://localhost) still works.
+    is_https = request.url.scheme == "https" or (
+        request.headers.get("x-forwarded-proto", "").lower() == "https"
+    )
+    response.set_cookie(
+        _TENANT_SWITCH_COOKIE,
+        str(wanted),
+        max_age=_TENANT_SWITCH_MAX_AGE,
+        path="/",
+        httponly=True,
+        secure=is_https,
+        samesite="lax",
+    )
+    return response
 
 
 @app.post("/invite/{token}/accept")

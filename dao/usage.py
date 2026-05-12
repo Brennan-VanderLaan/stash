@@ -17,7 +17,7 @@ makes no attempt to be transactional with the surface it instruments.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dao._base import Actor, db
 
@@ -310,6 +310,102 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
         out[f"{key}_percent"] = dao_quotas.percent(used, cap)
         out[f"{key}_band"] = dao_quotas.warning_band(used, cap)
     return out
+
+
+def monthly_summary(
+    tenant_id: int | None, *, months_back: int = 12,
+) -> list[dict]:
+    """Per-month aggregate going back ``months_back`` months
+    (inclusive of the current month).  Powers the sparkline panel
+    on /usage so the user can see whether AI calls / bandwidth /
+    cost are trending up.
+
+    Each entry is a dict with::
+
+        {
+            "month": "2026-05",
+            "ai_calls": int,
+            "ai_cost_micros": int,
+            "upload_bytes": int,
+            "download_bytes": int,
+        }
+
+    Months with zero activity still appear in the list (with all
+    counters at 0) so the sparkline draws a continuous timeline —
+    a "missing month" in the SQL output would otherwise smush the
+    plot's x-axis and hide a quiet period as if it never happened.
+
+    Storage footprint is intentionally NOT here: storage_bytes is
+    a *current-state* number (walks the tenant's upload dir) and
+    we don't keep historical snapshots.  Adding that's a separate
+    phase if the trend matters; the bandwidth + cost trends here
+    already cover the common "did my AI spend creep" question.
+    """
+    if tenant_id is None:
+        return _empty_months(months_back)
+    months = _month_keys(months_back)
+    by_month = {m: {"ai_calls": 0, "ai_cost_micros": 0,
+                    "upload_bytes": 0, "download_bytes": 0}
+                for m in months}
+    earliest = months[0] + "-01"  # YYYY-MM-01
+    with db() as conn:
+        # AI + uploads + backups still live in usage_events.
+        for r in conn.execute(
+            "SELECT substr(created_at, 1, 7) AS month, "
+            "       surface, "
+            "       SUM(units) AS units, "
+            "       SUM(cost_micros) AS cost "
+            "FROM usage_events "
+            "WHERE tenant_id = ? AND created_at >= ? "
+            "GROUP BY month, surface",
+            (tenant_id, earliest),
+        ).fetchall():
+            m = r["month"]
+            if m not in by_month:
+                continue
+            if r["surface"] == "ai":
+                by_month[m]["ai_calls"] += int(r["units"] or 0)
+                by_month[m]["ai_cost_micros"] += int(r["cost"] or 0)
+            elif r["surface"] == "upload":
+                by_month[m]["upload_bytes"] += int(r["units"] or 0)
+        # Downloads come from the daily rollup table.
+        for r in conn.execute(
+            "SELECT substr(day, 1, 7) AS month, "
+            "       SUM(units) AS units "
+            "FROM usage_rollups "
+            "WHERE tenant_id = ? AND day >= ? "
+            "  AND surface = 'download' "
+            "GROUP BY month",
+            (tenant_id, earliest),
+        ).fetchall():
+            m = r["month"]
+            if m in by_month:
+                by_month[m]["download_bytes"] += int(r["units"] or 0)
+    return [{"month": m, **by_month[m]} for m in months]
+
+
+def _month_keys(n: int) -> list[str]:
+    """Last ``n`` month strings ('YYYY-MM') ending with the
+    current UTC month, oldest first."""
+    out: list[str] = []
+    now = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0,
+    )
+    cur = now
+    for _ in range(n):
+        out.append(cur.strftime("%Y-%m"))
+        # Roll back one month by subtracting a day and zeroing.
+        prev_month_last_day = cur - timedelta(days=1)
+        cur = prev_month_last_day.replace(day=1)
+    return list(reversed(out))
+
+
+def _empty_months(n: int) -> list[dict]:
+    return [
+        {"month": m, "ai_calls": 0, "ai_cost_micros": 0,
+         "upload_bytes": 0, "download_bytes": 0}
+        for m in _month_keys(n)
+    ]
 
 
 def _units(per_surface: dict, surface: str) -> int:

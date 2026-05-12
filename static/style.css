@@ -61,6 +61,135 @@ header {
 header h1 { font-size: 1.2rem; line-height: 1; }
 header h1 a { color: var(--accent); text-decoration: none; }
 
+/* ── Tenant switcher (header dropdown) ──────────────────────────
+   CSS-only ``<details>`` dropdown so it works without JS.  Active
+   tenant's avatar + name sit in the trigger; clicking opens a
+   menu listing all memberships with role badges.  Scoped tight
+   to the header so it never bleeds into in-page <details>. */
+.tenant-switcher {
+  margin-left: auto;
+  position: relative;
+}
+.tenant-switcher > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  user-select: none;
+}
+.tenant-switcher > summary::-webkit-details-marker { display: none; }
+.tenant-switcher > summary:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.tenant-switcher-avatar {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--panel);
+  font-weight: 700;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tenant-switcher-name {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tenant-switcher-chevron { opacity: 0.6; font-size: 0.7rem; }
+.tenant-switcher-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  min-width: 14rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 0.25rem;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.tenant-switcher-item { margin: 0; }
+.tenant-switcher-item button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.tenant-switcher-item button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.tenant-switcher-item button:disabled {
+  cursor: default;
+  opacity: 0.95;
+}
+.tenant-switcher-item[data-active="1"] button {
+  background: rgba(255, 255, 255, 0.04);
+}
+.tenant-switcher-item-avatar {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-muted, #aaa);
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tenant-switcher-item[data-active="1"] .tenant-switcher-item-avatar {
+  background: var(--accent);
+  color: var(--panel);
+}
+.tenant-switcher-item-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+.tenant-switcher-item-text strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.tenant-switcher-active-mark {
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+.tenant-switcher-shared {
+  display: block;
+  padding: 0.45rem 0.55rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.15rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+.tenant-switcher-shared:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -2566,6 +2695,19 @@ details[open] > .disclosure-soft::before { transform: rotate(90deg); }
 }
 .stat-row dt { font-size: 0.75rem; color: var(--muted); }
 .stat-row dd { font-size: 1.2rem; font-weight: 600; margin: 0; }
+.trend-row > div { padding-bottom: 0.4rem; }
+.trend-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.trend-value { white-space: nowrap; }
+.trend-spark {
+  color: var(--accent);
+  display: inline-flex;
+}
+.sparkline { display: block; }
 
 /* === Maintenance page polish === */
 .maintenance-card .card-title { margin-bottom: 0.5rem; }

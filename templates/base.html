@@ -32,6 +32,54 @@
       {% endif %}
     </nav>
     {% block header_actions %}{% endblock %}
+    {# Tenant switcher — visible whenever the actor belongs to more
+       than one tenant OR has any shares.  Single-tenant + no-share
+       users see a static name to avoid clutter.  The dropdown is
+       CSS-only (``<details>``) so it works without JS. #}
+    {% if request.state.actor and request.state.actor.memberships
+          and (request.state.actor.memberships|length > 1
+               or request.state.actor.shares) %}
+    {% set tnames = request.state.tenant_names or {} %}
+    {% set active_id = request.state.actor.tenant_id %}
+    {% set active_name = tnames.get(active_id, '') %}
+    <details class="tenant-switcher" id="tenant-switcher">
+      <summary class="tenant-switcher-trigger" aria-label="Switch tenant">
+        <span class="tenant-switcher-avatar" aria-hidden="true">
+          {{ (active_name[:1] | upper) if active_name else '?' }}
+        </span>
+        <span class="tenant-switcher-name">{{ active_name or _('No tenant') }}</span>
+        <span class="tenant-switcher-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <div class="tenant-switcher-menu" role="menu">
+        {% for tid, role in request.state.actor.memberships %}
+        <form method="post" action="/tenants/switch"
+              class="tenant-switcher-item"
+              data-active="{{ '1' if tid == active_id else '0' }}">
+          <input type="hidden" name="tenant_id" value="{{ tid }}">
+          <input type="hidden" name="next" value="{{ request.url.path }}">
+          <button type="submit" role="menuitem"
+                  {% if tid == active_id %}disabled aria-current="true"{% endif %}>
+            <span class="tenant-switcher-item-avatar" aria-hidden="true">
+              {{ (tnames.get(tid, '?')[:1] | upper) }}
+            </span>
+            <span class="tenant-switcher-item-text">
+              <strong>{{ tnames.get(tid, '?') }}</strong>
+              <span class="text-sm text-muted">{{ role }}</span>
+            </span>
+            {% if tid == active_id %}
+            <span class="tenant-switcher-active-mark" aria-hidden="true">✓</span>
+            {% endif %}
+          </button>
+        </form>
+        {% endfor %}
+        {% if request.state.actor.shares %}
+        <a href="/shared" role="menuitem" class="tenant-switcher-shared">
+          🔗 {{ _("Shared with you") }}
+        </a>
+        {% endif %}
+      </div>
+    </details>
+    {% endif %}
   </header>
 
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
