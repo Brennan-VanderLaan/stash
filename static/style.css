@@ -2591,6 +2591,16 @@ details[open] > .disclosure-soft::before { transform: rotate(90deg); }
   display: flex;
   align-items: baseline;
   gap: 0.4rem;
+  /* Long emails / token names + a Revoke button would overflow
+     the viewport on mobile.  flex-wrap lets the row break onto
+     the next line; word-break on inline <code> lets the email
+     itself wrap on hyphens / dots when there's no space. */
+  flex-wrap: wrap;
+}
+.allowed-emails li > code {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .notice {
   font-size: 0.8rem;

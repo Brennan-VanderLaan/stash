@@ -73,6 +73,7 @@
 <div class="card maintenance-card">
   <div class="card-title">Tenants ({{ tenants | length }})</div>
   {% if tenants %}
+  <div class="admin-table-scroll">
   <table class="admin-tenant-table">
     <thead>
       <tr>
@@ -169,6 +170,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="text-muted">No tenants yet.</p>
   {% endif %}
@@ -278,6 +280,7 @@
       {{ api_tokens | length }} of {{ api_tokens | length }}
     </span>
   </div>
+  <div class="admin-table-scroll">
   <table class="admin-tenant-table" id="api-tokens-table">
     <thead>
       <tr>
@@ -346,6 +349,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="text-muted">No API tokens have been minted on this deployment yet.</p>
   {% endif %}
@@ -362,6 +366,7 @@
     without paging through individual tenants.
   </p>
   {% if recent_activity %}
+  <div class="admin-table-scroll">
   <table class="admin-tenant-table">
     <thead>
       <tr>
@@ -396,12 +401,22 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="text-muted">No audit-log entries yet.</p>
   {% endif %}
 </div>
 
 <style>
+  /* Each admin table can have 5–10 columns of operator data, which
+     never fits a 360px-wide phone.  Wrap in a scroll container so
+     the table keeps its natural column widths and the user can
+     swipe sideways — preferable to crushing every column down to
+     fit, which would make timestamps + emails unreadable. */
+  .admin-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   .admin-tenant-table {
     width: 100%;
     border-collapse: collapse;
@@ -412,6 +427,7 @@
     text-align: left;
     padding: 0.4rem 0.6rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    white-space: nowrap;
   }
   .admin-tenant-table th {
     font-weight: 600;
@@ -429,6 +445,15 @@
     text-align: left;
     padding: 0.25rem 0.5rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+  }
+  /* Member emails can be long; let the email column take what's
+     left and wrap on hyphens / dots so it doesn't push the row
+     out past the scroll container.  Other columns stay nowrap so
+     the date/role don't break mid-word. */
+  .admin-member-table td:first-child code {
+    word-break: break-all;
+    white-space: normal;
   }
   .tenant-roster summary {
     cursor: pointer;
@@ -447,15 +472,30 @@
     gap: 0.2rem;
     font-size: 0.85rem;
     color: var(--text-muted, #aaa);
+    flex: 1 1 10rem;
+    min-width: 0;
   }
   .admin-filter-bar select,
   .admin-filter-bar input[type="search"] {
-    min-width: 10rem;
+    min-width: 0;
+    width: 100%;
   }
   .admin-filter-count {
     font-size: 0.85rem;
     color: var(--text-muted, #aaa);
     margin-left: auto;
+  }
+  /* On phone-width screens the filter labels stack 1-per-row
+     instead of stretching the row past the viewport.  The count
+     drops below the inputs and aligns left so it's still visible
+     without sideways scrolling. */
+  @media (max-width: 640px) {
+    .admin-filter-bar label {
+      flex: 1 1 100%;
+    }
+    .admin-filter-count {
+      margin-left: 0;
+    }
   }
 </style>
 
