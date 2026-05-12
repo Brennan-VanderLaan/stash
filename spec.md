@@ -1131,7 +1131,7 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-08).** Phases 1–4 + 6 + 10 + 11 + 16 + 18 + 19
+**Status (2026-05-12).** Phases 1–4 + 6 + 10 + 11 + 16 + 18 + 19
 shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
 invites, per-tenant backup download, manual B2 upload from /admin,
 telemetry recording, and operator-dashboard bootstrap respectively).
@@ -1148,8 +1148,70 @@ MCP endpoint at ``/mcp`` (spec rev 2025-11-25) is live with the
 full tool + resource catalogue.  OAuth 2.1 authorization server at
 ``/oauth/{authorize,token,register}`` plus the RFC 8414 + 9728
 discovery surfaces lets claude.ai's web custom-connector dialog
-talk to stash without per-user JSON config.  See per-phase
-`[shipped]` / `[partial]` markers below.
+talk to stash without per-user JSON config.
+
+**Recent polish ships (2026-05-09 → 2026-05-12).** Day-to-day
+workflow + reliability work, mostly tightening surfaces that had
+already shipped:
+
+* **Ingest hardening.** Packing-session box picker on /ingest
+  (form-only state, no session table — leave the page or reload,
+  session ends) pre-fills the sort queue's box selection via
+  ``pending_items.suggested_box_id``.  Detection-scope radio
+  (Auto / Single item / Many items) tunes the Gemini prompt so
+  a one-item photo stops splitting into a dozen fake items.
+  Process-global ``_INGEST_SEMAPHORE`` (default 1, override via
+  ``STASH_INGEST_CONCURRENCY``) serialises workers so a multi-
+  photo upload doesn't flood a small VM.  Gemini client carries
+  a 120 s timeout (``STASH_GEMINI_TIMEOUT_MS``) so hung calls
+  fail loudly instead of wedging the job at "processing".
+  Boot-time orphan sweep flips any ``processing`` rows to
+  ``failed`` so a restart auto-recovers wedged jobs.  Retry is
+  failed-only (was: retry-on-processing spawned duplicates that
+  re-detected the same items); Dismiss available on
+  ``processing`` rows as the genuine escape hatch.
+* **Label polish.** Per-box ``label_orientation`` (landscape /
+  portrait) persisted; portrait previews render upright (50.8 ×
+  101.6 viewBox, no rotation) while the sheet/PDF paths still
+  rotate into the physical landscape cell.  Portrait layout
+  word-wraps name + notes into multiple lines with ellipsis
+  truncation, bumps the box-ID font fraction to 0.18 so the ID
+  doubles as a "find from across the room" handle.  Background
+  art opacity bumped 0.3 → 0.5 (the AI art was nearly invisible
+  at 0.3 on most papers).  "Room colours" toggle on /labels gives
+  each label a pastel wash of its room's colour at 18% opacity
+  behind the art (per-box ``boxes.color`` overrides the room
+  colour); colour values are regex-whitelisted before they hit
+  the SVG.  Sort-queue bbox overlay is now JS-positioned from
+  the IMG element's ``getBoundingClientRect()`` instead of CSS
+  percentages on the inline-block frame, so it sticks to the
+  actually-rendered photo when ``max-height`` shrinks the
+  rendered image below the frame's intrinsic width.
+* **Admin dashboard.** ``dao_tenants.list_all`` returns
+  ``last_activity_at`` per tenant (max ``audit_log.created_at``);
+  ``list_members`` returns ``last_active_at`` per member.
+  Per-tenant member roster disclosure on /admin with the
+  last-active dates.  API tokens panel gets a client-side
+  filter bar (tenant / state / role / name substring).  New
+  read-only ``dao/audit.list_recent_for_operator`` powers a
+  Recent activity card so cross-tenant burst patterns
+  (e.g. mass ``oauth.token.issue`` against one client) are
+  spottable without paging through tenants.  Admin tables now
+  sit in horizontal-scroll wrappers + filter bar stacks below
+  640 px so the page works on phones.
+* **Sassy error pages.** ``StarletteHTTPException`` handler
+  renders ``templates/error.html`` parameterised by status code
+  (401, 403, 404, 405, 413, 422, 429, 500, 503) — Siberian
+  Forest cat or wise tortoise mascot inline-SVG, headline,
+  quip, signature.  HTML-vs-JSON split is strict: ``/api/*``,
+  ``/mcp/*``, ``Accept: application/json``, and
+  ``X-Requested-With: XMLHttpRequest`` keep the
+  ``{"detail": "..."}`` JSON contract; everything else gets the
+  rendered page.  Custom raise-site detail messages surface in
+  a separate ``error-detail`` block under the headline rather
+  than replacing the personality.
+
+See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
    pragmas.** Add the new tables, add `tenant_id` to every owned
@@ -1321,9 +1383,28 @@ talk to stash without per-user JSON config.  See per-phase
       maintainer" form so operators can bootstrap a friend onto
       their own tenant without ever joining it.  GET + POST gates
       404 (not 403) for non-operators so the surface stays opaque.
+    * **[shipped]** Tenant last-activity column +  per-member
+      ``last_active_at`` (joined on ``audit_log.actor_email``)
+      surfaced as a disclosure under each tenant row.
+    * **[shipped]** Quota override editor — per-tenant inline
+      form with placeholder=current-cap and ``-1``-clears-the-
+      override semantics.  Audit-logs ``quota.override``.
+      (Cross-listed in phase 10; surfaced here because the
+      operator panel is where it lives.)
+    * **[shipped]** Audit-log read view —
+      ``dao/audit.list_recent_for_operator`` joined on
+      ``tenants.name``; rendered as a "Recent activity" card
+      with the last 50 entries.  Cross-tenant NULL-tenant rows
+      (operator actions like ``oauth.client.register``) keep
+      ``tenant_name = null`` and stay visible.
+    * **[shipped]** Cross-tenant API token panel with
+      operator-revoke / suspend / resume +  client-side filter
+      bar (tenant / state / role / name substring).  No server
+      round-trip; works on hundreds of tokens.
     * **[deferred]** Lifecycle controls (soft-delete / reactivate /
-      hard-delete), quota override editor, audit-log view, vendor
-      cost panel.
+      hard-delete), vendor cost panel, operator-side OAuth
+      client list (registrations are visible via DCR audit-log
+      but a first-class panel is nicer).
 
 13. **User usage page + cost transparency + GDPR controls.**
     `/usage` rebuilt as the per-tenant home for plan / role / quotas
