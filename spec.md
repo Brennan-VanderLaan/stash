@@ -175,13 +175,28 @@ object_shares(
 usage_events(
     id INTEGER PRIMARY KEY,
     tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-    surface TEXT NOT NULL,        -- 'ai' | 'upload' | 'backup' | 'core'
+    surface TEXT NOT NULL,        -- 'ai' | 'upload' | 'backup' | 'core' | 'mcp'
     kind TEXT NOT NULL,           -- 'gemini_detect' | 'gemini_art' | 'anthropic_match' | 'upload_bytes' | 'backup_bytes'
     units INTEGER NOT NULL,       -- request count, byte count, etc.
     cost_micros INTEGER NOT NULL DEFAULT 0,
     created_at TEXT
 )
 -- Index on (tenant_id, surface, created_at) for monthly rollups.
+
+-- High-frequency counters (download bandwidth today; storage
+-- snapshots when that ships).  One row per (tenant_id, day,
+-- surface, kind) — UPSERT into the same row so a busy serve loop
+-- writes O(1) rows/day instead of O(N) per page view.
+usage_rollups(
+    tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,            -- 'YYYY-MM-DD' UTC
+    surface TEXT NOT NULL,        -- 'download'
+    kind TEXT NOT NULL,           -- 'download_bytes'
+    units INTEGER NOT NULL DEFAULT 0,
+    cost_micros INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, day, surface, kind)
+)
+-- Index on (tenant_id, day) for monthly sparkline rollup.
 
 quotas(
     tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1131,10 +1146,10 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-12).** Phases 1–4 + 6 + 10 + 11 + 16 + 18 + 19
-shipped; phases 5, 7, 8, 9, 12 partially shipped (link-share
+**Status (2026-05-12).** Phases 1–4 + 6 + 9 + 10 + 11 + 15 + 16 + 18
++ 19 shipped; phases 5, 7, 8, 12 partially shipped (link-share
 invites, per-tenant backup download, manual B2 upload from /admin,
-telemetry recording, and operator-dashboard bootstrap respectively).
+and operator-dashboard bootstrap respectively).
 Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
 moved up to unblock immediate use.  Pre-MCP security audit drove a
 pass that closes the audit's P0/P1 list: per-share file allow-list,
@@ -1305,7 +1320,7 @@ See per-phase `[shipped]` / `[partial]` markers below.
      KEK-separate-bucket bootstrap helper, weekly verification
      restore job (cross-cuts with phase 7's verification piece).
 
-9. **[partial]** **Telemetry.** Wrap the AI clients (Gemini,
+9. **[shipped]** **Telemetry.** Wrap the AI clients (Gemini,
    Anthropic) and the upload path to write `usage_events`. No
    enforcement yet — just data collection, so we have a baseline
    before the cap hits.
@@ -1314,7 +1329,30 @@ See per-phase `[shipped]` / `[partial]` markers below.
      (gemini_detect), `queue_match` (anthropic_match),
      `generate_box_art` (gemini_art), and the B2 upload path
      (backup_bytes).  `/usage` renders three meters + AI breakdown.
-   * **[deferred]** Monthly cost rollup view, sparklines.
+   * **[shipped]** Bandwidth + storage panels.  New
+     ``usage_rollups`` table keyed on
+     ``(tenant_id, day, surface, kind)`` with an
+     ``ON CONFLICT DO UPDATE`` UPSERT so high-volume metrics
+     (today: downloads) don't bloat the events log.  ``serve_upload``
+     + ``serve_thumb`` ``record_rollup`` the decrypted byte count;
+     ``dao_usage.summary`` unions both tables.  Storage footprint
+     walks ``UPLOAD_DIR/{tid}/`` on render — current on-disk
+     bytes, dropping when items are deleted (the cumulative
+     ``upload_bytes`` meter doesn't, by design).  Stress + accuracy
+     tests pin: 8-thread × 100-increment UPSERT sums to exactly
+     800 (no lost writes), cross-tenant isolation holds under
+     load, /uploads + /thumbs byte counts exactly match
+     K * len(plaintext), day-boundary writes split into separate
+     rows, 2000 rollups complete in under 5 s.
+   * **[shipped]** Monthly cost rollup + sparklines.
+     ``dao_usage.monthly_summary(tenant_id, months_back=12)``
+     unions events + rollups into the last 12 UTC months (oldest
+     first), zero-filling quiet months so the sparkline x-axis
+     stays continuous.  Inline-SVG ``_sparkline_svg`` Jinja global
+     renders a polyline + end-of-line dot per metric; /usage
+     "Trends" card shows AI calls / AI cost / upload / download
+     per month.  Server-rendered so the chart works without JS
+     and prints cleanly.
 
 10. **[shipped]** **Quotas + enforcement + anti-abuse.**
     * `dao/quotas.py` — three caps per tenant
@@ -1417,11 +1455,26 @@ See per-phase `[shipped]` / `[partial]` markers below.
 14. **Tenant lifecycle.** Soft-delete UX, reactivate flow, scheduled
     hard-delete job, archived-backup retention on B2.
 
-15. **Tenant switcher (top-right).** Persistent SaaS-pattern
+15. **[shipped]** **Tenant switcher (top-right).** Persistent
     avatar/initials menu in the global header: list of tenants the
-    user is a member of, "Shared with you" entry, account/usage
-    link, sign out. Active tenant marked, others one click away.
-    Stays consistent across pages.
+    user is a member of, "Shared with you" entry when applicable.
+    Active tenant marked with a ✓.
+    * Cookie ``stash_active_tenant`` is the source of truth — read
+      in the actor middleware and only honoured when its value
+      matches an entry in ``actor.memberships``, so a stale or
+      forged cookie silently falls back to ``memberships[0]``
+      (worst case: brief "wrong tenant" view, never a lockout).
+    * ``POST /tenants/switch`` validates membership before setting
+      the cookie (HttpOnly, SameSite=Lax, Secure=auto over HTTPS),
+      then redirects to a validated ``next`` (open-redirect guard
+      rejects ``//`` and off-scheme paths).
+    * CSS-only ``<details>``-based dropdown — works without JS;
+      only renders when the user has >1 membership or any shares,
+      so single-tenant users get no clutter.
+    * Tests cover: dropdown appears for multi-tenant + hides for
+      single-tenant, switch route sets cookie + redirects, 404 on
+      non-member tenant, 400 on non-int, invalid cookie falls back
+      silently, ``next=//evil`` blocked.
 
 16. **[shipped]** **Logging pass.** Layered `LoggerAdapter`s,
     request-id middleware, structured JSON output.  Backfill
