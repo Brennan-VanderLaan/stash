@@ -408,6 +408,105 @@ def _empty_months(n: int) -> list[dict]:
     ]
 
 
+def operator_cost_summary(actor: Actor, *, since: str | None = None) -> dict:
+    """Operator-only: vendor cost across EVERY tenant on the
+    deployment since ``since`` (defaulting to this UTC month).
+
+    Hard rule from spec § "Operator surface": operators see
+    aggregate cost numbers, NEVER per-tenant content.  This
+    method honours that — we return only ``{vendor: cost_micros,
+    units}`` aggregates plus a per-tenant rollup that lists
+    tenant *names* and totals (no contents, no item names).
+
+    Used by the vendor-cost panel on /admin so an operator can
+    see "I spent $X on Gemini this month" + "tenant A vs tenant
+    B is what's driving it" without ever clicking into a
+    tenant.
+
+    .. code-block:: python
+
+        {
+            "since": "2026-05-01 00:00:00",
+            "total_cost_micros": 30100,
+            "by_kind": {
+                "gemini_detect": {"units": 42, "cost_micros": 29400},
+                "gemini_art": {"units": 1, "cost_micros": 40000},
+                ...
+            },
+            "by_tenant": [
+                {"tenant_id": 1, "name": "Personal",
+                 "ai_calls": 30, "ai_cost_micros": 21000,
+                 "upload_bytes": 12345678,
+                 "download_bytes": 5678901},
+                ...
+            ],
+        }
+    """
+    from dao._base import require_operator
+    require_operator(actor)
+    since = since or _month_start_utc()
+    since_day = since[:10]
+    with db() as conn:
+        by_kind = {}
+        total_cost = 0
+        for r in conn.execute(
+            "SELECT kind, SUM(units) AS units, "
+            "       SUM(cost_micros) AS cost "
+            "FROM usage_events "
+            "WHERE created_at >= ? AND surface = 'ai' "
+            "GROUP BY kind",
+            (since,),
+        ).fetchall():
+            units = int(r["units"] or 0)
+            cost = int(r["cost"] or 0)
+            by_kind[r["kind"]] = {"units": units, "cost_micros": cost}
+            total_cost += cost
+        # Per-tenant rollup — join to tenants for the display name.
+        # Operator surface contract: names + counters only, no
+        # content.
+        per_tenant_events = {
+            r["tenant_id"]: r for r in conn.execute(
+                "SELECT tenant_id, "
+                "       SUM(CASE WHEN surface='ai' THEN units END) AS ai_calls, "
+                "       SUM(CASE WHEN surface='ai' THEN cost_micros END) AS ai_cost, "
+                "       SUM(CASE WHEN surface='upload' THEN units END) AS upload_bytes "
+                "FROM usage_events "
+                "WHERE created_at >= ? "
+                "GROUP BY tenant_id",
+                (since,),
+            ).fetchall()
+        }
+        per_tenant_downloads = {
+            r["tenant_id"]: int(r["units"] or 0) for r in conn.execute(
+                "SELECT tenant_id, SUM(units) AS units "
+                "FROM usage_rollups "
+                "WHERE day >= ? AND surface = 'download' "
+                "GROUP BY tenant_id",
+                (since_day,),
+            ).fetchall()
+        }
+        tenant_rows = conn.execute(
+            "SELECT id, name FROM tenants ORDER BY name"
+        ).fetchall()
+    by_tenant = []
+    for t in tenant_rows:
+        ev = per_tenant_events.get(t["id"])
+        by_tenant.append({
+            "tenant_id": t["id"],
+            "name": t["name"],
+            "ai_calls": int(ev["ai_calls"] or 0) if ev else 0,
+            "ai_cost_micros": int(ev["ai_cost"] or 0) if ev else 0,
+            "upload_bytes": int(ev["upload_bytes"] or 0) if ev else 0,
+            "download_bytes": per_tenant_downloads.get(t["id"], 0),
+        })
+    return {
+        "since": since,
+        "total_cost_micros": total_cost,
+        "by_kind": by_kind,
+        "by_tenant": by_tenant,
+    }
+
+
 def _units(per_surface: dict, surface: str) -> int:
     row = per_surface.get(surface)
     return int(row["units"]) if row and row["units"] is not None else 0

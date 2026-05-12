@@ -1146,10 +1146,10 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-12).** Phases 1–4 + 6 + 9 + 10 + 11 + 15 + 16 + 18
-+ 19 shipped; phases 5, 7, 8, 12 partially shipped (link-share
-invites, per-tenant backup download, manual B2 upload from /admin,
-and operator-dashboard bootstrap respectively).
+**Status (2026-05-12).** Phases 1–4 + 6 + 9 + 10 + 11 + 12 + 15 + 16
++ 18 + 19 shipped; phases 5, 7, 8 partially shipped (link-share
+invites, per-tenant backup download, manual B2 upload from /admin
+respectively).
 Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
 moved up to unblock immediate use.  Pre-MCP security audit drove a
 pass that closes the audit's P0/P1 list: per-share file allow-list,
@@ -1410,7 +1410,7 @@ See per-phase `[shipped]` / `[partial]` markers below.
       for phase 10), scoped tokens (read-only / ai-only via the
       `scopes` JSON column already present in the schema).
 
-12. **[partial]** **Operator dashboard.** `/admin` surface with
+12. **[shipped]** **Operator dashboard.** `/admin` surface with
     cross-tenant metadata, lifecycle controls (soft-delete /
     reactivate / force-hard-delete), quota overrides, audit-log
     view, vendor cost panel. Explicitly no per-tenant data access.
@@ -1439,10 +1439,33 @@ See per-phase `[shipped]` / `[partial]` markers below.
       operator-revoke / suspend / resume +  client-side filter
       bar (tenant / state / role / name substring).  No server
       round-trip; works on hundreds of tokens.
-    * **[deferred]** Lifecycle controls (soft-delete / reactivate /
-      hard-delete), vendor cost panel, operator-side OAuth
-      client list (registrations are visible via DCR audit-log
-      but a first-class panel is nicer).
+    * **[shipped]** Lifecycle controls.
+      ``dao_tenants.soft_delete`` stamps ``deleted_at`` +
+      ``hard_delete_after = now + 30d`` (grace window before the
+      eventual hard-delete sweep — share-pause behaviour from
+      phase 6 already keys off ``deleted_at``).
+      ``reactivate`` clears both columns; idempotent on active
+      tenants.  ``hard_delete`` drops the row + every cascade-
+      referenced row, audit-logs at ``tenant_id=NULL`` so the
+      record survives the cascade, and refuses to delete the
+      operator's own tenant (would lock them out).  /admin POST
+      routes for all three.  Hard-delete requires a typed
+      ``confirm=<tenant_name>`` form field so an accidental
+      click can't nuke a tenant.
+    * **[shipped]** Vendor cost panel.
+      ``dao_usage.operator_cost_summary`` aggregates AI spend
+      across every tenant for the current UTC month: per-kind
+      breakdown (``gemini_detect``, ``gemini_art``,
+      ``anthropic_match``, …) + per-tenant rollup with names +
+      AI calls + AI cost + upload bytes + download bytes.
+      Hard-rule honoured: names + counters + costs only,
+      never tenant content.
+    * **[shipped]** Operator-side OAuth client list.
+      ``dao_oauth.list_clients`` (already shipped in phase 19)
+      rendered on /admin with per-row revoke.  Revoke flips
+      ``revoked_at`` so new auth-code + refresh exchanges fail;
+      existing access tokens keep working until natural expiry
+      (we don't iterate ``api_tokens`` to mass-revoke).
 
 13. **User usage page + cost transparency + GDPR controls.**
     `/usage` rebuilt as the per-tenant home for plan / role / quotas

@@ -5177,6 +5177,8 @@ def admin_dashboard(
         t["members"] = dao_tenants.list_members(actor, t["id"])
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)
+    vendor_cost = dao_usage.operator_cost_summary(actor)
+    oauth_clients = dao_oauth.list_clients(actor)
     try:
         dao_backups._b2_config()
         b2_configured = True
@@ -5188,6 +5190,8 @@ def admin_dashboard(
             "tenants": tenants,
             "api_tokens": api_tokens,
             "recent_activity": recent_activity,
+            "vendor_cost": vendor_cost,
+            "oauth_clients": oauth_clients,
             "current_email": actor.email,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
@@ -5296,6 +5300,87 @@ def admin_backup_to_b2(request: Request, tenant_id: int):
         f"/admin?{urlencode({'backup_status': flash})}",
         status_code=303,
     )
+
+
+# ── Tenant lifecycle ─────────────────────────────────────────────
+
+
+@app.post("/admin/tenants/{tenant_id}/soft-delete")
+def admin_soft_delete_tenant(request: Request, tenant_id: int):
+    """Operator-only: mark a tenant soft-deleted (30-day grace).
+    Members can still see their data; outbound shares pause; the
+    eventual hard-delete sweep reads ``hard_delete_after`` to
+    decide when to drop the rows.  Reactivate or hard-delete via
+    the sibling endpoints."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_tenants.soft_delete(actor, tenant_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/tenants/{tenant_id}/reactivate")
+def admin_reactivate_tenant(request: Request, tenant_id: int):
+    """Operator-only: clear a soft-delete, restoring the tenant's
+    active state.  No-op on an already-active tenant."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_tenants.reactivate(actor, tenant_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/tenants/{tenant_id}/hard-delete")
+def admin_hard_delete_tenant(
+    request: Request,
+    tenant_id: int,
+    confirm: str = Form(""),
+):
+    """Operator-only: permanently delete a tenant and everything
+    that references it.  Requires the form to carry
+    ``confirm=<tenant_name>`` matching the tenant's current name
+    so an accidental click can't nuke a tenant.  All cascades
+    fire (boxes, items, rooms, audit_log rows for this tenant,
+    …) — there's no undo here."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name FROM tenants WHERE id = ?", (tenant_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(404)
+    if (confirm or "").strip() != row["name"]:
+        raise HTTPException(
+            400,
+            "Confirmation required: type the tenant name exactly to confirm.",
+        )
+    try:
+        dao_tenants.hard_delete(actor, tenant_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/oauth-clients/{client_id}/revoke")
+def admin_revoke_oauth_client(request: Request, client_id: str):
+    """Operator-only: revoke a registered OAuth client.  Existing
+    access tokens issued under it stay valid until natural
+    expiry (we don't iterate api_tokens to mass-revoke); no new
+    auth-code or refresh exchange will succeed."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_oauth.revoke_client(actor, client_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin", status_code=303)
 
 
 @app.post("/admin/tenants")

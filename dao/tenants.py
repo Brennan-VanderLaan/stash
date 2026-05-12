@@ -174,3 +174,137 @@ def create_tenant(
     _log.info("tenant.create id=%s name=%r plan=%s ip=%s",
               tenant_id, name, plan, client_ip or "unknown")
     return tenant_id
+
+
+# Soft-delete grace window before a hard-delete becomes the
+# default operator action.  30 days matches typical SaaS practice
+# (and the spec's GDPR posture) — the operator can still force
+# an immediate hard-delete via the explicit endpoint.
+SOFT_DELETE_GRACE_DAYS = 30
+
+
+def soft_delete(actor: Actor, tenant_id: int) -> dict:
+    """Operator-only: mark a tenant as soft-deleted.
+
+    Sets ``tenants.deleted_at = now`` and
+    ``hard_delete_after = now + 30d``.  Phase 6 already enforces
+    the share-pause behaviour off the ``deleted_at`` column (the
+    soft-deleted tenant's outbound shares filter out of the
+    recipient's view + access checks); members of the
+    soft-deleted tenant still resolve to membership in the
+    middleware so they can see their data — they just can't
+    cross-tenant share into other stashes.  Reactivate via
+    ``reactivate`` to undo before the grace window expires; the
+    eventual hard-delete sweep (phase 14) reads
+    ``hard_delete_after`` to know when to permanently drop the
+    rows.
+
+    Idempotent on a tenant that's already soft-deleted — bumps
+    ``hard_delete_after`` forward to today+30 so a re-soft-delete
+    extends the grace window rather than shrinking it."""
+    require_operator(actor)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name FROM tenants WHERE id = ?", (tenant_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"tenant {tenant_id}")
+        conn.execute(
+            "UPDATE tenants SET "
+            "  deleted_at = CURRENT_TIMESTAMP, "
+            "  hard_delete_after = datetime("
+            "    CURRENT_TIMESTAMP, ?"
+            "  ) "
+            "WHERE id = ?",
+            (f"+{SOFT_DELETE_GRACE_DAYS} days", tenant_id),
+        )
+        obs.write_audit(
+            conn, tenant_id=tenant_id, actor_email=actor.email,
+            action="tenant.soft_delete",
+            target_kind="tenant", target_id=tenant_id,
+            metadata={
+                "name": row["name"],
+                "grace_days": SOFT_DELETE_GRACE_DAYS,
+            },
+        )
+        conn.commit()
+    _log.warning("tenant.soft_delete id=%s name=%r grace_days=%s",
+                 tenant_id, row["name"], SOFT_DELETE_GRACE_DAYS)
+    return {"id": tenant_id, "name": row["name"]}
+
+
+def reactivate(actor: Actor, tenant_id: int) -> dict:
+    """Operator-only: undo a soft-delete.  Clears both
+    ``deleted_at`` and ``hard_delete_after``.  No-op on a tenant
+    that's already active."""
+    require_operator(actor)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name, deleted_at FROM tenants WHERE id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"tenant {tenant_id}")
+        if row["deleted_at"] is None:
+            # Operator clicked reactivate on an active tenant —
+            # benign; no audit row to avoid filling the log with
+            # idempotent retries.
+            return {"id": tenant_id, "name": row["name"],
+                    "already_active": True}
+        conn.execute(
+            "UPDATE tenants SET deleted_at = NULL, "
+            "  hard_delete_after = NULL WHERE id = ?",
+            (tenant_id,),
+        )
+        obs.write_audit(
+            conn, tenant_id=tenant_id, actor_email=actor.email,
+            action="tenant.reactivate",
+            target_kind="tenant", target_id=tenant_id,
+            metadata={"name": row["name"]},
+        )
+        conn.commit()
+    _log.warning("tenant.reactivate id=%s name=%r",
+                 tenant_id, row["name"])
+    return {"id": tenant_id, "name": row["name"],
+            "already_active": False}
+
+
+def hard_delete(actor: Actor, tenant_id: int) -> dict:
+    """Operator-only: permanently delete a tenant and everything
+    that references it.  Cascades through every ``ON DELETE
+    CASCADE`` foreign key (boxes, items, rooms, members,
+    invites, shares, audit_log rows for this tenant, …).
+
+    No grace window — this is the "the soft-deleted tenant has
+    been quiet for 30 days and the sweep job ran" / "operator
+    explicitly chose to nuke immediately" endpoint.  The audit
+    entry is written with ``tenant_id=NULL`` (the row's about
+    to vanish along with any tenant-scoped audit rows) so the
+    permanent record lives in the cross-tenant operator stream.
+
+    Refuses to delete the actor's own tenant — accidentally
+    blowing up the tenant you're signed into would lock you out
+    of the operator surface.  An operator with no membership
+    (the typical bootstrap stance) isn't blocked."""
+    require_operator(actor)
+    if actor.tenant_id == tenant_id:
+        raise ValueError(
+            "Cannot hard-delete the tenant you are currently a member of; "
+            "switch tenants first or sign out and back in."
+        )
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name FROM tenants WHERE id = ?", (tenant_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"tenant {tenant_id}")
+        obs.write_audit(
+            conn, tenant_id=None, actor_email=actor.email,
+            action="tenant.hard_delete",
+            target_kind="tenant", target_id=tenant_id,
+            metadata={"name": row["name"]},
+        )
+        conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
+        conn.commit()
+    _log.warning("tenant.hard_delete id=%s name=%r", tenant_id, row["name"])
+    return {"id": tenant_id, "name": row["name"]}

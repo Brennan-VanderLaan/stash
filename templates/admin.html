@@ -86,6 +86,7 @@
         <th>State</th>
         <th>Created</th>
         <th>Last activity</th>
+        <th>Lifecycle</th>
         <th>Backup</th>
       </tr>
     </thead>
@@ -140,7 +141,12 @@
         <td>{{ t.item_count }}</td>
         <td>
           {% if t.deleted_at %}
-            <span class="text-muted">soft-deleted</span>
+            <span class="text-muted">
+              soft-deleted
+              {% if t.hard_delete_after %}
+                <small>(purges {{ t.hard_delete_after[:10] }})</small>
+              {% endif %}
+            </span>
           {% else %}
             <span>active</span>
           {% endif %}
@@ -151,6 +157,47 @@
             <span title="{{ t.last_activity_at }}">{{ t.last_activity_at[:10] }}</span>
           {% else %}
             <span class="text-muted">never</span>
+          {% endif %}
+        </td>
+        <td>
+          {# Soft-delete on active rows.  Reactivate + hard-delete
+             on soft-deleted rows.  Hard-delete requires a typed
+             confirm form so an accidental click can't nuke a
+             tenant — see /admin/tenants/{id}/hard-delete. #}
+          {% if not t.deleted_at %}
+          <form method="post"
+                action="/admin/tenants/{{ t.id }}/soft-delete"
+                style="display:inline;">
+            <button type="submit" class="btn btn-link btn-sm"
+                    onclick="return confirm('Soft-delete {{ t.name }}? Members keep access during the 30-day grace window; outbound shares pause until reactivated.');">
+              Soft-delete
+            </button>
+          </form>
+          {% else %}
+          <form method="post"
+                action="/admin/tenants/{{ t.id }}/reactivate"
+                style="display:inline;">
+            <button type="submit" class="btn btn-link btn-sm">
+              Reactivate
+            </button>
+          </form>
+          <button type="button" class="btn btn-link btn-sm"
+                  onclick="document.getElementById('hard-delete-{{ t.id }}').hidden = false;"
+                  style="color: var(--danger, #ef4444);">
+            Hard-delete
+          </button>
+          <form method="post"
+                action="/admin/tenants/{{ t.id }}/hard-delete"
+                id="hard-delete-{{ t.id }}" hidden
+                class="admin-hard-delete-form">
+            <input type="text" name="confirm" required
+                   placeholder="Type {{ t.name }} to confirm"
+                   autocomplete="off">
+            <button type="submit" class="btn btn-danger btn-sm"
+                    onclick="return confirm('FINAL: permanently delete {{ t.name }} and all its rows? This cannot be undone.');">
+              Permanently delete
+            </button>
+          </form>
           {% endif %}
         </td>
         <td>
@@ -407,6 +454,130 @@
   {% endif %}
 </div>
 
+{# ── Vendor cost (this month) ────────────────────────────────── #}
+{# Operator-only aggregate cost across every tenant.  Hard-rule
+   from spec § "Operator surface": names + counts + costs only —
+   never per-tenant content.  The by-tenant table shows where
+   spend is concentrated; the by-kind list shows which AI call
+   is the driver. #}
+<div class="card maintenance-card">
+  <div class="card-title">Vendor cost (this month)</div>
+  <p class="text-sm text-muted">
+    Aggregate AI spend across every tenant since
+    {{ vendor_cost.since[:10] }} UTC.  Costs are operator-side
+    estimates from a hard-coded price table — round to the
+    nearest cent.  Per-tenant rollup shows where the spend is
+    concentrated.
+  </p>
+  <dl class="stat-row">
+    <div>
+      <dt>Total cost</dt>
+      <dd>${{ "%.2f" | format(vendor_cost.total_cost_micros / 1_000_000) }}</dd>
+    </div>
+    {% for kind, row in vendor_cost.by_kind.items() %}
+    <div>
+      <dt><code>{{ kind }}</code></dt>
+      <dd>
+        {{ row.units }} ·
+        <span class="text-muted text-sm">
+          ${{ "%.2f" | format(row.cost_micros / 1_000_000) }}
+        </span>
+      </dd>
+    </div>
+    {% endfor %}
+  </dl>
+  {% if vendor_cost.by_tenant %}
+  <div class="admin-table-scroll">
+  <table class="admin-tenant-table">
+    <thead>
+      <tr>
+        <th>Tenant</th>
+        <th>AI calls</th>
+        <th>AI cost</th>
+        <th>Upload</th>
+        <th>Download</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in vendor_cost.by_tenant %}
+      <tr>
+        <td>{{ t.name }}</td>
+        <td>{{ t.ai_calls }}</td>
+        <td>${{ "%.2f" | format(t.ai_cost_micros / 1_000_000) }}</td>
+        <td>{{ "%.1f" | format(t.upload_bytes / (1024 * 1024)) }} MB</td>
+        <td>{{ "%.1f" | format(t.download_bytes / (1024 * 1024)) }} MB</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+{# ── OAuth clients ────────────────────────────────────────────── #}
+{# Every registered OAuth client (manually pre-registered or
+   self-registered via Dynamic Client Registration).  The DCR
+   audit row is the canonical record but a panel makes it easier
+   to spot a runaway client that's minting too many tokens. #}
+<div class="card maintenance-card">
+  <div class="card-title">OAuth clients ({{ oauth_clients | length }})</div>
+  <p class="text-sm text-muted">
+    Every client that has registered against the OAuth 2.1
+    authorization server.  Revoking a client kills new auth-code
+    and refresh exchanges; access tokens issued under it stay
+    valid until their natural expiry.
+  </p>
+  {% if oauth_clients %}
+  <div class="admin-table-scroll">
+  <table class="admin-tenant-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Client ID</th>
+        <th>Type</th>
+        <th>Registered by</th>
+        <th>Registered</th>
+        <th>State</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in oauth_clients %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td><code>{{ c.client_id }}</code></td>
+        <td>{{ "public" if c.is_public else "confidential" }}</td>
+        <td><code>{{ c.registered_by_email or '<dcr>' }}</code></td>
+        <td>{{ c.registered_at[:10] if c.registered_at else '' }}</td>
+        <td>
+          {% if c.revoked_at %}
+            <span class="text-muted">revoked</span>
+          {% else %}
+            <span>active</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if not c.revoked_at %}
+          <form method="post"
+                action="/admin/oauth-clients/{{ c.client_id }}/revoke"
+                style="display:inline;">
+            <button type="submit" class="btn btn-link btn-sm"
+                    onclick="return confirm('Revoke {{ c.name }}? Future auth flows will fail; existing access tokens keep working until expiry.');">
+              Revoke
+            </button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No OAuth clients registered yet.</p>
+  {% endif %}
+</div>
+
 <style>
   /* Each admin table can have 5–10 columns of operator data, which
      never fits a 360px-wide phone.  Wrap in a scroll container so
@@ -416,6 +587,24 @@
   .admin-table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+  /* Inline hard-delete form sits hidden inside the lifecycle cell
+     until the operator clicks "Hard-delete".  Stacks the typed-
+     confirm input above the danger button so the eye lands on
+     the warning, not the action. */
+  .admin-hard-delete-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.4rem;
+    padding: 0.4rem;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 0.3rem;
+  }
+  .admin-hard-delete-form input {
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
   }
   .admin-tenant-table {
     width: 100%;

@@ -384,6 +384,279 @@ def test_admin_renders_filter_ui_and_recent_activity(tmp_path, monkeypatch):
         assert "Last activity" in r.text
 
 
+# ── Lifecycle controls (phase 12 deferred) ───────────────────────
+
+
+def test_soft_delete_sets_deleted_at_and_grace(tmp_path, monkeypatch):
+    """``soft_delete`` stamps ``deleted_at`` + a
+    ``hard_delete_after`` 30 days out, and writes an audit row.
+    Idempotent on a re-call (bumps the grace window forward)."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Doomed', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    dao_tenants.soft_delete(op, tid)
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT deleted_at, hard_delete_after FROM tenants WHERE id = ?",
+            (tid,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT action, actor_email FROM audit_log "
+            "WHERE action = 'tenant.soft_delete'"
+        ).fetchone()
+    assert row["deleted_at"] is not None
+    assert row["hard_delete_after"] is not None
+    assert audit["actor_email"] == "op@example.com"
+
+
+def test_reactivate_clears_soft_delete(tmp_path, monkeypatch):
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants "
+            "(name, plan, deleted_at, hard_delete_after) "
+            "VALUES ('Frozen', 'free', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    result = dao_tenants.reactivate(op, tid)
+    assert result["already_active"] is False
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT deleted_at, hard_delete_after FROM tenants WHERE id = ?",
+            (tid,),
+        ).fetchone()
+    assert row["deleted_at"] is None
+    assert row["hard_delete_after"] is None
+
+
+def test_reactivate_on_active_is_noop(tmp_path, monkeypatch):
+    """No audit row, no exception — operator clicked reactivate
+    on an already-active tenant."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Already', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    result = dao_tenants.reactivate(op, tid)
+    assert result["already_active"] is True
+    with app_mod.db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM audit_log "
+            "WHERE action = 'tenant.reactivate'"
+        ).fetchone()[0]
+    assert n == 0
+
+
+def test_hard_delete_cascades_and_audits(tmp_path, monkeypatch):
+    """Hard-delete must drop the tenant row + every cascade-
+    referencing row.  Audit row lives at ``tenant_id=NULL`` so
+    the permanent record survives the cascade."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('NukeMe', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO boxes (name, tenant_id) VALUES ('B', ?)", (tid,),
+        )
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    dao_tenants.hard_delete(op, tid)
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM tenants WHERE id = ?", (tid,),
+        ).fetchone()
+        boxes = conn.execute(
+            "SELECT COUNT(*) FROM boxes WHERE tenant_id = ?", (tid,),
+        ).fetchone()[0]
+        audit = conn.execute(
+            "SELECT tenant_id, target_id FROM audit_log "
+            "WHERE action = 'tenant.hard_delete'"
+        ).fetchone()
+    assert row is None
+    assert boxes == 0
+    # Cross-tenant audit row keeps tenant_id=NULL but target_id
+    # carries the deleted tenant's id for forensics.
+    assert audit["tenant_id"] is None
+    assert audit["target_id"] == tid
+
+
+def test_hard_delete_refuses_self_tenant(tmp_path, monkeypatch):
+    """Operator who's also a member of the target tenant can't
+    nuke their own — would lock them out of /admin."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Self', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=tid, role="maintainer",
+        is_operator=True, memberships=((tid, "maintainer"),),
+    )
+    with pytest.raises(ValueError):
+        dao_tenants.hard_delete(op, tid)
+
+
+def test_admin_route_hard_delete_requires_confirm(tmp_path, monkeypatch):
+    """POST /admin/tenants/{id}/hard-delete without the matching
+    ``confirm=<name>`` form field returns 400, and the tenant
+    survives."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Careful', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.post(
+            f"/admin/tenants/{tid}/hard-delete",
+            data={"confirm": "wrong"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
+        # Tenant still alive.
+        r2 = c.get("/admin")
+        assert "Careful" in r2.text
+        # Correct confirm → 303 + tenant gone.
+        r3 = c.post(
+            f"/admin/tenants/{tid}/hard-delete",
+            data={"confirm": "Careful"},
+            follow_redirects=False,
+        )
+        assert r3.status_code == 303
+        r4 = c.get("/admin")
+        assert "Careful" not in r4.text
+
+
+# ── Vendor cost summary ──────────────────────────────────────────
+
+
+def test_operator_cost_summary_aggregates_across_tenants(
+    tmp_path, monkeypatch,
+):
+    """``operator_cost_summary`` sums AI costs across every
+    tenant + groups per-kind + lists per-tenant rollup.  This is
+    the data backing the vendor-cost panel on /admin."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, usage as dao_usage
+    with app_mod.db() as conn:
+        c1 = conn.execute("INSERT INTO tenants (name, plan) VALUES ('A', 'pro')")
+        a = c1.lastrowid
+        c2 = conn.execute("INSERT INTO tenants (name, plan) VALUES ('B', 'pro')")
+        b = c2.lastrowid
+        conn.commit()
+    dao_usage.record(a, "ai", "gemini_detect")
+    dao_usage.record(a, "ai", "gemini_detect")
+    dao_usage.record(b, "ai", "gemini_art")
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    out = dao_usage.operator_cost_summary(op)
+    assert out["total_cost_micros"] > 0
+    assert out["by_kind"]["gemini_detect"]["units"] == 2
+    assert out["by_kind"]["gemini_art"]["units"] == 1
+    by_name = {t["name"]: t for t in out["by_tenant"]}
+    assert by_name["A"]["ai_calls"] == 2
+    assert by_name["B"]["ai_calls"] == 1
+
+
+def test_operator_cost_summary_requires_operator(tmp_path, monkeypatch):
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, ForbiddenError, usage as dao_usage
+    plain = Actor(
+        email="plain@example.com", tenant_id=1, role="maintainer",
+        is_operator=False, memberships=((1, "maintainer"),),
+    )
+    with pytest.raises(ForbiddenError):
+        dao_usage.operator_cost_summary(plain)
+
+
+# ── OAuth client panel ───────────────────────────────────────────
+
+
+def test_admin_renders_oauth_clients_and_revoke_works(
+    tmp_path, monkeypatch,
+):
+    """OAuth client panel renders registered clients; the revoke
+    route flips the row's ``revoked_at`` and the next render
+    shows it as revoked."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO oauth_clients "
+            "(client_id, name, redirect_uris, is_public, "
+            " registered_by_email) "
+            "VALUES ('abc', 'TestClient', '[\"https://x\"]', 1, "
+            "        'someone@example.com')",
+        )
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.get("/admin")
+        assert "TestClient" in r.text
+        assert "abc" in r.text
+        r2 = c.post(
+            "/admin/oauth-clients/abc/revoke",
+            follow_redirects=False,
+        )
+        assert r2.status_code == 303
+        r3 = c.get("/admin")
+        # After revoke, status flips to "revoked".
+        assert ">revoked<" in r3.text or "revoked" in r3.text
+
+
+def test_admin_renders_vendor_cost_panel(tmp_path, monkeypatch):
+    """Smoke: the vendor-cost card is in the rendered page so a
+    future template refactor that drops it fails this test."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.get("/admin")
+        assert "Vendor cost" in r.text
+
+
 def test_dao_invite_create_operator_bypass(tmp_path, monkeypatch):
     """An operator may mint into a tenant they don't belong to;
     a maintainer of *another* tenant cannot."""
