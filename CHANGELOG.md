@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.12.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.11.0...v1.12.0) (2026-05-12)
+
+
+### Features
+
+* **labels:** room-color tint toggle + brighter background art ([be875ce](https://github.com/Brennan-VanderLaan/stash/commit/be875ce6ef9976035fcb415bda1c89982bcb904c))
+
+
+### Bug Fixes
+
+* **mobile:** admin tables scroll horizontally, usage rows wrap ([5160e65](https://github.com/Brennan-VanderLaan/stash/commit/5160e6563b988d24b764d09057d8cf8bcdf56d75))
+
 ## [1.11.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.10.2...v1.11.0) (2026-05-10)
 
 
