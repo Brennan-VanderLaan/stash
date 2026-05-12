@@ -45,6 +45,10 @@ _PRICE_MICROS_PER_UNIT: dict[tuple[str, str], int] = {
     # only); rounded to 1 µ$/MB so multiplication stays an integer.
     ("upload", "upload_bytes"): 0,  # filled by formula in record()
     ("backup", "backup_bytes"): 0,
+    # Egress bandwidth (per-byte cost).  B2 egress: ~$10/TB → 10 µ$/MB.
+    # We round to 1 µ$/MB to match upload's conservative figure; the
+    # number's purpose is order-of-magnitude visibility, not billing.
+    ("download", "download_bytes"): 0,  # filled by formula in record_rollup()
 }
 
 
@@ -59,6 +63,9 @@ def _cost_for(surface: str, kind: str, units: int) -> int:
         # 1 µ$ per MB stored → conservative B2 ingest+storage estimate.
         return units // (1024 * 1024)
     if surface == "backup" and kind == "backup_bytes":
+        return units // (1024 * 1024)
+    if surface == "download" and kind == "download_bytes":
+        # 1 µ$ per MB egress — same conservative rate.
         return units // (1024 * 1024)
     return 0
 
@@ -93,6 +100,90 @@ def record(
             (tenant_id, surface, kind, units, cost_micros),
         )
         conn.commit()
+
+
+def record_rollup(
+    tenant_id: int | None,
+    surface: str,
+    kind: str,
+    *,
+    units: int = 1,
+    cost_micros: int | None = None,
+) -> None:
+    """High-frequency counter — UPSERTs into ``usage_rollups`` so a
+    busy page view that fetches 50 thumbs adds 50 to a single
+    row's ``units`` instead of inserting 50 rows.
+
+    Currently the only call site is the ``serve_upload`` /
+    ``serve_thumb`` download path, where event-per-fetch would
+    have made the table grow unboundedly on a hobby VM.  Daily
+    grain (``day`` keyed in UTC) keeps the row count to at most
+    N tenants × M kinds rows/day; for the foreseeable future
+    that's a handful of rows/day total.
+
+    Failure is intentionally swallowed (logged but not raised) so
+    a telemetry blip can't fault the serve path it's
+    instrumenting."""
+    if tenant_id is None or units <= 0:
+        return
+    if surface not in ("ai", "upload", "backup", "core", "mcp", "download"):
+        raise ValueError(f"unknown surface {surface!r}")
+    if cost_micros is None:
+        cost_micros = _cost_for(surface, kind, units)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO usage_rollups "
+                "(tenant_id, day, surface, kind, units, cost_micros) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, day, surface, kind) DO UPDATE SET "
+                "  units = units + excluded.units, "
+                "  cost_micros = cost_micros + excluded.cost_micros",
+                (tenant_id, today, surface, kind, units, cost_micros),
+            )
+            conn.commit()
+    except Exception:
+        import logging
+        logging.getLogger("stash.dao.usage").exception(
+            "record_rollup failed tenant=%s surface=%s kind=%s units=%s",
+            tenant_id, surface, kind, units,
+        )
+
+
+def storage_footprint(tenant_id: int | None) -> dict:
+    """Current on-disk usage for ``tenant_id``: walk
+    ``UPLOAD_DIR/{tenant_id}/`` and sum file sizes.
+
+    Returns ``{"total_bytes": N, "file_count": N}``.  Cheap on a
+    hobby-scale stash (low thousands of files); if this ever
+    becomes a hot path we'll cache the result in a rollup row
+    refreshed by a background sweep.
+
+    The DEK / encryption overhead is included — these are the
+    actual on-disk bytes the storage device sees, not the
+    plaintext size.  Operators comparing this against B2 quota
+    should look at *this* number, not the cumulative
+    ``upload_bytes`` event-log total (which counts every write
+    forever, including deletes)."""
+    if tenant_id is None:
+        return {"total_bytes": 0, "file_count": 0}
+    import os
+    from pathlib import Path
+    upload_dir = Path(os.environ.get("STASH_UPLOADS", "uploads"))
+    tenant_root = upload_dir / str(tenant_id)
+    if not tenant_root.exists():
+        return {"total_bytes": 0, "file_count": 0}
+    total = 0
+    count = 0
+    for root, _dirs, files in os.walk(tenant_root):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+                count += 1
+            except OSError:
+                pass
+    return {"total_bytes": total, "file_count": count}
 
 
 # ── Read ────────────────────────────────────────────────────────────
@@ -139,6 +230,10 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
     if tenant_id is None:
         return _empty_summary()
     since = since or _month_start_utc()
+    # ``since`` is "YYYY-MM-DD HH:MM:SS" but the rollups table keys
+    # on date-only ("YYYY-MM-DD") — slicing to 10 chars gives the
+    # right comparison key without parsing.
+    since_day = since[:10]
     with db() as conn:
         per_surface = {
             r["surface"]: r for r in conn.execute(
@@ -150,6 +245,18 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
                 (tenant_id, since),
             ).fetchall()
         }
+        # Download bandwidth lives in usage_rollups (one row/day
+        # per kind) instead of usage_events; pull it separately
+        # and merge into the per-surface map.
+        for r in conn.execute(
+            "SELECT surface, SUM(units) AS units, "
+            "       SUM(cost_micros) AS cost_micros "
+            "FROM usage_rollups "
+            "WHERE tenant_id = ? AND day >= ? "
+            "GROUP BY surface",
+            (tenant_id, since_day),
+        ).fetchall():
+            per_surface[r["surface"]] = r
         kinds = {
             r["kind"]: r["units"] for r in conn.execute(
                 "SELECT kind, SUM(units) AS units "
@@ -171,17 +278,22 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
             "SELECT COUNT(*) FROM boxes WHERE tenant_id = ?",
             (tenant_id,),
         ).fetchone()[0]
+    footprint = storage_footprint(tenant_id)
     out = {
         "since": since,
         "ai_calls": _units(per_surface, "ai"),
         "ai_cost_micros": _cost(per_surface, "ai"),
         "upload_bytes": _units(per_surface, "upload"),
         "upload_cost_micros": _cost(per_surface, "upload"),
+        "download_bytes": _units(per_surface, "download"),
+        "download_cost_micros": _cost(per_surface, "download"),
         "backup_bytes": _units(per_surface, "backup"),
         "backup_cost_micros": _cost(per_surface, "backup"),
         "kinds": kinds,
         "item_count": item_count,
         "box_count": box_count,
+        "storage_bytes": footprint["total_bytes"],
+        "storage_files": footprint["file_count"],
     }
     # Cap + percent + band per surface — the /usage meters render
     # these directly.  Imports lazily to avoid a circular import
@@ -215,10 +327,13 @@ def _empty_summary() -> dict:
         "since": _month_start_utc(),
         "ai_calls": 0, "ai_cost_micros": 0,
         "upload_bytes": 0, "upload_cost_micros": 0,
+        "download_bytes": 0, "download_cost_micros": 0,
         "backup_bytes": 0, "backup_cost_micros": 0,
         "kinds": {},
         "item_count": 0,
         "box_count": 0,
+        "storage_bytes": 0,
+        "storage_files": 0,
     }
     for key in ("monthly_ai_calls", "monthly_upload_bytes",
                 "daily_ai_cost_micros"):

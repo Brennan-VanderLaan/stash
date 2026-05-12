@@ -118,5 +118,152 @@ def test_usage_page_renders(client):
     page = r.text
     assert "AI calls" in page
     assert "Photos uploaded" in page
+    # New bandwidth + storage panels.
+    assert "Bandwidth" in page
+    assert "Storage" in page
     # Members section lists the test maintainer.
     assert client.test_email in page
+
+
+# ── Bandwidth rollups + storage footprint ─────────────────────────
+
+
+def test_record_rollup_upserts_one_row_per_day(client):
+    """50 serves of the same kind on the same day MUST add to ONE
+    row in usage_rollups — the whole point of the daily-grain
+    schema is to keep the table size bounded under hot-fetch
+    loads.  Without this, a heavy grid view would insert dozens
+    of rows per page render."""
+    from dao import usage as dao_usage
+    for _ in range(50):
+        dao_usage.record_rollup(
+            client.test_tenant_id, "download", "download_bytes",
+            units=1000,
+        )
+    with client.app_module.db() as conn:
+        rows = conn.execute(
+            "SELECT day, units, cost_micros FROM usage_rollups "
+            "WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["units"] == 50_000
+
+
+def test_record_rollup_swallows_failures(client, monkeypatch):
+    """The serve path can't be allowed to 500 because telemetry
+    failed.  ``record_rollup`` logs and returns on any DB
+    exception — verify by patching ``db`` to raise."""
+    from dao import usage as dao_usage
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(dao_usage, "db", boom)
+    # Must NOT raise.
+    dao_usage.record_rollup(
+        client.test_tenant_id, "download", "download_bytes", units=1,
+    )
+
+
+def test_serve_upload_records_download_bandwidth(client, monkeypatch):
+    """Hitting /uploads/{name} after a real upload must bump the
+    download rollup by the served byte count."""
+    import io
+    from unittest.mock import patch
+    from vision import DetectedItem
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d"),
+    ]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8\xff" + b"x" * 256), "image/jpeg")},
+        )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT photo FROM pending_items WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row is not None
+    photo = row["photo"]
+    before = _download_units(client)
+    r = client.get(f"/uploads/{photo}")
+    assert r.status_code == 200
+    after = _download_units(client)
+    assert after > before
+    # Bumps by approximately the response body size (the actual
+    # plaintext byte count post-decrypt).
+    assert after - before == len(r.content)
+
+
+def test_serve_thumb_records_download_bandwidth(client):
+    """Same expectation for /thumbs/{name} — thumbs are the high-
+    volume path that motivated the rollup design."""
+    import io
+    from unittest.mock import patch
+    from vision import DetectedItem
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="thing", description="d"),
+    ]):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8\xff" + b"x" * 256), "image/jpeg")},
+        )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT photo FROM pending_items WHERE tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    photo = row["photo"]
+    before = _download_units(client)
+    r = client.get(f"/thumbs/{photo}")
+    assert r.status_code == 200
+    after = _download_units(client)
+    assert after > before
+
+
+def test_summary_includes_download_bytes_and_storage(client):
+    """``summary`` must surface the new download + storage fields
+    so the /usage page can render the Bandwidth + Storage panels
+    without further plumbing."""
+    from dao import usage as dao_usage, Actor
+    dao_usage.record_rollup(
+        client.test_tenant_id, "download", "download_bytes",
+        units=4_096,
+    )
+    actor = Actor(
+        email=client.test_email, tenant_id=client.test_tenant_id,
+        role="maintainer", is_operator=False,
+        memberships=((client.test_tenant_id, "maintainer"),),
+    )
+    out = dao_usage.summary(actor)
+    assert out["download_bytes"] == 4_096
+    # Storage footprint is keyed off the upload dir on disk;
+    # empty tenant → 0, but the field is present + numeric.
+    assert "storage_bytes" in out
+    assert "storage_files" in out
+    assert isinstance(out["storage_bytes"], int)
+
+
+def test_storage_footprint_reflects_files_on_disk(client, tmp_path):
+    """``storage_footprint`` walks the tenant's upload dir.  Empty
+    tenant returns 0; writing a file bumps the footprint by that
+    file's byte count."""
+    from dao import usage as dao_usage
+    import os
+    empty = dao_usage.storage_footprint(client.test_tenant_id)
+    assert empty["total_bytes"] == 0
+    upload_root = client.app_module.UPLOAD_DIR / str(client.test_tenant_id)
+    upload_root.mkdir(parents=True, exist_ok=True)
+    (upload_root / "x.jpg").write_bytes(b"a" * 1234)
+    after = dao_usage.storage_footprint(client.test_tenant_id)
+    assert after["total_bytes"] >= 1234
+    assert after["file_count"] >= 1
+
+
+def _download_units(client) -> int:
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(units), 0) AS u FROM usage_rollups "
+            "WHERE tenant_id = ? AND surface = 'download'",
+            (client.test_tenant_id,),
+        ).fetchone()
+    return int(row["u"]) if row else 0

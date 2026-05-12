@@ -1023,6 +1023,26 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_usage_events_tenant_surface
             ON usage_events(tenant_id, surface, created_at);
 
+        -- High-frequency counters (currently just downloads).  One
+        -- row per (tenant_id, day, surface, kind) instead of one row
+        -- per serve, so a grid view that fetches 50 thumbs writes
+        -- ONE UPSERT per kind rather than 50 INSERTs.  The
+        -- bandwidth + storage panels on /usage read these in
+        -- preference to ``usage_events`` for download_bytes; the
+        -- AI / upload / backup surfaces stay event-keyed because
+        -- audit + per-call detail matters more than throughput.
+        CREATE TABLE IF NOT EXISTS usage_rollups (
+            tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            day TEXT NOT NULL,        -- YYYY-MM-DD UTC
+            surface TEXT NOT NULL,    -- 'download'
+            kind TEXT NOT NULL,       -- 'download_bytes'
+            units INTEGER NOT NULL DEFAULT 0,
+            cost_micros INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (tenant_id, day, surface, kind)
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_rollups_tenant_day
+            ON usage_rollups(tenant_id, day);
+
         CREATE TABLE IF NOT EXISTS quotas (
             tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
             monthly_ai_calls INTEGER,
@@ -2050,6 +2070,11 @@ def serve_upload(request: Request, name: str):
         plaintext = _decrypt_for(tenant_id, p.read_bytes())
     except Exception:
         raise HTTPException(500, "decryption failed")
+    # Egress bandwidth metering — daily-grain UPSERT so 50 thumb
+    # fetches on a grid view add to one row instead of inserting 50.
+    dao_usage.record_rollup(
+        tenant_id, "download", "download_bytes", units=len(plaintext),
+    )
     # Photo MIME — every stored upload is JPEG (save_photo_bytes
     # normalises) so we can hard-code without sniffing bytes.
     return Response(content=plaintext, media_type="image/jpeg")
@@ -2071,6 +2096,11 @@ def serve_thumb(request: Request, name: str):
             plaintext = _read_encrypted(tenant_id, name)
         except Exception:
             raise HTTPException(404)
+    # Daily-grain UPSERT keeps thumb fetches from bloating the
+    # events table even on heavy grid-view sessions.
+    dao_usage.record_rollup(
+        tenant_id, "download", "download_bytes", units=len(plaintext),
+    )
     return Response(
         content=plaintext,
         media_type="image/jpeg",

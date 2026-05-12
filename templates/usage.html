@@ -76,6 +76,70 @@
   {% endif %}
 </div>
 
+{# ── Bandwidth (this month) ─────────────────────────────────────
+   Uploads + downloads.  Upload is byte-count from every successful
+   POST /ingest.  Download is daily-rollup'd serve_upload +
+   serve_thumb byte counts so the events table can't blow up under
+   a heavy grid-view session.  Cost is order-of-magnitude only —
+   real B2 egress billing would be more accurate, but we want
+   trend visibility, not invoice prep. #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Bandwidth (this month)") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Bytes in (uploads) and out (page views, agent fetches, MCP photos).  Resets on the 1st of each UTC month.") }}
+  </p>
+  <dl class="stat-row">
+    <div>
+      <dt>{{ _("Uploaded in") }}</dt>
+      <dd>
+        {{ "%.1f" | format(usage.upload_bytes / (1024 * 1024)) }} MB
+        {% if usage.upload_cost_micros %}
+          <span class="text-muted text-sm">≈ ${{ "%.2f" | format(usage.upload_cost_micros / 1_000_000) }}</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Served out") }}</dt>
+      <dd>
+        {{ "%.1f" | format(usage.download_bytes / (1024 * 1024)) }} MB
+        {% if usage.download_cost_micros %}
+          <span class="text-muted text-sm">≈ ${{ "%.2f" | format(usage.download_cost_micros / 1_000_000) }}</span>
+        {% endif %}
+      </dd>
+    </div>
+  </dl>
+</div>
+
+{# ── Storage footprint ──────────────────────────────────────────
+   On-disk total — not cumulative-uploads.  Walks UPLOAD_DIR/{tid}/
+   on render so deletes are reflected immediately, unlike the
+   upload_bytes meter which tracks lifetime uploads. #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Storage") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Bytes currently sitting on disk for this tenant.  Includes encrypted photos + thumbnails + AI-generated label art.  Drops when items are deleted (the cumulative \"Photos uploaded\" meter doesn't, by design).") }}
+  </p>
+  <dl class="stat-row">
+    <div>
+      <dt>{{ _("On disk") }}</dt>
+      <dd>
+        {% set storage_mb = usage.storage_bytes / (1024 * 1024) %}
+        {% if storage_mb < 1 %}
+          {{ "%.0f" | format(usage.storage_bytes / 1024) }} KB
+        {% elif storage_mb < 1024 %}
+          {{ "%.1f" | format(storage_mb) }} MB
+        {% else %}
+          {{ "%.2f" | format(storage_mb / 1024) }} GB
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>{{ _("Files") }}</dt>
+      <dd>{{ usage.storage_files }}</dd>
+    </div>
+  </dl>
+</div>
+
 {# ── Backup ───────────────────────────────────────────────────── #}
 {% if is_maintainer %}
 <div class="card maintenance-card">
