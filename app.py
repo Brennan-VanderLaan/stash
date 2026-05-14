@@ -3655,12 +3655,21 @@ def labels_print(request: Request):
     for chunk_start in range(0, max(len(boxes), 1), fmt.labels_per_page):
         chunk = boxes[chunk_start:chunk_start + fmt.labels_per_page]
         pages.append(labels.render_single_sheet_svg(chunk, PUBLIC_URL, fmt=fmt))
+    # Carry the same query string back to /labels so the Back link
+    # restores the selection the user just printed.  sessionStorage
+    # alone doesn't survive ``formtarget="_blank"`` (the new tab is
+    # its own top-level browsing context and gets a fresh storage
+    # area), but URL params do — the /labels JS picks ``box_ids``
+    # off the query string and re-checks the right boxes.
+    qs = request.url.query
+    back_url = f"/labels?{qs}" if qs else "/labels"
     return templates.TemplateResponse(
         request, "labels_print.html",
         {
             "sheet_svgs": pages,
             "label_count": len(boxes),
             "fmt": fmt,
+            "back_url": back_url,
         },
     )
 

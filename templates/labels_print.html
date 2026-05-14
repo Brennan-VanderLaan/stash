@@ -94,7 +94,7 @@
   <div class="toolbar">
     <span class="summary"><strong>{{ label_count }}</strong> label{{ '' if label_count == 1 else 's' }} across <strong>{{ sheet_svgs | length }}</strong> sheet{{ '' if sheet_svgs | length == 1 else 's' }} of Avery {{ fmt.sku }}</span>
     <div style="display:flex; gap:0.5rem;">
-      <a href="/labels" class="secondary">← Back</a>
+      <a href="{{ back_url }}" class="secondary">← Back</a>
       <button onclick="window.print()">Print →</button>
     </div>
   </div>

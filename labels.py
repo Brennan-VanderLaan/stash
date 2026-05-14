@@ -346,13 +346,19 @@ def _label_inner_landscape(
     """Landscape-canvas layout: QR on the left, name + notes
     fill the right.  Used for the canvas being wider than tall —
     Avery 5523's natural cell shape (101.6 × 50.8)."""
+    # ``layout_dim`` is the short side, capped at half the long side
+    # so near-square cells (Avery 5164 is 101.6 × 84.7 — only 1.2 : 1)
+    # don't end up with a QR that eats the entire long axis.  Sizing
+    # the QR + fonts off it leaves enough room for text alongside the
+    # QR on every Avery template we support.
     short_dim = canvas_h
-    margin = short_dim * _MARGIN_FRACTION
-    qr_size = short_dim * _QR_FRACTION
+    layout_dim = min(short_dim, canvas_w * 0.5)
+    margin = layout_dim * _MARGIN_FRACTION
+    qr_size = layout_dim * _QR_FRACTION
     qr_y = (canvas_h - qr_size) / 2
-    name_size = short_dim * _NAME_FONT_FRACTION
-    desc_size = short_dim * _DESC_FONT_FRACTION
-    id_size = short_dim * _ID_FONT_FRACTION
+    name_size = layout_dim * _NAME_FONT_FRACTION
+    desc_size = layout_dim * _DESC_FONT_FRACTION
+    id_size = layout_dim * _ID_FONT_FRACTION
 
     text_x = margin + qr_size + margin
     # Reserve space for the box-ID badge proportional to the actual
@@ -449,18 +455,22 @@ def _label_inner_portrait(
     headroom and the ID is the "find this box from across the
     room" handle.
     """
+    # Same near-square-cell cap as landscape, applied along the
+    # portrait axis: cap by half the *long* (canvas_h) dim so the QR
+    # doesn't claim the whole top of the cell on 5164 portrait.
     short_dim = canvas_w
-    margin = short_dim * _MARGIN_FRACTION
-    qr_size = short_dim * _QR_FRACTION_PORTRAIT
+    layout_dim = min(short_dim, canvas_h * 0.5)
+    margin = layout_dim * _MARGIN_FRACTION
+    qr_size = layout_dim * _QR_FRACTION_PORTRAIT
     qr_x = (canvas_w - qr_size) / 2
     qr_y = margin
     # Portrait's text column is much narrower than landscape's
     # (50.8 mm wide vs ~58 mm) so we start name slightly smaller
     # and rely on word-wrap to fill the vertical space rather than
     # font-fit shrinking the name into illegibility.
-    name_size = short_dim * _NAME_FONT_FRACTION_PORTRAIT
-    desc_size = short_dim * _DESC_FONT_FRACTION_PORTRAIT
-    id_size = short_dim * _ID_FONT_FRACTION_PORTRAIT
+    name_size = layout_dim * _NAME_FONT_FRACTION_PORTRAIT
+    desc_size = layout_dim * _DESC_FONT_FRACTION_PORTRAIT
+    id_size = layout_dim * _ID_FONT_FRACTION_PORTRAIT
 
     text_x = margin
     text_max = canvas_w - 2 * margin

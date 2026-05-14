@@ -227,6 +227,26 @@
   }
 
   function restoreSelection() {
+    // URL params win: the /labels/print "← Back" link carries the
+    // current ``box_ids`` so a *new-tab* round trip (Print opens
+    // ``formtarget="_blank"``, which gets a fresh sessionStorage
+    // area in the new top-level browsing context) still lands back
+    // on the same selection.  sessionStorage is the same-tab
+    // fallback — e.g., the user reloads /labels or browser-backs
+    // to it.
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlIds = urlParams.getAll('box_ids');
+    if (urlIds.length > 0) {
+      restoreInProgress = true;
+      const allowed = new Set(urlIds);
+      checkboxes.forEach(cb => { cb.checked = allowed.has(cb.value); });
+      restoreInProgress = false;
+      // Mirror the URL-restored selection into sessionStorage so a
+      // subsequent same-tab nav (without box_ids in the URL) still
+      // restores what the user just had.
+      persistSelection();
+      return;
+    }
     let stored = null;
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);

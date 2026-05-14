@@ -239,6 +239,30 @@ def test_print_page_handles_empty_selection(client):
     assert "No boxes selected" in r.text
 
 
+def test_print_page_back_link_carries_selection(client):
+    """The "← Back" link must round-trip the current selection so
+    Print opening in a new tab (``formtarget="_blank"``) doesn't
+    strand the user on a freshly-defaulted ``/labels``.  The new
+    tab gets a fresh sessionStorage area; URL params are the
+    cross-tab signal.
+    """
+    client.post("/boxes", data={"name": "A"})
+    client.post("/boxes", data={"name": "B"})
+    client.post("/boxes", data={"name": "C"})
+    r = client.get("/labels/print?format=5160&box_ids=1&box_ids=3")
+    assert r.status_code == 200
+    # The Back href must include both the format + every selected
+    # box_id so the /labels JS can re-check them on landing.
+    assert 'href="/labels?format=5160&amp;box_ids=1&amp;box_ids=3"' in r.text
+
+
+def test_print_page_back_link_omits_querystring_when_empty(client):
+    client.post("/boxes", data={"name": "Solo"})
+    r = client.get("/labels/print")
+    assert r.status_code == 200
+    assert 'href="/labels"' in r.text
+
+
 def test_print_page_respects_persisted_orientation(client):
     """Regression for the bug where the print + PDF paths fell
     back to landscape because ``_selected_boxes`` didn't pull
