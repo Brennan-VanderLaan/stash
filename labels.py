@@ -147,7 +147,15 @@ _MARGIN_FRACTION = 0.08
 _NAME_FONT_FRACTION = 0.22
 _DESC_FONT_FRACTION = 0.13
 _ID_FONT_FRACTION = 0.10
-_CHARS_PER_FONT_UNIT = 1.7   # rough sans-serif width / font-size
+_CHARS_PER_FONT_UNIT = 1.7   # rough sans-serif width / font-size — used by
+                             # _fit_font for honest shrink-to-fit estimates.
+# Wrap uses a slightly more generous chars-per-em estimate than
+# _fit_font.  Sans-serif glyphs average a hair under 0.55 em wide so
+# 1.85 keeps the wrap from breaking lines a few characters earlier
+# than needed and ellipsising names that would otherwise fit.
+# _fit_font keeps the conservative 1.7 because under-shrinking
+# overflows the cell, whereas under-wrapping just truncates needlessly.
+_CHARS_PER_FONT_UNIT_WRAP = 1.85
 
 # Portrait labels: QR is smaller (so name has room to wrap below),
 # text fonts are slightly smaller (the column is narrower than in
@@ -180,6 +188,25 @@ def _qr_svg_path(data: str) -> tuple[str, str]:
     d = path_el.get("d", "") if path_el is not None else ""
     vb = root.get("viewBox", "0 0 100 100")
     return d, vb
+
+
+def _squeeze_attrs(text: str, max_width: float, font_size: float) -> str:
+    """Return SVG attributes that force a single-line text element to
+    fit ``max_width`` if our width estimate says it won't.
+
+    ``_fit_font`` shrinks toward fit but bottoms out at 40 % of the
+    ideal size to keep text legible; on tiny cells (Avery 5160) a
+    long name still spills past the cell edge after the shrink hits
+    that floor.  ``textLength`` + ``lengthAdjust="spacingAndGlyphs"``
+    is SVG's native squeeze — we only apply it when the estimate
+    says we'd overflow, so short names keep their natural spacing.
+    """
+    if not text or max_width <= 0:
+        return ""
+    width = (len(text) / _CHARS_PER_FONT_UNIT) * font_size
+    if width <= max_width:
+        return ""
+    return f' textLength="{max_width:.3f}" lengthAdjust="spacingAndGlyphs"'
 
 
 def _fit_font(text: str, max_width: float, ideal: float,
@@ -215,7 +242,7 @@ def _wrap_text(text: str, max_width: float, font_size: float,
     if not text:
         return []
     words = text.split()
-    chars_per_mm = _CHARS_PER_FONT_UNIT / font_size
+    chars_per_mm = _CHARS_PER_FONT_UNIT_WRAP / font_size
     max_chars = max(1, int(max_width * chars_per_mm))
     lines: list[str] = []
     cur = ""
@@ -328,7 +355,14 @@ def _label_inner_landscape(
     id_size = short_dim * _ID_FONT_FRACTION
 
     text_x = margin + qr_size + margin
-    id_reserve = id_size * 5
+    # Reserve space for the box-ID badge proportional to the actual
+    # ID width — the old fixed 5 × id_size allowance stole ~25 mm of
+    # the 5523 cell for a 5-char "#1234" badge that only needs ~15
+    # mm, and made small cells (5160) overflow before they even tried
+    # to render the name.
+    id_text = f"#{box_id}"
+    id_width = (len(id_text) / _CHARS_PER_FONT_UNIT) * id_size
+    id_reserve = id_width + margin
     text_max = canvas_w - text_x - margin - id_reserve
 
     name_size = _fit_font(name, text_max, name_size)
@@ -338,9 +372,14 @@ def _label_inner_landscape(
     vb_w = float(qr_vb.split()[2])
     vb_h = float(qr_vb.split()[3])
 
+    # Label background — white fill, no visible stroke.  The previous
+    # 0.25 mm grey stroke drew the cell perimeter, but any printer
+    # registration drift cropped it unevenly and looked like a
+    # printing defect.  The Avery cell itself is the physical edge;
+    # we don't need to draw a second one.
     parts = [
         f'<rect width="{canvas_w}" height="{canvas_h}" '
-        f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
+        f'rx="1.5" ry="1.5" fill="white"/>',
     ]
     # Pastel room-color wash sits directly above the white base
     # rect so the AI art (drawn next) layers on top and gets
@@ -367,10 +406,11 @@ def _label_inner_landscape(
         f'<text x="{canvas_w - margin}" y="{margin + id_size * 0.9}" '
         f'font-family="ui-monospace, Menlo, monospace" '
         f'font-size="{id_size}" fill="#666" text-anchor="end">'
-        f'#{box_id}</text>',
+        f'{_escape(id_text)}</text>',
         f'<text x="{text_x}" y="{name_y}" '
         f'font-family="sans-serif" font-size="{name_size}" '
-        f'font-weight="bold" fill="#111" '
+        f'font-weight="bold" fill="#111"'
+        f'{_squeeze_attrs(name, text_max, name_size)} '
         f'dominant-baseline="central">{_escape(name)}</text>',
     ])
     if description:
@@ -379,7 +419,9 @@ def _label_inner_landscape(
         parts.append(
             f'<text x="{text_x}" y="{desc_y}" '
             f'font-family="sans-serif" font-size="{desc_size}" '
-            f'fill="#666">{_escape(description)}</text>'
+            f'fill="#666"'
+            f'{_squeeze_attrs(description, text_max, desc_size)}>'
+            f'{_escape(description)}</text>'
         )
     return "\n    ".join(parts)
 
@@ -432,9 +474,12 @@ def _label_inner_portrait(
     vb_w = float(qr_vb.split()[2])
     vb_h = float(qr_vb.split()[3])
 
+    # Label background — white fill, no visible stroke (see landscape
+    # for the rationale: any printer drift makes the stroke look
+    # cropped, and the Avery cell already has a physical edge).
     parts = [
         f'<rect width="{canvas_w}" height="{canvas_h}" '
-        f'rx="1.5" ry="1.5" fill="white" stroke="#bbb" stroke-width="0.25"/>',
+        f'rx="1.5" ry="1.5" fill="white"/>',
     ]
     tint = _color_tint_rect(color_tint, canvas_w, canvas_h, margin)
     if tint:
@@ -451,6 +496,7 @@ def _label_inner_portrait(
     )
     if art:
         parts.append(art)
+    id_text = f"#{box_id}"
     parts.extend([
         f'<g transform="translate({qr_x},{qr_y}) '
         f'scale({qr_size / vb_w},{qr_size / vb_h})">',
@@ -462,13 +508,16 @@ def _label_inner_portrait(
         f'font-family="ui-monospace, Menlo, monospace" '
         f'font-size="{id_size}" fill="#666" '
         f'font-weight="bold" text-anchor="end">'
-        f'#{box_id}</text>',
+        f'{_escape(id_text)}</text>',
     ])
 
-    # Name wrap.  We aim for up to 3 lines; if the text genuinely
-    # doesn't fit even at 3 lines the wrap helper truncates with
-    # an ellipsis.
-    name_lines = _wrap_text(name, text_max, name_size, max_lines=3)
+    # Name wrap.  Up to 4 lines (was 3) — the extra line meaningfully
+    # cuts down on the ``...`` truncation that hit names like
+    # "Holiday Decorations Garage Bay 2" before the last word fit.
+    # Any line that still over-shoots (rare, multi-syllable single
+    # words) gets squeezed via textLength so the ink never leaves
+    # the cell.
+    name_lines = _wrap_text(name, text_max, name_size, max_lines=4)
     name_y = qr_y + qr_size + margin + name_size
     line_height = name_size * 1.1
     for i, line in enumerate(name_lines):
@@ -478,7 +527,9 @@ def _label_inner_portrait(
         parts.append(
             f'<text x="{text_x}" y="{y}" '
             f'font-family="sans-serif" font-size="{name_size}" '
-            f'font-weight="bold" fill="#111">{_escape(line)}</text>'
+            f'font-weight="bold" fill="#111"'
+            f'{_squeeze_attrs(line, text_max, name_size)}>'
+            f'{_escape(line)}</text>'
         )
     last_name_y = name_y + max(0, len(name_lines) - 1) * line_height
 
@@ -495,7 +546,9 @@ def _label_inner_portrait(
             parts.append(
                 f'<text x="{text_x}" y="{y}" '
                 f'font-family="sans-serif" font-size="{desc_size}" '
-                f'fill="#666">{_escape(line)}</text>'
+                f'fill="#666"'
+                f'{_squeeze_attrs(line, text_max, desc_size)}>'
+                f'{_escape(line)}</text>'
             )
     return "\n    ".join(parts)
 
@@ -562,13 +615,11 @@ def _label_group(
 
 
 def _empty_cell(fmt: AveryFormat) -> str:
-    """Dashed placeholder for unused cells on the last sheet —
-    purely visual so the print preview shows the grid alignment."""
-    return (
-        f'<rect width="{fmt.label_w_mm}" height="{fmt.label_h_mm}" '
-        f'rx="1.5" ry="1.5" fill="white" stroke="#ddd" '
-        f'stroke-width="0.25" stroke-dasharray="2,2"/>'
-    )
+    """Unused cells on the last sheet render as nothing — the
+    physical Avery label is already there and printing a dashed
+    placeholder over it leaves visible marks on the leftover
+    stickers when the user prints a partial sheet."""
+    return ""
 
 
 # ── Sheet rendering ────────────────────────────────────────────────
