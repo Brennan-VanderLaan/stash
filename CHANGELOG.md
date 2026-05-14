@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.13.0...v1.14.0) (2026-05-12)
+
+
+### Features
+
+* **admin:** tenant lifecycle + vendor cost + OAuth clients (phase 12 finish) ([72a0ca4](https://github.com/Brennan-VanderLaan/stash/commit/72a0ca483ffb4862b83ef7b647ed2ce22aed8858))
+
 ## [1.13.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.12.0...v1.13.0) (2026-05-12)
 
 
