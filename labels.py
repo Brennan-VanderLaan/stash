@@ -144,9 +144,20 @@ def get_format(sku: str | None) -> AveryFormat:
 # proportionally smaller text.
 _QR_FRACTION = 0.85          # QR fills ~85% of the short side
 _MARGIN_FRACTION = 0.08
-_NAME_FONT_FRACTION = 0.22
-_DESC_FONT_FRACTION = 0.13
-_ID_FONT_FRACTION = 0.10
+# Font fractions bumped up (0.22 → 0.26 name, 0.13 → 0.16 desc, 0.10 →
+# 0.12 id) — printed in-person at arm's length the previous sizes
+# read as "small print".  textLength squeeze still guarantees fit, so
+# bigger ideal sizes don't risk overflow; they just shrink fewer
+# characters before kicking in.
+_NAME_FONT_FRACTION = 0.26
+_DESC_FONT_FRACTION = 0.16
+_ID_FONT_FRACTION = 0.12
+# Body text colors.  Name stays near-black; description was #666 (a
+# soft mid-grey that disappeared on printed labels) bumped to #333 so
+# notes stay legible from across the room.  ID badge follows suit.
+_NAME_FILL = "#111"
+_DESC_FILL = "#333"
+_ID_FILL = "#333"
 _CHARS_PER_FONT_UNIT = 1.7   # rough sans-serif width / font-size — used by
                              # _fit_font for honest shrink-to-fit estimates.
 # Wrap uses a slightly more generous chars-per-em estimate than
@@ -163,9 +174,9 @@ _CHARS_PER_FONT_UNIT_WRAP = 1.85
 # is much bigger because portrait has the headroom and the ID
 # doubles as a "find this box from across the room" marker.
 _QR_FRACTION_PORTRAIT = 0.72
-_NAME_FONT_FRACTION_PORTRAIT = 0.14
-_DESC_FONT_FRACTION_PORTRAIT = 0.10
-_ID_FONT_FRACTION_PORTRAIT = 0.18
+_NAME_FONT_FRACTION_PORTRAIT = 0.17
+_DESC_FONT_FRACTION_PORTRAIT = 0.12
+_ID_FONT_FRACTION_PORTRAIT = 0.20
 
 
 def _qr_data_for_box(box_id: int, public_url: str) -> str:
@@ -411,11 +422,11 @@ def _label_inner_landscape(
         f'</g>',
         f'<text x="{canvas_w - margin}" y="{margin + id_size * 0.9}" '
         f'font-family="ui-monospace, Menlo, monospace" '
-        f'font-size="{id_size}" fill="#666" text-anchor="end">'
+        f'font-size="{id_size}" fill="{_ID_FILL}" text-anchor="end">'
         f'{_escape(id_text)}</text>',
         f'<text x="{text_x}" y="{name_y}" '
         f'font-family="sans-serif" font-size="{name_size}" '
-        f'font-weight="bold" fill="#111"'
+        f'font-weight="bold" fill="{_NAME_FILL}"'
         f'{_squeeze_attrs(name, text_max, name_size)} '
         f'dominant-baseline="central">{_escape(name)}</text>',
     ])
@@ -425,7 +436,7 @@ def _label_inner_landscape(
         parts.append(
             f'<text x="{text_x}" y="{desc_y}" '
             f'font-family="sans-serif" font-size="{desc_size}" '
-            f'fill="#666"'
+            f'fill="{_DESC_FILL}"'
             f'{_squeeze_attrs(description, text_max, desc_size)}>'
             f'{_escape(description)}</text>'
         )
@@ -516,7 +527,7 @@ def _label_inner_portrait(
         # "find from across the room" handle.
         f'<text x="{canvas_w - margin}" y="{id_band_y}" '
         f'font-family="ui-monospace, Menlo, monospace" '
-        f'font-size="{id_size}" fill="#666" '
+        f'font-size="{id_size}" fill="{_ID_FILL}" '
         f'font-weight="bold" text-anchor="end">'
         f'{_escape(id_text)}</text>',
     ])
@@ -537,7 +548,7 @@ def _label_inner_portrait(
         parts.append(
             f'<text x="{text_x}" y="{y}" '
             f'font-family="sans-serif" font-size="{name_size}" '
-            f'font-weight="bold" fill="#111"'
+            f'font-weight="bold" fill="{_NAME_FILL}"'
             f'{_squeeze_attrs(line, text_max, name_size)}>'
             f'{_escape(line)}</text>'
         )
@@ -556,7 +567,7 @@ def _label_inner_portrait(
             parts.append(
                 f'<text x="{text_x}" y="{y}" '
                 f'font-family="sans-serif" font-size="{desc_size}" '
-                f'fill="#666"'
+                f'fill="{_DESC_FILL}"'
                 f'{_squeeze_attrs(line, text_max, desc_size)}>'
                 f'{_escape(line)}</text>'
             )
