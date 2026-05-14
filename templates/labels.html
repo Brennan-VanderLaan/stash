@@ -37,9 +37,33 @@
       data-art-enabled="{{ '1' if art_enabled else '0' }}"
       data-format="{{ fmt.sku }}">
   <input type="hidden" name="format" value="{{ fmt.sku }}" id="hidden-format">
-  <div class="card label-grid-card">
+  {# Grouped by (location → room) just like the home page, so a
+     stash with 80 boxes reads as scannable sections instead of one
+     wall-of-tiles.  Each group has its own toggle so the user can
+     quickly select-all-in-room or deselect-all-in-room. #}
+  {% for g in box_groups %}
+  <div class="card label-grid-card label-group" data-group-index="{{ loop.index0 }}">
+    <header class="label-group-header">
+      <div class="label-group-title">
+        {% if g.kind == "room" %}
+          <span class="room-chip" style="--room-color: {{ g.room_color or '#4ade80' }};">{{ g.room_name }}</span>
+          {% if g.location_name %}<span class="label-group-loc">in {{ g.location_name }}</span>{% endif %}
+        {% elif g.kind == "loc" %}
+          <span class="label-group-loc">{{ g.legacy_location }}</span>
+        {% else %}
+          <span class="label-group-loc">Unassigned</span>
+        {% endif %}
+        <span class="label-group-count">
+          <span data-group-selected>{{ g.boxes|length }}</span>/{{ g.boxes|length }}
+        </span>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm label-group-toggle"
+              data-group-toggle>
+        Toggle group
+      </button>
+    </header>
     <div class="label-grid">
-      {% for b in boxes %}
+      {% for b in g.boxes %}
       <div class="label-card" data-box-id="{{ b.id }}"
            data-box-name="{{ b.name }}"
            data-box-notes="{{ b.notes or '' }}"
@@ -58,7 +82,6 @@
           <span class="label-card-meta">
             <span class="label-card-name">{{ b.name }}</span>
             {% if b.notes %}<span class="label-card-notes">{{ b.notes }}</span>{% endif %}
-            {% if b.location %}<span class="label-card-location">{{ b.location }}</span>{% endif %}
           </span>
         </button>
         <div class="label-card-actions">
@@ -95,6 +118,7 @@
       {% endfor %}
     </div>
   </div>
+  {% endfor %}
 
   <div class="label-toolbar" id="label-toolbar">
     <div class="label-toolbar-summary">
@@ -176,10 +200,44 @@
   const modal = document.getElementById('label-preview-modal');
   const formatSelect = document.getElementById('format-select');
   const roomTintToggle = document.getElementById('room-tint-toggle');
-  // Track the current room-tint state in JS so refreshSummary
-  // and the thumbnail bumps can append `?colors=room` without
-  // reading the DOM each time.
   let roomTint = roomTintToggle ? roomTintToggle.checked : false;
+
+  // ── Selection persistence (sessionStorage) ────────────────────────
+  // The Print button opens /labels/print in a new tab and the user
+  // expects to come back to the same selection.  Browsers don't
+  // reliably restore form state on back-nav (and won't at all if
+  // they reload the page), so we mirror the selection into
+  // sessionStorage on every change and replay it on load.
+  //
+  // Stored shape: { ids: [box_id, ...] } — explicit allow-list so a
+  // newly-created box (not in the stored list) defaults to selected
+  // the first time the user lands on /labels, the same as before.
+  // The key is per-origin / per-tab via sessionStorage; no cross-tab
+  // bleed and no need to scope by tenant.
+  const STORAGE_KEY = 'stash:labels:selection:v1';
+  let restoreInProgress = false;
+
+  function persistSelection() {
+    if (restoreInProgress) return;
+    try {
+      const ids = Array.from(checkboxes)
+        .filter(cb => cb.checked).map(cb => cb.value);
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ids: ids }));
+    } catch (e) { /* private mode / quota — ignore */ }
+  }
+
+  function restoreSelection() {
+    let stored = null;
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      if (raw) stored = JSON.parse(raw);
+    } catch (e) { stored = null; }
+    if (!stored || !Array.isArray(stored.ids)) return;
+    restoreInProgress = true;
+    const allowed = new Set(stored.ids.map(String));
+    checkboxes.forEach(cb => { cb.checked = allowed.has(cb.value); });
+    restoreInProgress = false;
+  }
 
   // Format dropdown: change the format query param + reload
   // (no JS-only state here so a back/forward keeps the right
@@ -195,17 +253,12 @@
   }
 
   function refreshThumbsForTint() {
-    // Re-stamp every thumbnail's src so the room-tint flip lands
-    // immediately instead of waiting for a manual page reload.
     document.querySelectorAll('.label-card').forEach(bumpThumb);
   }
 
   if (roomTintToggle) {
     roomTintToggle.addEventListener('change', () => {
       roomTint = roomTintToggle.checked;
-      // Hidden ``colors`` field on the print form so the Print
-      // button POSTs (well, GETs) with the right param without us
-      // having to rewrite formaction.
       let hidden = document.getElementById('hidden-colors');
       if (roomTint && !hidden) {
         hidden = document.createElement('input');
@@ -238,13 +291,46 @@
     if (roomTint) params.set('colors', 'room');
     ids.forEach(id => params.append('box_ids', id));
     if (pdfLink) pdfLink.href = '/labels/sheet.pdf?' + params.toString();
+    refreshGroupCounts();
   }
-  checkboxes.forEach(cb => cb.addEventListener('change', refreshSummary));
+  function refreshGroupCounts() {
+    document.querySelectorAll('.label-group').forEach(group => {
+      const counter = group.querySelector('[data-group-selected]');
+      if (!counter) return;
+      const groupBoxes = group.querySelectorAll('input[name="box_ids"]');
+      let on = 0;
+      groupBoxes.forEach(cb => { if (cb.checked) on++; });
+      counter.textContent = on;
+    });
+  }
+  checkboxes.forEach(cb => cb.addEventListener('change', () => {
+    refreshSummary();
+    persistSelection();
+  }));
   toggleAll.addEventListener('click', () => {
     const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked);
     checkboxes.forEach(cb => { cb.checked = anyUnchecked; });
     refreshSummary();
+    persistSelection();
   });
+  // Per-group toggle — flips every checkbox inside one group.  If the
+  // group is fully selected, unselect; otherwise select all (same
+  // tri-state logic as the global Toggle all so it always does the
+  // "obvious" thing).
+  document.querySelectorAll('[data-group-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const group = btn.closest('.label-group');
+      const groupBoxes = group.querySelectorAll('input[name="box_ids"]');
+      const anyUnchecked = Array.from(groupBoxes).some(cb => !cb.checked);
+      groupBoxes.forEach(cb => { cb.checked = anyUnchecked; });
+      refreshSummary();
+      persistSelection();
+    });
+  });
+
+  // Restore *before* the initial summary refresh so the toolbar count
+  // matches what the user actually has selected from a previous tab.
+  restoreSelection();
   refreshSummary();
 
   // ── Per-box orientation toggle (AJAX) ─────────────────────────────

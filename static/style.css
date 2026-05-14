@@ -1504,6 +1504,47 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .label-grid-card {
   padding: 0.5rem;
 }
+/* One section per (location, room) bucket — mirrors the index page's
+   .box-group structure so the visual rhythm matches.  The header
+   carries the location + count + a per-group select-all so users
+   can flip a whole room of boxes in one tap (huge for stash setups
+   where the user just wants to print labels for one room). */
+.label-group {
+  margin-bottom: 0.9rem;
+}
+.label-group:last-of-type { margin-bottom: 0.5rem; }
+.label-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.15rem 0.25rem 0.55rem;
+  margin-bottom: 0.55rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.label-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.label-group-loc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.label-group-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.label-group-toggle { flex-shrink: 0; }
 .label-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1656,24 +1697,29 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-size: 0.7rem;
 }
 .label-card-meta { min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+/* Name wraps to up to 2 lines — single-line + ellipsis chopped many
+   real-world box names mid-word ("Holiday Decorat…").  Two-line clamp
+   gives ~30 chars of headroom in the same vertical footprint as the
+   thumb so the row height stays tidy. */
 .label-card-name {
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--text);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   padding-right: 1.6rem;  /* keep clear of the corner checkbox */
 }
-.label-card-notes,
-.label-card-location {
+.label-card-notes {
   font-size: 0.78rem;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.label-card-location { color: var(--accent); opacity: 0.75; }
 
 .label-card-actions {
   display: flex;

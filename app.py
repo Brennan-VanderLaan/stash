@@ -3525,21 +3525,47 @@ def labels_page(request: Request):
     """Per-tenant label-print surface.  Avery shipping-label
     pivot — drop the PDF in the printer, hit print, done.  The
     Cricut SVG round-trip is gone; we target Avery 5523 / 5160 /
-    5164 directly."""
+    5164 directly.
+
+    Boxes are bucketed by (location, room) so a stash with 80
+    boxes reads as a navigable list of sections instead of one
+    undifferentiated grid — same grouping rules as the home page,
+    but no item counts (the labels page only cares about printable
+    boxes)."""
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
     use_room_tint = _resolve_room_tint(request)
     with db() as conn:
+        # Mirrors dao_boxes.list_with_counts' join + ordering so the
+        # `_group_boxes_for_index` bucketing loop walks the rows in
+        # the right order without us repeating the comparator here.
         boxes = conn.execute(
-            "SELECT b.*, r.color AS room_color "
-            "FROM boxes b LEFT JOIN rooms r ON r.id = b.room_id "
-            "WHERE b.tenant_id = ? ORDER BY b.name",
+            "SELECT b.*, "
+            "       r.name AS room_name, r.color AS room_color, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM boxes b "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            "WHERE b.tenant_id = ? "
+            "ORDER BY "
+            "  CASE "
+            "    WHEN r.id IS NOT NULL THEN 0 "
+            "    WHEN b.location IS NOT NULL AND TRIM(b.location) != '' THEN 1 "
+            "    ELSE 2 "
+            "  END, "
+            "  COALESCE(l.name, '') COLLATE NOCASE, "
+            "  COALESCE(r.name, '') COLLATE NOCASE, "
+            "  COALESCE(b.location, '') COLLATE NOCASE, "
+            "  b.name COLLATE NOCASE",
             (actor.tenant_id,),
         ).fetchall()
+    boxes_d = [dict(b) for b in boxes]
+    box_groups = _group_boxes_for_index(boxes_d)
     return templates.TemplateResponse(
         request, "labels.html",
         {
-            "boxes": [dict(b) for b in boxes],
+            "boxes": boxes_d,
+            "box_groups": box_groups,
             "fmt": fmt,
             "all_formats": list(labels.AVERY_FORMATS.values()),
             "labels_per_page": fmt.labels_per_page,
