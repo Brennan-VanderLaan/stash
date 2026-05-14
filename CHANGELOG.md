@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.15.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.14.0...v1.15.0) (2026-05-14)
+
+
+### Features
+
+* **labels:** group by location/room + persist selection across nav ([a9ff7e6](https://github.com/Brennan-VanderLaan/stash/commit/a9ff7e6a5530f5dbdecf9debd9f219d314db8f4b))
+
+
+### Bug Fixes
+
+* **labels:** keep names inside the cell + drop visible cell edge ([664cf77](https://github.com/Brennan-VanderLaan/stash/commit/664cf7705545a123071afe3dbcfab02627f725fe))
+
 ## [1.14.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.13.0...v1.14.0) (2026-05-12)
 
 
