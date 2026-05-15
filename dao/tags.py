@@ -86,3 +86,49 @@ def attach_to_item(
                 (item_id, tag_id, value, actor.tenant_id),
             )
             conn.commit()
+
+
+def attach_to_box(
+    actor: Actor,
+    box_id: int,
+    tag_entries: list[tuple[str, str | None]],
+) -> int:
+    """Attach every ``(name, value)`` entry to every item currently
+    in ``box_id``.  Returns the number of items touched.
+
+    Single transaction so a half-applied tag mid-loop doesn't leave
+    the box with inconsistent labelling.  The box must belong to
+    the actor's tenant; cross-tenant box_id silently no-ops (0
+    rows) because the items SELECT is tenant-scoped.
+
+    A new tag row gets created up front (via ``ensure``) so the
+    inner loop is purely the item_tags upsert — no repeated
+    "INSERT OR IGNORE" overhead per item.
+    """
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        from dao._base import ForbiddenError
+        raise ForbiddenError(f"{actor.email} has no active tenant")
+    if not tag_entries:
+        return 0
+    # Resolve tag ids first so the per-item loop is one INSERT each.
+    resolved = [(ensure(actor, name), value) for name, value in tag_entries]
+    with db() as conn:
+        item_ids = [
+            row["id"] for row in conn.execute(
+                "SELECT i.id FROM items i "
+                "JOIN boxes b ON b.id = i.box_id "
+                "WHERE b.id = ? AND b.tenant_id = ?",
+                (box_id, actor.tenant_id),
+            ).fetchall()
+        ]
+        for item_id in item_ids:
+            for tag_id, value in resolved:
+                conn.execute(
+                    "INSERT OR REPLACE INTO item_tags "
+                    "(item_id, tag_id, value, tenant_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (item_id, tag_id, value, actor.tenant_id),
+                )
+        conn.commit()
+    return len(item_ids)

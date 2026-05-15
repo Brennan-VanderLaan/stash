@@ -395,6 +395,26 @@ main.main-wide {
 /* When used inside .card-header (which already arranges title + actions on
    one line), don't add an extra margin below. */
 .card-header .card-title { margin-bottom: 0; }
+/* "Tag all" disclosure on box detail: closed = just a button; open =
+   inline input + apply button.  Keeps the contents card header tidy
+   while leaving the bulk action one tap away. */
+.bulk-tag-disclosure summary { list-style: none; cursor: pointer; }
+.bulk-tag-disclosure summary::-webkit-details-marker { display: none; }
+.bulk-tag-disclosure[open] summary {
+  color: var(--muted);
+  border-color: var(--border);
+}
+.bulk-tag-form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.bulk-tag-form input[type="text"] {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
 /* Same when the title is followed by a short sub-headline / description —
    keep them visually paired with a tight gap. */
 .card-title-tight { margin-bottom: 0.25rem; }

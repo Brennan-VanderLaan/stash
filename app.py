@@ -2601,6 +2601,37 @@ def remove_item_tag(request: Request, item_id: int, tag_id: int):
     return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
 
 
+@app.post("/boxes/{box_id}/tag-all")
+def bulk_tag_box(
+    request: Request,
+    box_id: int,
+    tag: str = Form(...),
+):
+    """Tag every item currently in the box with ``tag`` (one or more,
+    comma-separated, same parsing as the single-item form).  Returns
+    JSON for AJAX callers; redirects to the box page otherwise so the
+    no-JS path still works."""
+    entries = parse_tag_input(tag)
+    if not entries:
+        raise HTTPException(400, "Tag required")
+    actor: Actor = request.state.actor
+    try:
+        # Confirm the box exists + belongs to this tenant before we
+        # touch items — otherwise a forged box_id silently no-ops
+        # (0 items) and the user gets a confusing "tagged 0 items"
+        # success.
+        dao_boxes.get_by_id(actor, box_id)
+        count = dao_tags.attach_to_box(actor, box_id, entries)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if _wants_json(request):
+        return {"ok": True, "box_id": box_id, "tagged": count,
+                "tags": [format_tag(n, v) for n, v in entries]}
+    return RedirectResponse(f"/boxes/{box_id}", status_code=303)
+
+
 @app.get("/boxes/{box_id}/preview", response_class=HTMLResponse)
 def box_preview(request: Request, box_id: int):
     """Compact box summary for the floorplan tile-click modal — name,

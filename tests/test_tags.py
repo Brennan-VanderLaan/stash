@@ -50,6 +50,81 @@ def test_remove_tag_from_item(client):
     assert "tag-list" not in page  # no tags left on any item
 
 
+def test_bulk_tag_box_attaches_to_every_item(client):
+    """``POST /boxes/{id}/tag-all`` attaches one tag to every item
+    currently in the box.  Empty boxes are a no-op; partial inserts
+    can't happen (single transaction) so all three items must carry
+    the tag after the call."""
+    _box(client)
+    _item(client, 1, "spatula")
+    _item(client, 1, "whisk")
+    _item(client, 1, "pan")
+    r = client.post("/boxes/1/tag-all", data={"tag": "kitchen"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    page = client.get("/boxes/1").text
+    # Each item gets its own per-tag delete-form whose action
+    # contains the tag_id — count those to confirm every item now
+    # carries the freshly-created tag (id 1).
+    assert page.count("/tags/1/delete") == 3
+
+
+def test_bulk_tag_box_accepts_multiple_tags(client):
+    """Comma-separated list applies every entry to every item, same
+    parsing as the single-item form."""
+    _box(client)
+    _item(client, 1, "drill")
+    _item(client, 1, "sander")
+    r = client.post(
+        "/boxes/1/tag-all",
+        data={"tag": "tools, room:garage"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    page = client.get("/boxes/1").text
+    # Both tags ('tools' and 'room') get tag rows; each of the two
+    # items has both tags after the bulk apply — so 2 delete-forms
+    # per tag_id.
+    assert page.count("/tags/1/delete") == 2
+    assert page.count("/tags/2/delete") == 2
+
+
+def test_bulk_tag_box_returns_json_for_ajax(client):
+    _box(client)
+    _item(client, 1, "a")
+    _item(client, 1, "b")
+    r = client.post(
+        "/boxes/1/tag-all",
+        data={"tag": "shared"},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["ok"] is True
+    assert payload["box_id"] == 1
+    assert payload["tagged"] == 2
+    assert payload["tags"] == ["shared"]
+
+
+def test_bulk_tag_box_rejects_missing_tag(client):
+    _box(client)
+    _item(client, 1, "thing")
+    r = client.post("/boxes/1/tag-all", data={"tag": "  "},
+                    follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_bulk_tag_box_404_for_other_tenant(client):
+    """A forged box_id pointing at someone else's box must 404, not
+    silently no-op (which would mask the bug from the user)."""
+    _box(client)
+    _item(client, 1, "thing")
+    r = client.post("/boxes/999/tag-all", data={"tag": "x"},
+                    follow_redirects=False)
+    assert r.status_code == 404
+
+
 def test_tags_case_insensitive(client):
     _box(client)
     _item(client, 1, "a", "Kitchen")

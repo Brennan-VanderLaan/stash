@@ -116,6 +116,21 @@
 <div class="card">
   <div class="card-header">
     <span class="card-title">Contents ({{ items_with_tags|length }})</span>
+    {% if items_with_tags %}
+    <details class="card-header-extra bulk-tag-disclosure">
+      <summary class="btn btn-secondary btn-sm">+ Tag all</summary>
+      <form method="post" action="/boxes/{{ box.id }}/tag-all"
+            class="bulk-tag-form">
+        <input type="text" name="tag" required
+               placeholder="e.g. fragile, room:garage"
+               list="tag-suggestions" autocomplete="off"
+               aria-label="Tag to apply to every item">
+        <button type="submit" class="btn btn-primary btn-sm">
+          Apply to {{ items_with_tags|length }} item{{ '' if items_with_tags|length == 1 else 's' }}
+        </button>
+      </form>
+    </details>
+    {% endif %}
   </div>
 
   {% if items_with_tags %}
