@@ -5602,6 +5602,61 @@ def shared_item(request: Request, item_id: int):
 # for non-operators so the surface's existence stays opaque to users.
 
 
+def _group_oauth_tokens(tokens: list[dict]) -> list[dict]:
+    """Roll up OAuth-issued tokens by (tenant_id, oauth_client_id) so
+    the /admin panel renders one card per real "source" instead of
+    one row per access-token mint.  claude.ai's MCP connector
+    spawns a fresh access token on every reach-out; without
+    grouping the table grows by one row per call.
+
+    Manual tokens (oauth_client_id IS NULL) are left out — they
+    don't have an external "source", so they're rendered in the
+    per-row table as before.
+
+    Returned shape:
+        [{
+          "tenant_id": ..., "tenant_name": ...,
+          "oauth_client_id": ..., "oauth_client_name": ...,
+          "active": N, "revoked": M, "suspended": K, "total": T,
+          "latest_used_at": iso8601 | None,
+          "latest_created_at": iso8601 | None,
+        }, ...]
+    """
+    buckets: dict[tuple, dict] = {}
+    for t in tokens:
+        cid = t.get("oauth_client_id")
+        if not cid:
+            continue
+        key = (t.get("tenant_id"), cid)
+        bucket = buckets.setdefault(key, {
+            "tenant_id": t.get("tenant_id"),
+            "tenant_name": t.get("tenant_name"),
+            "oauth_client_id": cid,
+            "oauth_client_name": t.get("oauth_client_name") or cid,
+            "active": 0, "revoked": 0, "suspended": 0, "total": 0,
+            "latest_used_at": None,
+            "latest_created_at": None,
+        })
+        bucket["total"] += 1
+        if t.get("revoked_at"):
+            bucket["revoked"] += 1
+        elif t.get("suspended_at"):
+            bucket["suspended"] += 1
+        else:
+            bucket["active"] += 1
+        for stamp_key in ("latest_used_at", "latest_created_at"):
+            src = "last_used_at" if stamp_key == "latest_used_at" else "created_at"
+            v = t.get(src)
+            if v and (bucket[stamp_key] is None or v > bucket[stamp_key]):
+                bucket[stamp_key] = v
+    # Sort: most-active groups first (active desc), then most-recent.
+    return sorted(
+        buckets.values(),
+        key=lambda b: (-b["active"], -(b["total"]),
+                       b["latest_used_at"] or ""),
+    )
+
+
 def _require_operator_route(actor: Actor) -> None:
     """404 — not 403 — when a non-operator probes ``/admin``.  We
     don't want a curious tenant maintainer to learn the operator
@@ -5632,6 +5687,7 @@ def admin_dashboard(
         t["usage"] = dao_quotas.usage_for_tenant(t["id"])
         t["members"] = dao_tenants.list_members(actor, t["id"])
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
+    oauth_client_groups = _group_oauth_tokens(api_tokens)
     recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)
     vendor_cost = dao_usage.operator_cost_summary(actor)
     oauth_clients = dao_oauth.list_clients(actor)
@@ -5647,6 +5703,7 @@ def admin_dashboard(
         {
             "tenants": tenants,
             "api_tokens": api_tokens,
+            "oauth_client_groups": oauth_client_groups,
             "recent_activity": recent_activity,
             "vendor_cost": vendor_cost,
             "oauth_clients": oauth_clients,
@@ -5659,6 +5716,23 @@ def admin_dashboard(
             "backup_status": backup_status,
         },
     )
+
+
+@app.post("/admin/oauth-clients/revoke-tokens")
+def admin_revoke_oauth_client_tokens(
+    request: Request,
+    oauth_client_id: str = Form(...),
+    tenant_id: int = Form(...),
+):
+    """Revoke every active token for one OAuth client + tenant in
+    a single click — kills the "claude.ai keeps minting access
+    tokens" clutter without N individual revokes."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    dao_api_tokens.operator_revoke_client_tokens(
+        actor, oauth_client_id, tenant_id,
+    )
+    return RedirectResponse("/admin#tokens", status_code=303)
 
 
 @app.post("/admin/api-tokens/{token_id}/revoke")

@@ -732,6 +732,68 @@ main.main-wide {
   flex-wrap: wrap;
   margin-bottom: 0.75rem;
 }
+
+/* OAuth client groups on /admin's API tokens card.  Each group is
+   one card showing the (client + tenant) pair, status pill counts,
+   and a "Revoke all active" action so the operator can collapse
+   a flood of claude.ai-issued access tokens in one click. */
+.oauth-client-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.85rem;
+}
+.oauth-client-groups-title {
+  font-size: 0.82rem;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+.oauth-client-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.7rem;
+  background: var(--panel-2);
+}
+.oauth-client-group-quiet { opacity: 0.65; }
+.oauth-client-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.oauth-client-group-counts {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.oauth-client-group-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+.pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-family: ui-monospace, Menlo, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.pill-active { background: var(--accent-dim); color: var(--accent); }
+.pill-suspended { background: rgba(234,179,8,0.18); color: #facc15; }
+.pill-revoked { background: rgba(220,38,38,0.18); color: #fca5a5; }
+.oauth-client-groups-details {
+  margin-top: 0.5rem;
+}
+.oauth-client-groups-details summary {
+  cursor: pointer;
+}
 /* Same when the title is followed by a short sub-headline / description —
    keep them visually paired with a tight gap. */
 .card-title-tight { margin-bottom: 0.25rem; }

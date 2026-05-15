@@ -331,7 +331,10 @@ def revoke_for_leak(token_id: int, reason: str,
 def list_all_for_operator(actor: Actor) -> list[dict]:
     """Cross-tenant token roster for the /admin token panel.
     Operator-only.  Returns enough metadata to render the table:
-    id + tenant + name + role + lifecycle state + last_used_at.
+    id + tenant + name + role + lifecycle state + last_used_at +
+    oauth_client linkage so /admin can group OAuth-issued tokens
+    by their originating client.
+
     Plaintext is never on this surface (it never appears anywhere
     after mint); ``token_hash`` would be useful for forensics but
     surfaces the hash to the operator UI which we'd rather not
@@ -343,12 +346,64 @@ def list_all_for_operator(actor: Actor) -> list[dict]:
             "SELECT t.id, t.tenant_id, t.name, t.role, "
             "       t.created_at, t.created_by_email, "
             "       t.last_used_at, t.revoked_at, t.revoked_reason, "
-            "       t.suspended_at, te.name AS tenant_name "
+            "       t.suspended_at, t.oauth_client_id, "
+            "       te.name AS tenant_name, "
+            "       oc.name AS oauth_client_name "
             "FROM api_tokens t "
             "JOIN tenants te ON te.id = t.tenant_id "
+            "LEFT JOIN oauth_clients oc ON oc.client_id = t.oauth_client_id "
             "ORDER BY t.created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def operator_revoke_client_tokens(
+    actor: Actor, oauth_client_id: str, tenant_id: int,
+) -> int:
+    """Revoke every active token issued under one OAuth client for
+    one tenant.  Returns the number of rows actually flipped.
+
+    This is the kill-the-clutter operation when an OAuth client
+    (e.g. claude.ai's MCP connector) has spawned many short-lived
+    access tokens that haven't expired yet — one click on /admin
+    to revoke the whole pile instead of N clicks per row.
+    """
+    from dao._base import require_operator
+    require_operator(actor)
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM api_tokens "
+            "WHERE oauth_client_id = ? AND tenant_id = ? "
+            "  AND revoked_at IS NULL",
+            (oauth_client_id, tenant_id),
+        ).fetchall()
+        if not rows:
+            return 0
+        conn.execute(
+            "UPDATE api_tokens SET revoked_at = CURRENT_TIMESTAMP, "
+            "                       revoked_reason = 'operator_revoke_client' "
+            "WHERE oauth_client_id = ? AND tenant_id = ? "
+            "  AND revoked_at IS NULL",
+            (oauth_client_id, tenant_id),
+        )
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=actor.email,
+            action="api_token.operator_revoke_client",
+            target_kind="oauth_client",
+            target_id=None,
+            metadata={
+                "oauth_client_id": oauth_client_id,
+                "revoked_count": len(rows),
+            },
+        )
+        conn.commit()
+    _log.warning(
+        "api_token.operator_revoke_client client_id=%s tenant_id=%s count=%d",
+        oauth_client_id, tenant_id, len(rows),
+    )
+    return len(rows)
 
 
 def operator_revoke(actor: Actor, token_id: int) -> None:

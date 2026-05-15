@@ -445,6 +445,142 @@ def test_operator_can_revoke_any_tenants_token(tmp_path, monkeypatch):
     assert row["revoked_reason"] == "operator_revoke"
 
 
+def test_operator_revoke_client_tokens_kills_active_only(
+    tmp_path, monkeypatch,
+):
+    """A bulk revoke for one OAuth client + tenant flips every
+    active token's revoked_at without touching tokens from other
+    clients or other tenants.  Tokens already revoked stay revoked
+    and don't double-count."""
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch,
+                                          keep_operators=True)
+    # Seed an OAuth client + 3 access tokens for t1, plus 1 for t2,
+    # plus an already-revoked one (should be a no-op).
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO oauth_clients "
+            "(client_id, name, redirect_uris) "
+            "VALUES ('claude-ai-mcp', 'claude.ai MCP', "
+            "        '[\"https://claude.ai/cb\"]')"
+        )
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO api_tokens "
+                "(tenant_id, token_hash, name, role, "
+                " created_by_email, oauth_client_id) "
+                "VALUES (?, ?, ?, 'maintainer', "
+                "        'owner@t1.example', 'claude-ai-mcp')",
+                (ids["t1"], f"hash-t1-{i}", f"mcp-token-{i}"),
+            )
+        # Different tenant, same OAuth client — must NOT be touched.
+        conn.execute(
+            "INSERT INTO api_tokens "
+            "(tenant_id, token_hash, name, role, "
+            " created_by_email, oauth_client_id) "
+            "VALUES (?, 'hash-t2', 'mcp-t2', 'maintainer', "
+            "        'owner@t2.example', 'claude-ai-mcp')",
+            (ids["t2"],),
+        )
+        # Already-revoked t1 token (same client) — should stay revoked.
+        conn.execute(
+            "INSERT INTO api_tokens "
+            "(tenant_id, token_hash, name, role, "
+            " created_by_email, oauth_client_id, revoked_at) "
+            "VALUES (?, 'hash-t1-old', 'mcp-t1-old', 'maintainer', "
+            "        'owner@t1.example', 'claude-ai-mcp', "
+            "        '2020-01-01T00:00:00')",
+            (ids["t1"],),
+        )
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.post(
+            "/admin/oauth-clients/revoke-tokens",
+            data={
+                "oauth_client_id": "claude-ai-mcp",
+                "tenant_id": str(ids["t1"]),
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    with app_mod.db() as conn:
+        # 3 active t1 rows flipped to revoked with the dedicated reason.
+        rows = conn.execute(
+            "SELECT name, revoked_reason FROM api_tokens "
+            "WHERE oauth_client_id = 'claude-ai-mcp' AND tenant_id = ? "
+            "  AND revoked_reason = 'operator_revoke_client'",
+            (ids["t1"],),
+        ).fetchall()
+        assert len(rows) == 3
+        # The previously-revoked row keeps its original (NULL) reason
+        # — bulk revoke is "active only" and won't re-stamp.
+        old = conn.execute(
+            "SELECT revoked_reason FROM api_tokens "
+            "WHERE name = 'mcp-t1-old'"
+        ).fetchone()
+        assert old["revoked_reason"] != "operator_revoke_client"
+        # t2 token must still be active.
+        t2_row = conn.execute(
+            "SELECT revoked_at FROM api_tokens WHERE name = 'mcp-t2'"
+        ).fetchone()
+        assert t2_row["revoked_at"] is None
+
+
+def test_operator_revoke_client_tokens_non_operator_404(
+    tmp_path, monkeypatch,
+):
+    """A non-operator hitting the bulk endpoint gets a 404 — same
+    opacity convention as the rest of /admin (404 not 403 so the
+    operator surface stays unenumerable)."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    # Authenticated as a regular tenant member, NOT an operator.
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "owner@t1.example"},
+    ) as c:
+        r = c.post(
+            "/admin/oauth-clients/revoke-tokens",
+            data={"oauth_client_id": "x", "tenant_id": "1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 404
+
+
+def test_admin_groups_oauth_tokens_by_client(tmp_path, monkeypatch):
+    """The /admin token panel renders an "Grouped by OAuth client"
+    summary card per (tenant, oauth_client) so an operator can see
+    a flood of access tokens as one origin instead of N rows."""
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch,
+                                          keep_operators=True)
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO oauth_clients "
+            "(client_id, name, redirect_uris) "
+            "VALUES ('claude-ai-mcp', 'claude.ai MCP', "
+            "        '[\"https://claude.ai/cb\"]')"
+        )
+        for i in range(4):
+            conn.execute(
+                "INSERT INTO api_tokens "
+                "(tenant_id, token_hash, name, role, "
+                " created_by_email, oauth_client_id) "
+                "VALUES (?, ?, ?, 'maintainer', "
+                "        'owner@t1.example', 'claude-ai-mcp')",
+                (ids["t1"], f"hash-{i}", f"tok-{i}"),
+            )
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        page = c.get("/admin").text
+    assert "Grouped by OAuth client" in page
+    assert "claude.ai MCP" in page
+    assert "4 active" in page
+    assert "Revoke all active" in page
+
+
 def test_operator_can_suspend_and_resume(tmp_path, monkeypatch):
     """Suspend pauses a token; resume reactivates it.  Auth fails
     while suspended, succeeds once resumed."""

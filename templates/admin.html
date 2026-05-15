@@ -278,7 +278,7 @@
    round-trips; the unfiltered baseline still works without JS. #}
 {% set token_tenants = api_tokens | map(attribute="tenant_name") | reject("none") | unique | sort | list %}
 {% set token_roles = api_tokens | map(attribute="role") | reject("none") | unique | sort | list %}
-<div class="card maintenance-card">
+<div class="card maintenance-card" id="tokens">
   <div class="card-title">API tokens ({{ api_tokens | length }})</div>
   <p class="text-sm text-muted">
     Cross-tenant view of every API token on the deployment.
@@ -288,6 +288,53 @@
     surfaces auto-revokes (HTTPS gate, URL-leak scanner) so you
     can spot misconfigured clients.
   </p>
+  {% if oauth_client_groups %}
+  {# OAuth clients spawn one access token per reach-out (claude.ai's
+     MCP connector is the typical offender).  Group those by client
+     so the panel doesn't grow by one row per call. #}
+  <div class="oauth-client-groups">
+    <div class="oauth-client-groups-title">
+      Grouped by OAuth client
+      <span class="text-muted text-sm">
+        — {{ oauth_client_groups|length }} client{{ '' if oauth_client_groups|length == 1 else 's' }}
+      </span>
+    </div>
+    {% for g in oauth_client_groups %}
+    <div class="oauth-client-group {% if g.active == 0 %}oauth-client-group-quiet{% endif %}">
+      <div class="oauth-client-group-head">
+        <div>
+          <strong>{{ g.oauth_client_name }}</strong>
+          <span class="text-muted text-sm">· {{ g.tenant_name }}</span>
+        </div>
+        <div class="oauth-client-group-counts">
+          {% if g.active %}<span class="pill pill-active">{{ g.active }} active</span>{% endif %}
+          {% if g.suspended %}<span class="pill pill-suspended">{{ g.suspended }} suspended</span>{% endif %}
+          {% if g.revoked %}<span class="pill pill-revoked">{{ g.revoked }} revoked</span>{% endif %}
+        </div>
+      </div>
+      <div class="oauth-client-group-meta">
+        <span class="text-muted text-sm">
+          {% if g.latest_used_at %}last used {{ g.latest_used_at[:16] }}{% else %}never used{% endif %}
+          {% if g.latest_created_at %} · latest mint {{ g.latest_created_at[:16] }}{% endif %}
+        </span>
+        {% if g.active %}
+        <form method="post" action="/admin/oauth-clients/revoke-tokens"
+              style="display:inline;"
+              onsubmit="return confirm('Revoke all {{ g.active }} active tokens for {{ g.oauth_client_name }} on {{ g.tenant_name }}?  The client will have to re-authorize via /oauth/authorize.');">
+          <input type="hidden" name="oauth_client_id" value="{{ g.oauth_client_id }}">
+          <input type="hidden" name="tenant_id" value="{{ g.tenant_id }}">
+          <button type="submit" class="btn btn-secondary btn-sm">
+            Revoke all active
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <details class="oauth-client-groups-details">
+    <summary class="text-sm text-muted">Show full token table</summary>
+  {% endif %}
   {% if api_tokens %}
   <div class="admin-filter-bar" data-filter-target="#api-tokens-tbody">
     <label>
@@ -399,6 +446,9 @@
   </div>
   {% else %}
   <p class="text-muted">No API tokens have been minted on this deployment yet.</p>
+  {% endif %}
+  {% if oauth_client_groups %}
+  </details>
   {% endif %}
 </div>
 
