@@ -5329,13 +5329,40 @@ details[open] > .disclosure-soft::before { transform: rotate(90deg); }
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  /* Critical for the sparkline-shrink path on narrow phones:
+     without min-width:0 on this flex container, the inner
+     ``.trend-spark`` won't honour ``max-width: 100%`` and the
+     100-px-intrinsic SVG overflows the card.  Feedback #25
+     from nashmankas — line graphs going outside the label
+     boxes on a 399 px Android viewport. */
+  min-width: 0;
 }
-.trend-value { white-space: nowrap; }
+.trend-value {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .trend-spark {
   color: var(--accent);
   display: inline-flex;
+  /* Allow the inline SVG to scale down on narrow screens
+     instead of forcing the trend cell wider than its card. */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
-.sparkline { display: block; }
+.sparkline {
+  display: block;
+  /* The server emits ``width="100" height="24"`` as intrinsic
+     attributes; on narrow viewports we'd rather have the SVG
+     shrink to fit and stretch back out on wider columns.
+     viewBox makes that visually correct; this CSS just tells
+     the browser to use container width instead of the px
+     attribute. */
+  width: 100%;
+  max-width: 100px;
+  height: auto;
+}
 
 /* === Maintenance page polish === */
 .maintenance-card .card-title { margin-bottom: 0.5rem; }
