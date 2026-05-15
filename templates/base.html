@@ -578,6 +578,54 @@
           width: Math.min(document.documentElement.clientWidth, 1600),
           height: Math.min(document.documentElement.clientHeight, 1600),
           x: window.scrollX, y: window.scrollY,
+          // html2canvas 1.4.1 (last released 2022) predates the
+          // ``color-mix()`` CSS function and throws "Attempting
+          // to parse an unsupported color function 'color'" the
+          // moment it hits one in a computed style.  Several
+          // hot surfaces (box-card hover, room rects, search
+          // chips) use color-mix to blend a per-tile colour
+          // against the page background, so the screenshot
+          // button broke on every interior page.
+          //
+          // Fix without swapping the vendor library: walk every
+          // element in lockstep between the live document and
+          // the clone h2c is about to rasterise; copy the
+          // RESOLVED computed colour for each interesting
+          // property onto the clone as an inline style.  By the
+          // time h2c reads the clone's style, color-mix has
+          // already been resolved to plain rgb() by the
+          // browser's own getComputedStyle, so there's nothing
+          // for h2c to choke on.
+          onclone: (clonedDoc) => {
+            const live = document.body.querySelectorAll('*');
+            const cloned = clonedDoc.body.querySelectorAll('*');
+            if (live.length !== cloned.length) return;
+            const PROPS = [
+              'color',
+              'background-color',
+              'background-image',
+              'border-top-color',
+              'border-right-color',
+              'border-bottom-color',
+              'border-left-color',
+              'outline-color',
+              'box-shadow',
+              'fill',
+              'stroke',
+            ];
+            for (let i = 0; i < live.length; i++) {
+              const cs = window.getComputedStyle(live[i]);
+              for (const p of PROPS) {
+                const v = cs.getPropertyValue(p);
+                // Skip empties + the "no color" default so we
+                // don't bloat the clone's inline style and
+                // accidentally override an unset value.
+                if (v && v !== 'rgba(0, 0, 0, 0)' && v !== 'none') {
+                  cloned[i].style.setProperty(p, v);
+                }
+              }
+            }
+          },
         });
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         shotData.value = dataUrl;
