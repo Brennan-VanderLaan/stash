@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.21.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.1...v1.21.2) (2026-05-15)
+
+
+### Bug Fixes
+
+* **admin:** hero compresses to sticky KPI bar on scroll ([7155924](https://github.com/Brennan-VanderLaan/stash/commit/7155924d26e3d9b7e00fc2d0d53bd612041c5272))
+* **tours:** Replay button navigates to tour's home page ([6be631d](https://github.com/Brennan-VanderLaan/stash/commit/6be631d45541c3f42817d2110bcef6183603a8bd))
+* **tours:** scroll target into view before positioning, drop meta history ([a2b1a0e](https://github.com/Brennan-VanderLaan/stash/commit/a2b1a0ec3083281dd65d66b72176f69691460e78))
+
 ## [1.21.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.0...v1.21.1) (2026-05-15)
 
 
