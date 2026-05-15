@@ -22,6 +22,7 @@ from dao import billing as dao_billing
 from dao import boxes as dao_boxes
 from dao import feedback as dao_feedback
 from dao import floors as dao_floors
+from dao import handles as dao_handles
 from dao import ingest_jobs as dao_ingest_jobs
 from dao import invites as dao_invites
 from dao import items as dao_items
@@ -1275,6 +1276,34 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_tenant ON feedback(tenant_id, created_at DESC);
+
+        -- Public leaderboard handles.  Stars (= shipped feedback
+        -- rows) are tied to ``actor_email``; the original /leaderboard
+        -- shipped rendering the email's local-part on the public
+        -- podium, which is a privacy bug (feedback #30 — "we can't
+        -- show user emails on the leaderboard, if someone gets a
+        -- star they stay completely anonymous until they set a
+        -- username / handle").  Handles are explicit opt-in:
+        -- nothing renders publicly until the user picks one.  An
+        -- operator can revoke a handle (set ``revoked_at``) at any
+        -- time — meant for "no ists or isms" enforcement on a
+        -- public-facing surface.
+        CREATE TABLE IF NOT EXISTS feedback_handles (
+            actor_email TEXT PRIMARY KEY,
+            handle TEXT NOT NULL,
+            handle_lower TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT,
+            revoked_at TEXT,
+            revoked_by TEXT,
+            revoked_reason TEXT
+        );
+        -- Uniqueness on ACTIVE handles only — a revoked one can be
+        -- re-claimed by someone else or kept in place as audit
+        -- evidence.  SQLite's partial index handles this directly.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_handles_unique
+          ON feedback_handles(handle_lower)
+          WHERE revoked_at IS NULL;
 
         -- ── App data tables (existing) ────────────────────────────────
         CREATE TABLE IF NOT EXISTS locations (
@@ -4878,6 +4907,20 @@ def _render_usage_page(
             "your_feedback": dao_feedback.list_for_actor(
                 actor.email or "", limit=20,
             ),
+            # Public-leaderboard handle (opt-in).  ``None`` means
+            # the actor hasn't set one + reads as "Anonymous" on
+            # the public board.  ``revoked`` means an operator
+            # nuked a previous pick; user is prompted to choose
+            # something new.
+            "your_handle": (
+                dao_handles.active_handle(actor.email or "")
+            ),
+            "your_handle_revoked": (
+                (h := dao_handles.get_handle(actor.email or "")) is not None
+                and h.get("revoked_at") is not None
+            ),
+            "handle_set": request.query_params.get("handle_set", ""),
+            "handle_error": request.query_params.get("handle_error", ""),
         },
     )
 
@@ -4991,16 +5034,35 @@ def leaderboard_page(request: Request):
     item shows up on the user's own card with confetti vibes;
     the global podium below ranks the top 3.
 
+    PII handling (feedback #30): the page renders ``handle`` —
+    an opt-in display name — instead of the actor's email.  An
+    email with no handle reads as "Anonymous"; the user can opt
+    in via /usage by picking a handle.  Operators can revoke
+    handles (the row stays, the display reverts to Anonymous).
+
     Visible to any signed-in tenant member.  The operator's email
     (and anything else in ``STASH_LEADERBOARD_IGNORE_EMAILS``) is
     filtered out of the ranking so the operator doesn't trophy
     themselves on their own platform."""
     actor: Actor = request.state.actor
-    top = dao_feedback.leaderboard(
+    raw = dao_feedback.leaderboard(
         exclude_emails=tuple(_LEADERBOARD_IGNORE_EMAILS),
         limit=3,
     )
+    # Decorate each row with the actor's handle (if any).  Drop
+    # the raw email — the template must never get a chance to
+    # leak it.
+    top = []
+    for r in raw:
+        handle = dao_handles.active_handle(r["actor_email"])
+        top.append({"handle": handle, "stars": r["stars"]})
     your_stars = dao_feedback.stars_for_actor(actor.email or "")
+    your_handle_row = dao_handles.get_handle(actor.email or "")
+    your_handle = (
+        your_handle_row.get("handle")
+        if your_handle_row and your_handle_row.get("revoked_at") is None
+        else None
+    )
     you_excluded = (actor.email or "").lower() in _LEADERBOARD_IGNORE_EMAILS
     return templates.TemplateResponse(
         request, "leaderboard.html",
@@ -5008,9 +5070,59 @@ def leaderboard_page(request: Request):
             "top": top,
             "your_stars": your_stars,
             "your_email": actor.email,
+            "your_handle": your_handle,
+            "your_handle_revoked": (
+                your_handle_row is not None
+                and your_handle_row.get("revoked_at") is not None
+            ),
             "you_excluded": you_excluded,
         },
     )
+
+
+@app.post("/usage/handle")
+def set_handle_route(
+    request: Request,
+    handle: str = Form(...),
+):
+    """Set or update the actor's public-leaderboard handle.
+    Validates length + character set + uniqueness; on failure
+    redirects back to /usage with an error flash."""
+    actor: Actor = request.state.actor
+    if not actor.email:
+        raise HTTPException(403, "Sign in with an email account first.")
+    try:
+        dao_handles.set_handle(actor, handle)
+    except dao_handles.HandleError as exc:
+        # Round-trip the error via a query param so the user sees
+        # the validation message without losing their place.
+        from urllib.parse import quote
+        return RedirectResponse(
+            f"/usage?handle_error={quote(exc.reason)}#contributions",
+            status_code=303,
+        )
+    return RedirectResponse(
+        "/usage?handle_set=1#contributions", status_code=303,
+    )
+
+
+@app.post("/admin/handles/revoke")
+def admin_revoke_handle(
+    request: Request,
+    actor_email: str = Form(...),
+    reason: str = Form(""),
+):
+    """Operator-only handle revocation.  Use case: handle is
+    offensive / abusive / impersonates someone; operator nukes
+    it, the actor keeps their stars but reverts to Anonymous on
+    the public board until they pick a new acceptable handle."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_handles.revoke_handle(actor, actor_email, reason=reason)
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin#handles", status_code=303)
 
 
 _FEEDBACK_EXPORT_COLUMNS = (
@@ -6394,6 +6506,7 @@ def admin_dashboard(
             {**inv, "url": f"{base}/invite/{inv['token']}"}
             for inv in open_invites_by_tenant.get(t["id"], [])
         ]
+    handles = dao_handles.list_all_for_operator(actor)
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     oauth_client_groups = _group_oauth_tokens(api_tokens)
     recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)
@@ -6410,6 +6523,7 @@ def admin_dashboard(
         request, "admin.html",
         {
             "tenants": tenants,
+            "handles": handles,
             "api_tokens": api_tokens,
             "oauth_client_groups": oauth_client_groups,
             "recent_activity": recent_activity,

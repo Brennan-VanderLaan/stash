@@ -85,10 +85,14 @@
         {% if rank == 1 %}🥇{% elif rank == 2 %}🥈{% elif rank == 3 %}🥉{% else %}#{{ rank }}{% endif %}
       </span>
       <span class="leaderboard-who">
-        <strong>{{ entry.actor_email.split('@')[0] }}</strong>
+        {% if entry.handle %}
+        <strong>{{ entry.handle }}</strong>
+        {% else %}
+        <strong class="leaderboard-anon">Anonymous</strong>
         <span class="text-sm text-muted">
-          @{{ entry.actor_email.split('@')[1] if '@' in entry.actor_email else '?' }}
+          (didn't pick a handle yet)
         </span>
+        {% endif %}
       </span>
       <span class="leaderboard-stars" aria-label="{{ entry.stars }} stars">
         {% for _ in range(entry.stars if entry.stars < 8 else 8) %}⭐{% endfor %}
@@ -107,6 +111,53 @@
   {% endif %}
 </section>
 
+{% if your_stars > 0 and not your_handle and not you_excluded %}
+<section class="leaderboard-handle-prompt">
+  <h3>🌟 You're on the board — but as "Anonymous".</h3>
+  <p>
+    Pick a handle and show up by name.  Letters, numbers,
+    hyphen, underscore.  2 to 24 characters.  You can change
+    it any time, and operators reserve the right to revoke any
+    handle that's offensive (no ists or isms — that's the only
+    rule).
+  </p>
+  <form method="post" action="/usage/handle"
+        class="leaderboard-handle-form">
+    <label>
+      <span class="text-sm text-muted">Your handle</span>
+      <input type="text" name="handle" required
+             minlength="2" maxlength="24"
+             pattern="[A-Za-z0-9][A-Za-z0-9_-]{1,23}"
+             placeholder="e.g. cardboard_wrangler"
+             autocomplete="off"
+             autocapitalize="off"
+             spellcheck="false">
+    </label>
+    <button type="submit" class="btn btn-primary">
+      Claim it
+    </button>
+  </form>
+</section>
+{% elif your_handle %}
+<section class="leaderboard-handle-current">
+  <p>
+    You're showing on the board as
+    <strong>{{ your_handle }}</strong>.
+    <a href="/usage#contributions">Change it on /usage</a>.
+  </p>
+</section>
+{% elif your_handle_revoked %}
+<section class="leaderboard-handle-prompt leaderboard-handle-revoked">
+  <h3>Your handle was revoked.</h3>
+  <p>
+    An operator nuked your previous handle (usually because
+    it was offensive or impersonated someone).  Pick a new one
+    on <a href="/usage#contributions">/usage</a> and you'll
+    show up by name again.  Your stars are unaffected.
+  </p>
+</section>
+{% endif %}
+
 <section class="leaderboard-fineprint">
   <p class="text-sm text-muted">
     Stars are earned when a piece of feedback you submitted gets
@@ -114,7 +165,8 @@
     fix or feature actually landed on the site.  Open and
     in-progress feedback shows on
     <a href="/usage#contributions">your /usage page</a> so you
-    can track what you've sent in.
+    can track what you've sent in.  Emails are never displayed
+    publicly — handles are opt-in.
   </p>
 </section>
 

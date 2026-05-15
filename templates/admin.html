@@ -533,6 +533,57 @@
   {% endif %}
 </section>
 
+{# ── Public-leaderboard handles ─────────────────────────────── #}
+<section class="admin-section" id="handles">
+  <header class="admin-section-head">
+    <h2>Leaderboard handles ({{ handles | length }})</h2>
+  </header>
+  <p class="text-sm text-muted">
+    Opt-in display names that surface on the public /leaderboard
+    instead of the user's email.  Revoke any handle that's
+    offensive or impersonates someone — the user keeps their
+    stars but reverts to "Anonymous" until they pick a new
+    acceptable handle.
+  </p>
+  {% if handles %}
+  <ul class="admin-handle-list">
+    {% for h in handles %}
+    <li class="admin-handle-row{% if h.revoked_at %} admin-handle-row-revoked{% endif %}">
+      <div class="admin-handle-meta">
+        {% if h.revoked_at %}
+          <strong class="text-muted"><s>{{ h.handle }}</s></strong>
+          <span class="pill pill-revoked">revoked</span>
+        {% else %}
+          <strong>{{ h.handle }}</strong>
+        {% endif %}
+        <span class="text-sm text-muted">
+          · <code>{{ h.actor_email }}</code>
+          {% if h.created_at %} · created {{ h.created_at[:10] }}{% endif %}
+          {% if h.revoked_at %} · revoked {{ h.revoked_at[:10] }} by {{ h.revoked_by }}{% endif %}
+          {% if h.revoked_reason %} · reason: {{ h.revoked_reason }}{% endif %}
+        </span>
+      </div>
+      {% if not h.revoked_at %}
+      <form method="post" action="/admin/handles/revoke"
+            class="admin-handle-revoke-form">
+        <input type="hidden" name="actor_email" value="{{ h.actor_email }}">
+        <input type="text" name="reason" maxlength="200"
+               placeholder="reason (optional)"
+               autocomplete="off">
+        <button type="submit" class="btn btn-danger btn-sm"
+                onclick="return confirm('Revoke {{ h.handle }}? The user keeps their stars but reverts to Anonymous on the leaderboard until they pick a new acceptable handle.');">
+          Revoke
+        </button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-muted">No handles set yet.</p>
+  {% endif %}
+</section>
+
 {# ── API tokens ─────────────────────────────────────────────── #}
 {% set token_tenants = api_tokens | map(attribute="tenant_name") | reject("none") | unique | sort | list %}
 {% set token_roles = api_tokens | map(attribute="role") | reject("none") | unique | sort | list %}
