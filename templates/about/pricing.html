@@ -8,35 +8,40 @@
   </p>
 </section>
 
+{% set free_ai = free_caps.monthly_ai_calls %}
+{% set pro_ai = pro_caps.monthly_ai_calls %}
+{% set free_mb = (free_caps.monthly_upload_bytes / (1024 * 1024)) | round | int %}
+{% set pro_gb = (pro_caps.monthly_upload_bytes / (1024 * 1024 * 1024)) | round(1) %}
+
 <section class="about-plans-grid">
   <article class="about-plan">
     <h2>Free</h2>
     <p class="about-plan-price">$0 / month</p>
     <ul>
-      <li>1,000 AI calls per month</li>
-      <li>5 GB photo uploads per month</li>
-      <li>$1 / day AI-cost ceiling</li>
+      <li>{{ "{:,}".format(free_ai) }} AI calls per month</li>
+      <li>{{ free_mb }} MB photo uploads per month</li>
       <li>Single tenant</li>
       <li>All features available — only the quotas differ</li>
     </ul>
     <p class="text-sm text-muted">
-      Right for one person inventorying one household, light use.
+      Right for kicking the tires and inventorying a closet or
+      two.  Most casual users never hit these caps.
     </p>
   </article>
 
   <article class="about-plan about-plan-pro">
     <h2>Pro</h2>
-    <p class="about-plan-price">$9 / month</p>
+    <p class="about-plan-price">{{ pro_price_display }} / month</p>
     <ul>
-      <li>50,000 AI calls per month (50× Free)</li>
-      <li>100 GB photo uploads per month (20× Free)</li>
-      <li>$50 / day AI-cost ceiling</li>
-      <li>Multi-tenant (run several households side by side)</li>
+      <li>{{ "{:,}".format(pro_ai) }} AI calls per month ({{ (pro_ai // free_ai) }}× Free)</li>
+      <li>{{ pro_gb }} GB photo uploads per month</li>
+      <li>Multi-tenant (run several households side-by-side)</li>
       <li>Priority support via {{ contact_email }}</li>
     </ul>
     <p class="text-sm text-muted">
-      Right for households that have outgrown the Free quotas or want
-      to ingest several boxes in one session without watching the meter.
+      Right for households cataloguing a real volume of stuff or
+      running multiple separate inventories (main house +
+      cabin + storage unit).
     </p>
   </article>
 </section>
@@ -62,4 +67,19 @@
     </li>
   </ul>
 </section>
+
+{% if not ai_art_enabled %}
+<section class="about-section">
+  <h2>What's <em>not</em> included</h2>
+  <p>
+    <strong>AI-generated label art</strong> is currently disabled on
+    this deployment.  Generating per-box label art via Nano Banana 2
+    is dramatically more expensive than the rest of the AI surface
+    (~50× per call), and we'd rather charge less than build that
+    cost into everyone's monthly bill.  The labels still ship
+    QR-coded, named, and room-tinted — just no AI illustrations
+    behind them.
+  </p>
+</section>
+{% endif %}
 {% endblock %}

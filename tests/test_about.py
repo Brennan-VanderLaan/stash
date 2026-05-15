@@ -108,7 +108,21 @@ def test_about_pricing_lists_both_plans(tmp_path, monkeypatch):
         page = c.get("/about/pricing").text
     assert "Free" in page
     assert "Pro" in page
-    assert "$9" in page  # Pro tier price published per terms
+    # Pro tier display price defaults to "$4" (env var
+    # ``STASH_PRO_PRICE_DISPLAY`` overrides if a deploy wants
+    # a different number; Stripe is the source of truth, the
+    # page just mirrors it).
+    assert "$4" in page
+
+
+def test_about_pricing_price_is_configurable(tmp_path, monkeypatch):
+    """``STASH_PRO_PRICE_DISPLAY`` overrides the published price."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, STASH_PRO_PRICE_DISPLAY="$6",
+    )
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about/pricing").text
+    assert "$6" in page
 
 
 def test_about_sub_processors_lists_vendors(tmp_path, monkeypatch):

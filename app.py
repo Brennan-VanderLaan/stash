@@ -2417,7 +2417,7 @@ def box_detail(request: Request, box_id: int):
             "rooms": rooms,
             "all_tags": all_tags,
             "color_palette": _ROOM_COLORS,
-            "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
+            "art_enabled": _ai_art_enabled(),
         },
     )
 
@@ -3898,7 +3898,7 @@ def labels_page(request: Request):
             "fmt": fmt,
             "all_formats": list(labels.AVERY_FORMATS.values()),
             "labels_per_page": fmt.labels_per_page,
-            "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
+            "art_enabled": _ai_art_enabled(),
             "use_room_tint": use_room_tint,
             "copies": copies,
             "copies_max": _LABEL_COPIES_MAX,
@@ -4020,6 +4020,16 @@ def _safe_internal_redirect(target: str, default: str = "/labels") -> str:
     return target
 
 
+def _ai_art_enabled() -> bool:
+    """AI art generation is available when GEMINI_API_KEY is set.
+    Per-tenant gating happens through the ``monthly_ai_art_calls``
+    quota (Free: 0, Pro: 5) so a fresh free tenant gets a clean
+    "upgrade to use this" message rather than the feature being
+    hidden entirely — the marketing surface stays honest about
+    what Pro unlocks."""
+    return bool(os.environ.get("GEMINI_API_KEY"))
+
+
 @app.post("/boxes/{box_id}/generate-art")
 def generate_box_art(
     request: Request,
@@ -4033,6 +4043,16 @@ def generate_box_art(
     so the prompt is grounded in actual contents instead of just the box
     name. The old image, if any, is cleaned up only after the new one writes
     successfully so a failed generation doesn't strand the box without art."""
+    if not _ai_art_enabled():
+        # No Gemini key configured at all — the surface can't run.
+        # 503 (not 404) so a misconfigured operator can spot the
+        # missing env var in the logs rather than think the route
+        # is gone.
+        raise HTTPException(
+            503,
+            "AI art generation requires GEMINI_API_KEY on the "
+            "deployment.",
+        )
     actor: Actor = request.state.actor
     try:
         box = dao_boxes.get_by_id(actor, box_id)
@@ -4041,18 +4061,30 @@ def generate_box_art(
     tenant_id = box["tenant_id"]
     try:
         dao_quotas.check_or_raise(
-            actor.tenant_id, "ai",
+            actor.tenant_id, "ai_art",
+            units_about_to_record=1,
             cost_about_to_record=dao_usage._cost_for(
                 "ai", "gemini_art", 1,
             ),
         )
     except dao_quotas.QuotaExceeded as exc:
-        raise HTTPException(
-            429,
-            f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).  "
-            "Generated art is the most expensive AI surface; consider "
-            "raising the daily cost cap or waiting for the window reset.",
-        )
+        # Tailored 429 copy based on which cap fired — over the
+        # monthly art budget vs over the daily cost ceiling get
+        # different "what to do" guidance.
+        if exc.key == "monthly_ai_art_calls":
+            msg = (
+                f"You've used all {exc.cap} of your monthly AI-art "
+                f"generations.  Resets on the 1st UTC.  Pro tier "
+                f"raises this cap; Free tier doesn't include "
+                f"AI-art generation."
+            )
+        else:
+            msg = (
+                f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).  "
+                f"Art generation is the most expensive AI surface; "
+                f"wait for the daily cost reset or upgrade your plan."
+            )
+        raise HTTPException(429, msg)
     # Newest 12 items, by created_at DESC, for the prompt.  list_for_box
     # returns oldest-first so we reverse + slice here.
     items = list(reversed(dao_items.list_for_box(actor, box_id)))[:12]
@@ -4651,6 +4683,9 @@ def _render_usage_page(
         dao_billing.subscription_for_tenant(actor.tenant_id)
         if billing_enabled else None
     )
+    pro_price_display = _pro_price_display()
+    free_caps = dao_quotas._PLAN_DEFAULTS["free"]
+    pro_caps = dao_quotas._PLAN_DEFAULTS["pro"]
     return templates.TemplateResponse(
         request, "usage.html",
         {
@@ -4670,6 +4705,9 @@ def _render_usage_page(
             "billing_enabled": billing_enabled,
             "subscription": subscription,
             "billing_status": request.query_params.get("billing", ""),
+            "pro_price_display": pro_price_display,
+            "free_caps": free_caps,
+            "pro_caps": pro_caps,
             "tour_catalogue": tour_catalogue,
             "tour_seen": tour_seen,
         },
@@ -4892,6 +4930,15 @@ def admin_feedback_status(
 # template source so a deploy can swap it without a code change.
 # Fallback is a sensible "ops@<domain>" if the operator hasn't set
 # one yet — better than a hard-coded fake.
+def _pro_price_display() -> str:
+    """Pro tier price as shown on /about/pricing + the /usage
+    upgrade card.  Configurable so a deploy can match whatever
+    is actually configured in Stripe without a code change —
+    Stripe is the source of truth, this string just mirrors it
+    on the marketing page.  Defaults to '$4' if unset."""
+    return (os.environ.get("STASH_PRO_PRICE_DISPLAY") or "$4").strip()
+
+
 def _public_contact_email() -> str:
     v = (os.environ.get("STASH_PUBLIC_CONTACT_EMAIL") or "").strip()
     if v:
@@ -4912,6 +4959,8 @@ def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
     partners require it.  ``hide_feedback_widget`` keeps the in-app
     feedback bubble off these pages since the viewer may be a
     prospect or auditor, not a tenant member."""
+    pro_caps = dao_quotas._PLAN_DEFAULTS["pro"]
+    free_caps = dao_quotas._PLAN_DEFAULTS["free"]
     return templates.TemplateResponse(
         request, f"about/{page}.html",
         {
@@ -4919,6 +4968,10 @@ def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
             "business_name": _public_business_name(),
             "contact_email": _public_contact_email(),
             "public_url": PUBLIC_URL,
+            "pro_price_display": _pro_price_display(),
+            "pro_caps": pro_caps,
+            "free_caps": free_caps,
+            "ai_art_enabled": _ai_art_enabled(),
             "hide_feedback_widget": True,
         },
     )

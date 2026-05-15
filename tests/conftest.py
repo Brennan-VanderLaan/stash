@@ -36,6 +36,10 @@ def _test_kek(monkeypatch):
     # that specifically exercise the guard set this back to "true"
     # on a per-test basis.
     monkeypatch.setenv("STASH_REQUIRE_HTTPS_TOKENS", "false")
+    # Default a Gemini API key so AI-surface routes don't 503 in
+    # tests that monkeypatch the upstream call.  Tests that want
+    # to exercise the missing-key path delenv it explicitly.
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key")
     import vault
     vault.clear_dek_cache()
 

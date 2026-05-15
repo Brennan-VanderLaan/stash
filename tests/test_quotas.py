@@ -47,13 +47,16 @@ def _set_cap(client, **caps) -> None:
 
 def test_plan_default_caps_apply_with_no_overrides(client):
     """Without an override row, a 'pro' tenant gets the pro plan
-    defaults from ``_PLAN_DEFAULTS``."""
+    defaults from ``_PLAN_DEFAULTS``.  Numbers tightened in the
+    $4/mo re-pricing pass — see dao/quotas.py for the rationale
+    on each ceiling."""
     from dao import quotas as dao_quotas
     caps = dao_quotas.get_caps(client.test_tenant_id)
     # Conftest creates the test tenant with plan='pro'.
-    assert caps["monthly_ai_calls"] == 50_000
-    assert caps["monthly_upload_bytes"] == 100 * 1024 * 1024 * 1024
-    assert caps["daily_ai_cost_micros"] == 50_000_000
+    assert caps["monthly_ai_calls"] == 1_000
+    assert caps["monthly_upload_bytes"] == 5 * 1024 * 1024 * 1024
+    assert caps["daily_ai_cost_micros"] == 2_000_000
+    assert caps["monthly_ai_art_calls"] == 30
 
 
 def test_overrides_replace_defaults(client):
@@ -64,7 +67,7 @@ def test_overrides_replace_defaults(client):
     caps = dao_quotas.get_caps(client.test_tenant_id)
     assert caps["monthly_ai_calls"] == 42
     # Untouched fields still come from plan defaults.
-    assert caps["monthly_upload_bytes"] == 100 * 1024 * 1024 * 1024
+    assert caps["monthly_upload_bytes"] == 5 * 1024 * 1024 * 1024
 
 
 def test_override_with_negative_clears_cap(client):
@@ -74,7 +77,7 @@ def test_override_with_negative_clears_cap(client):
     _set_cap(client, monthly_ai_calls=-1)
     from dao import quotas as dao_quotas
     caps = dao_quotas.get_caps(client.test_tenant_id)
-    assert caps["monthly_ai_calls"] == 50_000  # back to pro default
+    assert caps["monthly_ai_calls"] == 1_000  # back to pro default
 
 
 def test_daily_ai_cost_override_lives_in_json_blob(client):

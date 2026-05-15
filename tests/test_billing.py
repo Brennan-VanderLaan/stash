@@ -130,10 +130,14 @@ def test_usage_shows_upgrade_for_free_tenant(client, billing):
         conn.commit()
     page = client.get("/usage").text
     assert "Upgrade to Pro" in page
-    # Free-tier specifics are spelled out so the user knows what
-    # they're trading dollars for.
-    assert "5 GB" in page
-    assert "100 GB" in page
+    # Free + Pro quotas come from _PLAN_DEFAULTS now (re-priced
+    # to $4/mo in the cost-transparency pass).  Check for the
+    # Free MB cap + the Pro GB cap to confirm the data flow,
+    # not the numbers themselves — those move when plans get
+    # re-tuned.
+    assert "MB" in page  # free tier shown in MB now (500 MB)
+    assert "GB" in page  # pro tier shown in GB (5 GB)
+    assert "$4" in page  # default published Pro price
 
 
 def test_upgrade_redirects_to_stripe_checkout(client, billing):

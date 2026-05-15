@@ -48,16 +48,39 @@ _log = obs.get_logger("dao.quotas")
 # Plan defaults.  Numbers are operator-visible estimates — the spec
 # is explicit that real billing tightens these later (phase 13).
 # All values in the unit the corresponding column expects.
+# Quotas sized to keep average per-user vendor cost near $0 so the
+# Pro tier price is mostly margin.  AI-art generation
+# (gemini_art at ~$0.04/call) is the single most expensive surface
+# — gated behind ``STASH_AI_ART_ENABLED`` separately so caps here
+# don't have to absorb a runaway art session.  Detect + tags +
+# match calls are ~$0.0007-0.0015 each, so 1k Pro calls is
+# ~$0.70-$1.50 of vendor cost worst case.
 _PLAN_DEFAULTS = {
     "free": {
-        "monthly_ai_calls": 1_000,
-        "monthly_upload_bytes": 5 * 1024 * 1024 * 1024,    # 5 GB
-        "daily_ai_cost_micros": 1_000_000,                  # $1
+        "monthly_ai_calls": 100,
+        "monthly_upload_bytes": 500 * 1024 * 1024,         # 500 MB
+        "daily_ai_cost_micros": 100_000,                    # $0.10
+        # AI label-art is the most expensive surface
+        # (gemini_art ≈ $0.04/call vs detect ≈ $0.0007).
+        # Free tier gets zero — sized so a curious free user
+        # can't burn $5 on art alone.
+        "monthly_ai_art_calls": 0,
     },
     "pro": {
-        "monthly_ai_calls": 50_000,
-        "monthly_upload_bytes": 100 * 1024 * 1024 * 1024,  # 100 GB
-        "daily_ai_cost_micros": 50_000_000,                 # $50
+        "monthly_ai_calls": 1_000,
+        "monthly_upload_bytes": 5 * 1024 * 1024 * 1024,    # 5 GB
+        # Daily cost cap sized so a single moving-day session
+        # can generate up-to-the-monthly-art-cap without bumping
+        # into the day cap before finishing.  30 × $0.04 = $1.20;
+        # $2/day leaves headroom for the other AI surfaces (tag
+        # suggestions, item detection) the user is also running.
+        "daily_ai_cost_micros": 2_000_000,                  # $2
+        # Pro art budget sized to "label a real household in one
+        # sitting" — 30/mo covers most household box counts
+        # (typical users have 20-60 boxes) without forcing
+        # multi-day re-runs.  Worst-case vendor cost: 30 × $0.04
+        # = $1.20/mo, well inside the Pro margin envelope.
+        "monthly_ai_art_calls": 30,
     },
 }
 
@@ -141,12 +164,18 @@ def get_caps(tenant_id: int) -> dict:
 def usage_for_tenant(tenant_id: int) -> dict:
     """Per-surface usage in the current windows — month for
     AI/upload, day for AI cost.  Mirrors the cap dict's keys so
-    the soft-warning math is a straight per-key compare."""
+    the soft-warning math is a straight per-key compare.
+
+    ``monthly_ai_art_calls`` is sub-counted off the same ``ai``
+    surface but filtered to ``kind = 'gemini_art'`` since art is
+    the priciest surface and we cap it separately from the
+    bulk ai-call budget."""
     if tenant_id is None:
         return {
             "monthly_ai_calls": 0,
             "monthly_upload_bytes": 0,
             "daily_ai_cost_micros": 0,
+            "monthly_ai_art_calls": 0,
         }
     month = _month_start_iso()
     day = _day_start_iso()
@@ -169,10 +198,18 @@ def usage_for_tenant(tenant_id: int) -> dict:
             "  AND created_at >= ?",
             (tenant_id, day),
         ).fetchone()["n"]
+        ai_art_calls = conn.execute(
+            "SELECT COALESCE(SUM(units), 0) AS n FROM usage_events "
+            "WHERE tenant_id = ? AND surface = 'ai' "
+            "  AND kind = 'gemini_art' "
+            "  AND created_at >= ?",
+            (tenant_id, month),
+        ).fetchone()["n"]
     return {
         "monthly_ai_calls": int(ai_calls),
         "monthly_upload_bytes": int(upload_bytes),
         "daily_ai_cost_micros": int(ai_cost_today),
+        "monthly_ai_art_calls": int(ai_art_calls),
     }
 
 
@@ -253,6 +290,25 @@ def check_or_raise(
         if cap is not None and used["daily_ai_cost_micros"] + cost_about_to_record > cap:
             raise QuotaExceeded(
                 "ai", "daily_ai_cost_micros",
+                used["daily_ai_cost_micros"] + cost_about_to_record, cap,
+            )
+    elif surface == "ai_art":
+        # Monthly art-generation budget — sub-counted off the
+        # ai surface but capped separately because art is the
+        # most expensive single surface (~$0.04/call vs detect's
+        # $0.0007).  Free tier is 0; Pro is a handful.  Also
+        # consumes the bulk ai_calls + daily_cost budgets, so we
+        # check those too as a belt-and-suspenders.
+        cap = caps.get("monthly_ai_art_calls")
+        if cap is not None and used["monthly_ai_art_calls"] + units_about_to_record > cap:
+            raise QuotaExceeded(
+                "ai_art", "monthly_ai_art_calls",
+                used["monthly_ai_art_calls"] + units_about_to_record, cap,
+            )
+        cap = caps.get("daily_ai_cost_micros")
+        if cap is not None and used["daily_ai_cost_micros"] + cost_about_to_record > cap:
+            raise QuotaExceeded(
+                "ai_art", "daily_ai_cost_micros",
                 used["daily_ai_cost_micros"] + cost_about_to_record, cap,
             )
     elif surface == "upload":

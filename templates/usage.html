@@ -128,6 +128,10 @@
 </div>
 {% endif %}
 
+{% set free_ai = free_caps.monthly_ai_calls %}
+{% set pro_ai = pro_caps.monthly_ai_calls %}
+{% set free_mb = (free_caps.monthly_upload_bytes / (1024 * 1024)) | round | int %}
+{% set pro_gb = (pro_caps.monthly_upload_bytes / (1024 * 1024 * 1024)) | round(1) %}
 {% if tenant.plan == "pro" %}
 <div class="card maintenance-card billing-card billing-card-pro">
   <div class="card-title">
@@ -146,13 +150,15 @@
 </div>
 {% else %}
 <div class="card maintenance-card billing-card billing-card-upgrade">
-  <div class="card-title">{{ _("Upgrade to Pro") }}</div>
+  <div class="card-title">{{ _("Upgrade to Pro") }} — {{ pro_price_display }}/mo</div>
   <p class="text-sm">
-    {{ _("You're on the Free plan.  Upgrade unlocks the same Stash with higher quotas — 50× more AI calls, 20× more upload bytes, and a much higher daily AI cost cap.") }}
+    {{ _("Same Stash, bigger quotas.  Pricing posted at") }}
+    <a href="/about/pricing">/about/pricing</a> · {{ _("cost breakdown at") }}
+    <a href="/about/transparency">/about/transparency</a>.
   </p>
   <ul class="data-choice-list">
-    <li>{{ _("Free: 1,000 AI calls/mo · 5 GB uploads/mo · $1 daily AI cost cap") }}</li>
-    <li>{{ _("Pro: 50,000 AI calls/mo · 100 GB uploads/mo · $50 daily AI cost cap") }}</li>
+    <li>{{ _("Free") }}: {{ "{:,}".format(free_ai) }} {{ _("AI calls/mo") }} · {{ free_mb }} MB {{ _("uploads/mo") }}</li>
+    <li>{{ _("Pro") }}: {{ "{:,}".format(pro_ai) }} {{ _("AI calls/mo") }} · {{ pro_gb }} GB {{ _("uploads/mo") }} · {{ _("multi-tenant") }}</li>
     <li>{{ _("Cancel anytime via the Stripe customer portal.") }}</li>
   </ul>
   <form method="post" action="/usage/upgrade">
