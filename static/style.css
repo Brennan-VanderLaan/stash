@@ -2302,6 +2302,150 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .suggestion strong { color: var(--accent); }
 
+/* ── /queue facelift ──────────────────────────────────────────
+   Photo at the top, AI recommendation prominent, edit form
+   collapsed by default, accept/reject sticky at the bottom of
+   the card.  The user can decide accept/reject without scrolling. */
+.sort-card { display: flex; flex-direction: column; }
+.sort-summary {
+  padding: 0.85rem 0.95rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+.sort-summary-name {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.sort-summary-desc {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.sort-summary-provenance {
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.sort-summary-provenance strong { color: var(--text); }
+
+.sort-recommend {
+  margin: 0;
+  padding: 0.7rem 0.95rem;
+  background: var(--accent-dim);
+  border-left: 4px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.sort-recommend-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.sort-recommend-target {
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.sort-recommend-target strong { color: var(--accent); }
+.sort-recommend-reason {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.sort-box-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.95rem 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.sort-box-picker-label small { color: var(--muted); font-weight: normal; }
+.sort-box-picker select {
+  font-size: 0.95rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.sort-customize {
+  margin: 0.55rem 0.95rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.sort-customize-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  list-style: none;
+}
+.sort-customize-summary::-webkit-details-marker { display: none; }
+.sort-customize-summary::after {
+  content: "▾";
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.sort-customize[open] .sort-customize-summary::after { content: "▴"; }
+.sort-customize-body {
+  padding: 0 0.7rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.sort-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.sort-field input, .sort-field textarea, .sort-field select {
+  font-size: 0.92rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.sort-customize-crop {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+/* Sticky action bar at the bottom of the card — Accept / Reject
+   always visible, no matter how tall the card gets. */
+.sort-action-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.7rem 0.95rem;
+  margin-top: 0.6rem;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  z-index: 5;
+}
+.sort-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  padding: 0.55rem 0.4rem;
+}
+.sort-action-icon { font-size: 1.15rem; line-height: 1; }
+.sort-action-label { font-size: 0.8rem; font-weight: 600; }
+
 .crop-toolbar {
   display: flex;
   gap: 0.4rem;
