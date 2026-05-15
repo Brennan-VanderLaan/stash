@@ -68,7 +68,14 @@ TOURS: list[dict] = [
                 "position": "below",
             },
             {
-                "target": "#more-tab, a[href='/ingest']",
+                # Desktop: top-nav Ingest link.  Mobile: the same
+                # link in the always-visible bottom tab-bar (the
+                # ``.tab-bar a[href='/ingest']`` selector matches
+                # both because both nav containers carry that
+                # anchor in the rendered DOM — the visibility
+                # filter in the overlay JS picks whichever is
+                # currently on-screen).
+                "target": ".tab-bar a[href='/ingest'], a[href='/ingest']",
                 "title": "Add stuff via a photo",
                 "body": (
                     "Tap Ingest to snap a photo of a pile or a single "
@@ -78,21 +85,26 @@ TOURS: list[dict] = [
                 "position": "above",
             },
             {
-                "target": "a[href='/queue']",
+                # /queue lives in the desktop top-nav.  On mobile it
+                # lives behind the More tab in a hidden bottom sheet,
+                # so we point at the More button itself with a hint
+                # in the copy.
+                "target": "header a[href='/queue'], #more-tab",
                 "title": "Sort queue",
                 "body": (
                     "Items waiting to be filed land here.  The AI "
-                    "suggests a box for each; one tap accepts the "
-                    "suggestion, or Customize to override."
+                    "suggests a box for each; one tap accepts.  "
+                    "On mobile, tap More → Sort queue."
                 ),
                 "position": "above",
             },
             {
-                "target": "a[href='/labels']",
+                "target": "header a[href='/labels'], #more-tab",
                 "title": "Print labels",
                 "body": (
                     "Each box gets a QR-coded label.  Scan with your "
-                    "phone to jump straight to that box's contents."
+                    "phone to jump straight to its contents.  "
+                    "On mobile, tap More → Labels."
                 ),
                 "position": "above",
             },
@@ -114,7 +126,7 @@ TOURS: list[dict] = [
         "title": "Working with a box",
         "steps": [
             {
-                "target": ".card-title",
+                "target": ".item-grid, .box-card-body, .card-title",
                 "title": "Box contents",
                 "body": (
                     "Every item in the box lives here.  Tap an item "
@@ -124,7 +136,7 @@ TOURS: list[dict] = [
                 "position": "below",
             },
             {
-                "target": ".bulk-tag-disclosure",
+                "target": ".bulk-tag-disclosure, .box-edit-cta",
                 "title": "Tag everything in this box",
                 "body": (
                     "Want every item to share a tag (e.g. 'kitchen' "

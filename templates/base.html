@@ -293,8 +293,28 @@
         centreTooltip();
         return;
       }
+      // ``step.target`` is treated as a comma-separated fallback
+      // list and we pick the first selector whose match is actually
+      // *visible* on the current layout.  On mobile the desktop
+      // top-nav links live in a hidden ``.more-sheet`` until the
+      // user taps the More tab; ``querySelector(...)`` would find
+      // them but the spotlight would land on a 0-px-tall element
+      // off-screen.  Visibility check fixes that.
       let el = null;
-      try { el = document.querySelector(step.target); } catch (e) { el = null; }
+      try {
+        const selectors = step.target.split(',').map(s => s.trim()).filter(Boolean);
+        for (const sel of selectors) {
+          const candidate = document.querySelector(sel);
+          if (!candidate) continue;
+          const r = candidate.getBoundingClientRect();
+          const visible = r.width > 0 && r.height > 0
+            && candidate.offsetParent !== null;
+          if (visible) { el = candidate; break; }
+        }
+        if (!el && selectors.length) {
+          el = document.querySelector(selectors[0]);  // last-resort
+        }
+      } catch (e) { el = null; }
       if (!el) {
         parkSpotlightOffscreen();
         centreTooltip();
