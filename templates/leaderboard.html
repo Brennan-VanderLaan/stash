@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard · Stash{% endblock %}
+{% block content %}
+
+{# Celebratory ranking page for feedback contributors.  Star
+   count == shipped (``status='done'``) feedback rows submitted
+   by that email.  Top-3 podium + the viewer's own card sit
+   front-and-center because the goal is "make you feel super
+   special" — not a sortable table. #}
+
+<section class="leaderboard-hero">
+  <h1 class="leaderboard-hero-title">
+    <span aria-hidden="true">🌟</span>
+    The People Who Make Stash Better
+    <span aria-hidden="true">🌟</span>
+  </h1>
+  <p class="leaderboard-hero-sub">
+    Every shipped fix on this site started as somebody noticing
+    something off, hitting the Feedback button, and sending it
+    in.  These are the people who did the noticing.
+  </p>
+</section>
+
+{% if your_email %}
+<section class="leaderboard-you">
+  <div class="leaderboard-you-stars" aria-hidden="true">
+    {% if your_stars == 0 %}
+      <span class="leaderboard-you-stars-empty">⭐</span>
+    {% else %}
+      {% for _ in range(your_stars if your_stars < 10 else 10) %}⭐{% endfor %}
+      {% if your_stars > 10 %}
+        <span class="text-sm text-muted">+{{ your_stars - 10 }}</span>
+      {% endif %}
+    {% endif %}
+  </div>
+  <div class="leaderboard-you-text">
+    {% if your_stars == 0 %}
+    <h2>You're on the bench.</h2>
+    <p>
+      Hit the Feedback button on any page when you spot a bug or
+      have an idea.  If we ship a fix or a feature you sent in,
+      you earn a star here — fake currency, real warm feelings.
+    </p>
+    {% elif your_stars == 1 %}
+    <h2>You have <strong>1 star</strong>.</h2>
+    <p>
+      Thanks for filing the thing that became your first ship.
+      That counts.  We're already a little better because you
+      paid attention.  Keep going.
+    </p>
+    {% elif your_stars < 5 %}
+    <h2>You have <strong>{{ your_stars }} stars</strong>.</h2>
+    <p>
+      Every one of those is a fix or a feature that exists
+      because you wrote it down and sent it.  You're shaping
+      the app.  Genuinely — thank you.
+    </p>
+    {% else %}
+    <h2>You have <strong>{{ your_stars }} stars</strong>. 🎉</h2>
+    <p>
+      You're a power contributor.  This app is meaningfully
+      better because of how often you noticed and how often you
+      told us.  We see you.  Keep doing the thing.
+    </p>
+    {% endif %}
+    {% if you_excluded %}
+    <p class="text-sm text-muted leaderboard-you-excluded">
+      You're hidden from the global podium below
+      (<code>STASH_LEADERBOARD_IGNORE_EMAILS</code>) — operators
+      don't trophy themselves on their own platform.
+    </p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<section class="leaderboard-podium">
+  <h2 class="leaderboard-podium-title">Global top 3</h2>
+  {% if top %}
+  <ol class="leaderboard-list">
+    {% for entry in top %}
+    {% set rank = loop.index %}
+    <li class="leaderboard-row leaderboard-row-{{ rank }}">
+      <span class="leaderboard-rank" aria-hidden="true">
+        {% if rank == 1 %}🥇{% elif rank == 2 %}🥈{% elif rank == 3 %}🥉{% else %}#{{ rank }}{% endif %}
+      </span>
+      <span class="leaderboard-who">
+        <strong>{{ entry.actor_email.split('@')[0] }}</strong>
+        <span class="text-sm text-muted">
+          @{{ entry.actor_email.split('@')[1] if '@' in entry.actor_email else '?' }}
+        </span>
+      </span>
+      <span class="leaderboard-stars" aria-label="{{ entry.stars }} stars">
+        {% for _ in range(entry.stars if entry.stars < 8 else 8) %}⭐{% endfor %}
+        {% if entry.stars > 8 %}
+        <span class="text-sm text-muted">+{{ entry.stars - 8 }}</span>
+        {% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="text-muted">
+    Nobody on the board yet — be the first to land a shipped
+    fix and claim the 🥇 spot.
+  </p>
+  {% endif %}
+</section>
+
+<section class="leaderboard-fineprint">
+  <p class="text-sm text-muted">
+    Stars are earned when a piece of feedback you submitted gets
+    marked <strong>done</strong> by an operator — meaning the
+    fix or feature actually landed on the site.  Open and
+    in-progress feedback shows on
+    <a href="/usage#contributions">your /usage page</a> so you
+    can track what you've sent in.
+  </p>
+</section>
+
+{% endblock %}

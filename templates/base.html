@@ -225,6 +225,10 @@
          class="{{ 'active' if _p.startswith('/usage') else '' }}">
         <span class="tab-icon">⚙️</span>{{ _("Usage") }}
       </a>
+      <a href="/leaderboard"
+         class="{{ 'active' if _p.startswith('/leaderboard') else '' }}">
+        <span class="tab-icon">🌟</span>{{ _("Leaderboard") }}
+      </a>
       {% if request.state.actor and request.state.actor.shares %}
       <a href="/shared"
          class="{{ 'active' if _p.startswith('/shared') else '' }}">

@@ -136,3 +136,87 @@ def queue_counts() -> dict[str, int]:
             "SELECT status, COUNT(*) AS n FROM feedback GROUP BY status"
         ).fetchall()
     return {r["status"]: r["n"] for r in rows}
+
+
+# ── Stars + leaderboard ────────────────────────────────────────────────
+#
+# Operator-side "done" on a feedback row earns the submitter a star —
+# fake currency tracked by counting the rows.  No new column, no
+# migration; the existing ``feedback.status='done' AND actor_email=X``
+# query IS the star count.  Two helpers below back the user's /usage
+# "your contributions" card (per-actor) and the /leaderboard page
+# (cross-actor top-N, with an ignore list so the operator doesn't
+# trophy themselves).
+
+
+def stars_for_actor(actor_email: str) -> int:
+    """Number of stars (= shipped feedback rows) credited to this
+    email.  Cheap one-row query; no caching needed at app scale."""
+    if not actor_email:
+        return 0
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM feedback "
+            "WHERE status = 'done' AND actor_email = ?",
+            (actor_email,),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def list_for_actor(actor_email: str, *, limit: int = 50) -> list[dict]:
+    """Every feedback row the actor has ever submitted, newest first.
+    Used by /usage to surface "here's what you've sent in + where
+    each item stands" so the submitter sees real status, not a
+    black hole.  No tenant filter — feedback is keyed by actor
+    email regardless of which tenant the submitter was in when
+    they hit the widget."""
+    if not actor_email:
+        return []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, body, source_url, status, "
+            "       created_at, resolved_at "
+            "FROM feedback "
+            "WHERE actor_email = ? "
+            # ``id DESC`` as a tiebreaker keeps the ordering
+            # deterministic for rows inserted within the same
+            # second (CURRENT_TIMESTAMP only has 1-s resolution).
+            "ORDER BY created_at DESC, id DESC "
+            "LIMIT ?",
+            (actor_email, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def leaderboard(
+    *, exclude_emails: tuple[str, ...] = (), limit: int = 3,
+) -> list[dict]:
+    """Top contributors across the whole stash, ordered by shipped-
+    feedback count.  ``exclude_emails`` is the ignore list — the
+    operator's own email belongs here so they don't trophy
+    themselves on their own platform.  Empty actor emails (legacy
+    rows from before the actor middleware always populated this)
+    are filtered server-side.
+
+    Returns: ``[{"actor_email": str, "stars": int}, ...]`` sorted
+    stars desc, capped at ``limit``.  Ties break alphabetically by
+    email so the result is deterministic across page loads."""
+    excluded = {e.lower() for e in exclude_emails if e}
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT actor_email, COUNT(*) AS stars "
+            "  FROM feedback "
+            " WHERE status = 'done' "
+            "   AND actor_email IS NOT NULL "
+            "   AND actor_email != '' "
+            " GROUP BY actor_email "
+            " ORDER BY COUNT(*) DESC, actor_email ASC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        if r["actor_email"].lower() in excluded:
+            continue
+        out.append({"actor_email": r["actor_email"], "stars": r["stars"]})
+        if len(out) >= limit:
+            break
+    return out

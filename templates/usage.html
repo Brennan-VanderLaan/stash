@@ -9,6 +9,7 @@
    plain anchors so no scripting required. #}
 <nav class="usage-toc" aria-label="{{ _('Usage page sections') }}">
   <a href="#plan">{{ _("Plan & role") }}</a>
+  <a href="#contributions">{{ _("Your contributions") }}</a>
   <a href="#appearance">{{ _("Appearance") }}</a>
   {% if tour_catalogue %}<a href="#tours">{{ _("Tours") }}</a>{% endif %}
   <a href="#cost">{{ _("Cost transparency") }}</a>
@@ -30,6 +31,58 @@
     <div><dt>{{ _("Signed in as") }}</dt><dd>{{ current_email }}</dd></div>
     <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
   </dl>
+</div>
+
+<h2 class="usage-section" id="contributions">{{ _("Your contributions") }}</h2>
+
+{# Feedback stars + recent submissions.  Star count = shipped
+   feedback rows you've submitted.  The list shows where each
+   piece of feedback stands so the user knows their input wasn't
+   a black hole — see /leaderboard for the global podium. #}
+<div class="card maintenance-card contrib-card">
+  <div class="card-title">{{ _("Stars + feedback status") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("You earn a star for every piece of feedback that ships.  Open + in-progress items show below so you know we saw them.") }}
+  </p>
+  <div class="contrib-stars">
+    {% if your_stars == 0 %}
+    <span class="leaderboard-you-stars-empty">⭐</span>
+    <span class="contrib-stars-count">{{ _("No stars yet — send some feedback and rack 'em up.") }}</span>
+    {% else %}
+    {% for _ in range(your_stars if your_stars < 10 else 10) %}⭐{% endfor %}
+    <span class="contrib-stars-count">
+      {{ your_stars }} {{ _("star") if your_stars == 1 else _("stars") }}
+      {% if your_stars > 10 %}({{ _("first ten shown") }}){% endif %}
+    </span>
+    {% endif %}
+    <a href="/leaderboard" class="btn btn-link btn-sm" style="margin-left:auto;">
+      {{ _("Leaderboard →") }}
+    </a>
+  </div>
+
+  {% if your_feedback %}
+  <div class="section-label" style="margin-top:0.4rem;">
+    {{ _("Recent submissions") }}
+  </div>
+  <ul class="contrib-list">
+    {% for f in your_feedback %}
+    <li class="contrib-row contrib-row-{{ f.status }}">
+      <span class="contrib-row-status">
+        {% if f.status == 'done' %}🌟 {{ _('shipped') }}
+        {% elif f.status == 'accepted' %}🛠️ {{ _("we'll fix") }}
+        {% elif f.status == 'rejected' %}— {{ _("declined") }}
+        {% else %}👀 {{ _("seen") }}
+        {% endif %}
+      </span>
+      <span class="contrib-row-body">{{ f.body }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-muted">
+    {{ _("Nothing in your feedback history yet.  The widget in the lower-right corner is how it gets there.") }}
+  </p>
+  {% endif %}
 </div>
 
 <h2 class="usage-section" id="appearance">{{ _("Appearance") }}</h2>
