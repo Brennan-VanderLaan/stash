@@ -58,13 +58,33 @@ services:
       # Re-validate the session against Google every 1h so a revoked Google
       # account stops working within the hour, not at full cookie expiry.
       OAUTH2_PROXY_COOKIE_REFRESH: 1h
-      # ── DO NOT set OAUTH2_PROXY_EMAIL_DOMAINS here ───────────────────────
-      # oauth2-proxy's email check is OR semantics: an email passes if it
-      # matches the domain list *or* the authenticated-emails-file. Setting
-      # `--email-domain *` therefore bypasses emails.txt entirely and lets
-      # every Google identity in. The file alone is the gate; leave the
-      # domain list unset so the only path through is an explicit listing.
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
+      # ── Email gate is now SINGLE-LAYER (stash side only) ─────────────────
+      # Previous shape: oauth2-proxy read ``emails.txt`` as a hard
+      # allow-list, refusing any Google account whose address wasn't
+      # explicitly listed.  The intent was defense-in-depth ahead of
+      # stash's tenant_members check, but in practice it broke the
+      # in-app invite flow — an admin could create an invite for a
+      # friend, but oauth2-proxy refused at the front door because
+      # the friend's email wasn't in the static file.  Operators had
+      # to SSH in + edit emails.txt + SIGHUP oauth2-proxy for every
+      # invite, which doesn't scale.
+      #
+      # New shape: ``OAUTH2_PROXY_EMAIL_DOMAINS: *`` lets every
+      # signed-in Google account through oauth2-proxy.  Stash's own
+      # actor middleware (current_actor in app.py) is the sole
+      # authorisation gate from here on — it checks tenant_members,
+      # shares, and the /invite/<token> bypass, and 403s anyone who
+      # doesn't match.  An invitee can now click the invite link,
+      # sign in with any Google address, accept, and become a member
+      # without any operator action between "create invite" and
+      # "friend is in."
+      #
+      # If you want to RE-TIGHTEN this later (e.g. limit to specific
+      # domains), set ``OAUTH2_PROXY_EMAIL_DOMAINS: example.com``
+      # comma-separated.  Or restore the file-based allow-list by
+      # uncommenting the lines below + the volume mount.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/emails.txt
       # Skip-auth routes — paths that must reach stash *without* a
       # Google session cookie because the caller authenticates a
       # different way:
@@ -105,8 +125,11 @@ services:
       # restores mid-stream with "context canceled". Bump generously — the
       # only long upload path is /maintenance/import, gated by Caddy's 2GB cap.
       OAUTH2_PROXY_UPSTREAM_TIMEOUT: 30m
-    volumes:
-      - ./emails.txt:/etc/oauth2-proxy/emails.txt:ro
+    # emails.txt mount left commented for operators who want to
+    # restore the hard file-based allow-list (see the long comment
+    # above the OAUTH2_PROXY_EMAIL_DOMAINS line).
+    # volumes:
+    #   - ./emails.txt:/etc/oauth2-proxy/emails.txt:ro
     depends_on:
       - stash
     labels:

@@ -1,0 +1,61 @@
+{# Page rendered when a signed-in user reaches the app but has
+   no tenant membership, no shares, and no operator flag.  The
+   most common path here is a friend who signed in with Google
+   but hasn't been invited yet (or whose invite link expired /
+   was redeemed elsewhere).  We want a friendly explanation,
+   not the old plain-text "403 Forbidden" — particularly now
+   that oauth2-proxy lets every Google identity through and this
+   page is what randos see if they happen to sign in. #}
+{% extends "about/_layout.html" %}
+{% set page_title = "Not signed up yet" %}
+{% block content %}
+<section class="about-hero">
+  <h1>You're signed in — but not signed up.</h1>
+  <p class="about-lede">
+    {{ business_name }} is invite-only.  We don't see a tenant
+    membership, share, or operator role for
+    {% if email %}<code>{{ email }}</code>{% else %}your account{% endif %},
+    so there's nowhere for us to drop you in yet.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>If someone invited you</h2>
+  <p>
+    Open the invite link they sent you — it looks like
+    <code>{{ public_url }}/invite/&lt;long-string&gt;</code>.
+    Clicking that link while signed in will accept the invite
+    and drop you into the right tenant.  The link in your email
+    is the load-bearing bit; this page can't accept the invite
+    on its own.
+  </p>
+  <p class="text-sm text-muted">
+    Invite links expire after 7 days.  If yours has, ask the
+    person who invited you to resend.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>If you're trying to sign up</h2>
+  <p>
+    Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+    and ask for an invite.  Mention you tried to sign in with
+    <code>{{ email or "your address" }}</code>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Signed in as the wrong account?</h2>
+  <p>
+    <a href="/oauth2/sign_out" class="btn btn-secondary">
+      Sign out
+    </a>
+    — clears the session so you can sign back in with the
+    address your invite was sent to.
+  </p>
+</section>
+{% endblock %}
+
+{% block header_action %}
+<a href="/oauth2/sign_out" class="about-signin">Sign out</a>
+{% endblock %}

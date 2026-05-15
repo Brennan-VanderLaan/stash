@@ -12,7 +12,7 @@ instance:
                 └────┬────┘
                      │  frontend network
                 ┌────▼────────┐
-                │ oauth2-proxy│  Google sign-in + emails.txt allowlist
+                │ oauth2-proxy│  Google sign-in (any address)
                 └────┬────────┘
                      │  backend network (no internet ingress)
         ┌────────────┴───────────┐
@@ -42,29 +42,43 @@ Stash has no path from the internet that doesn't go through Google sign-in,
 and no host bypasses /var/run/docker.sock — watchtower talks to a tightly
 scoped proxy that exposes only the Docker API endpoints it actually needs.
 
-**Two-layer email allowlist.** The first gate is oauth2-proxy's `emails.txt`.
-The second is `STASH_ALLOWED_EMAILS` inside stash itself, which checks the
-`X-Forwarded-Email` header on every request. Both must allow the user.
+**Single-layer email gate (stash side).** oauth2-proxy is configured with
+`OAUTH2_PROXY_EMAIL_DOMAINS: *` so it lets every signed-in Google account
+through.  The actual authorisation gate is **stash's `tenant_members`
+table**: anyone whose email isn't a maintainer / readonly member of some
+tenant on this stash gets a friendly "you're signed in but not signed up"
+page (status 403) and can't reach any tenant data.
 
-oauth2-proxy uses **OR semantics** when both `--email-domain` and
-`--authenticated-emails-file` are configured — an email matching *either*
-gate passes. That's why this stack deliberately leaves `--email-domain`
-unset: a `*` wildcard there would short-circuit `emails.txt` and let every
-Google identity through. Stash's own gate is a second line of defence so a
-mistake on the proxy side can't silently leak the app, which is why the app
-refuses to boot unless `STASH_ALLOWED_EMAILS` (or the explicit
-`FULLY_PUBLIC=true` opt-out) is configured.
+Why we dropped the older oauth2-proxy `emails.txt` allowlist: the file gate
+was a hard wall in front of stash's invite system.  An operator could
+create an invite for a friend, but oauth2-proxy refused at the front door
+because the friend's email wasn't in the static file — meaning every invite
+required an SSH session to edit `emails.txt` + SIGHUP oauth2-proxy.  That
+doesn't scale and broke the in-app invite UX.  The file-based gate is
+still available (see the commented block in `docker-compose.yml`) if you
+want belt-and-suspenders, but the default is the cleaner single layer.
 
-**Revoking access.** Sessions are owned by oauth2-proxy / Google, not stash.
-To pull access for someone:
+**Letting friends in (the happy path).**
 
-1. Remove their email from `emails.txt` *and* `STASH_ALLOWED_EMAILS` in
-   `.env`.
-2. `docker compose restart oauth2-proxy stash` so both layers reload.
-3. To kill any active cookies immediately, also rotate
-   `OAUTH2_PROXY_COOKIE_SECRET` in `.env` and restart oauth2-proxy.
-   Otherwise, sessions die at the next 1h refresh (configured via
-   `OAUTH2_PROXY_COOKIE_REFRESH`).
+1. Sign in to /admin (or your own tenant's /usage if you're a maintainer)
+   and create an invite for their Google email.  Stash gives you back a
+   URL like `https://<DOMAIN>/invite/<long-token>`.
+2. Send them the link.  They click it, sign in with their Google account,
+   and accept — they're now a member.  No file edits, no restarts.
+3. Tokens expire after 7 days; re-mint if needed.
+
+**Revoking access.** Sessions are owned by Google + oauth2-proxy, but
+authorisation lives in stash:
+
+1. **For tenant members**: go to /usage (you, as maintainer) or /admin
+   (operator), find the member in the Members list, click Remove.  Their
+   next request 403s with the "no tenant" page.
+2. **For API tokens** (Claude.ai connector, etc.): revoke from /usage →
+   API tokens, or from /admin if you're an operator.
+3. **For active cookies**: stash sessions expire at the next 1h
+   oauth2-proxy refresh.  To kill all cookies immediately, rotate
+   `OAUTH2_PROXY_COOKIE_SECRET` in `.env` and
+   `docker compose restart oauth2-proxy`.
 
 ## What you'll need before starting
 
@@ -146,19 +160,17 @@ $EDITOR .env
 #   - STASH_BOOTSTRAP_MEMBER_EMAIL — your Google email.  On first
 #     upgrade, the multi-tenancy migration creates a "Personal" tenant
 #     with this email as sole maintainer.  Falls back to the first
-#     entry of STASH_ALLOWED_EMAILS if unset.
+#     entry of the (legacy) STASH_ALLOWED_EMAILS env var if unset.
 #   - STASH_OPERATOR_EMAILS (optional) — operator accounts that can
-#     hit /admin once that surface ships.  No automatic data access.
+#     hit /admin.  No automatic data access — operators still need a
+#     tenant invite to see any tenant's content.
 
-# Allowlist the Google emails that can sign in. Both files matter:
-#   * emails.txt — read by oauth2-proxy (one address per line)
-#   * tenant_members table (seeded from STASH_BOOTSTRAP_MEMBER_EMAIL on
-#     first run; updated through the in-app invite flow afterwards) —
-#     read by stash itself
-# Add your own email to emails.txt to get past oauth2-proxy.
-cp emails.example.txt emails.txt
-$EDITOR emails.txt
-#   one email per line — anyone not listed gets a "not authorized" page
+# Membership is managed entirely inside stash now (tenant_members
+# table, edited via /usage + /admin's invite flow).  The historical
+# oauth2-proxy ``emails.txt`` file gate is OFF by default; you only
+# need it if you want the belt-and-suspenders "every email must
+# pre-exist in a static file" model — see the commented block at
+# the top of docker-compose.yml's oauth2-proxy environment.
 
 # (Private images only) log in to GHCR so watchtower can pull
 echo "$GHCR_PAT" | docker login ghcr.io -u brennan-vanderlaan --password-stdin
@@ -199,21 +211,44 @@ into the `stash-data` named-volume mountpoint, start the stack again.
 
 ## Adding or removing people
 
-Edit **both** allowlists on the host (the proxy and the app each enforce
-their own copy):
+**In-app, no SSH needed.**  Membership lives in stash's `tenant_members`
+table, edited through the UI:
 
-1. `emails.txt` — one Google email per line.
-2. `STASH_ALLOWED_EMAILS` in `.env` — comma-separated.
+| Action | Where | Who can do it |
+|---|---|---|
+| Invite someone | `/usage` (your tenant) or `/admin` (any tenant) | Maintainer / operator |
+| Remove a member | `/usage` → Members | Maintainer |
+| Revoke an API token | `/usage` → API tokens | Maintainer |
+| Operator-side revoke | `/admin` → API tokens | Operator |
 
-Then restart both containers so they pick up the new lists:
+The invite link is sharable by email / message / printed-on-paper —
+opening it while signed in accepts it.
+
+Cookies issued before a removal stay valid until the next 1 h oauth2-proxy
+refresh; to nuke all sessions immediately, rotate
+`OAUTH2_PROXY_COOKIE_SECRET` in `.env` and
+`docker compose restart oauth2-proxy`.
+
+## Keeping `.env` in sync with `.env.example`
+
+When `.env.example` gains a new variable (a new feature lands, an
+existing knob becomes configurable, etc.) your `.env` falls behind.
+Re-copying the example would wipe your actual values.
+
+There's a small helper for the merge:
 
 ```bash
-docker compose restart oauth2-proxy stash
+# From the deploy/ directory on the host:
+git pull
+python3 sync-env.py --dry-run    # show what's missing
+python3 sync-env.py               # append missing blocks (with comments)
+$EDITOR .env                       # fill in any placeholders
+docker compose up -d               # restart so containers pick up new vars
 ```
 
-To kill any sessions issued before the change, also rotate
-`OAUTH2_PROXY_COOKIE_SECRET` in `.env` (otherwise the existing cookies stay
-valid until the next 1h refresh re-checks the lists).
+Existing values in your `.env` are never touched.  Re-running after a
+sync is a no-op.  Each appended block carries the comment block that
+preceded it in the example so the context isn't lost.
 
 ## What watchtower does NOT cover
 
@@ -222,7 +257,7 @@ needs a one-time `git pull` + `docker compose up -d` on the host:
 
 - adding a new service
 - changing port mappings, volumes, or env-var *names*
-- editing `Caddyfile` or `emails.txt`
+- editing `Caddyfile`
 - changing oauth2-proxy options
 
 For a personal, low-churn stack this is fine. If structural changes start

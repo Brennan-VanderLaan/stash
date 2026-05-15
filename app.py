@@ -802,8 +802,38 @@ async def current_actor(request: Request, call_next):
                 "auth.denied email=%r path=%s",
                 email or "<missing>", request.url.path,
             )
+            # If the request looks like a browser (HTML in Accept),
+            # serve the friendly no_tenant.html page that explains
+            # what happened + how to redeem an invite.  This used
+            # to be a plain-text "Forbidden" response; the friendly
+            # version matters more now that oauth2-proxy lets every
+            # Google account through and this page is what randos
+            # see if they happen to sign in.  JSON / API callers
+            # keep the terse text response so they have a clean
+            # error message to relay.
+            accept = (request.headers.get("accept") or "").lower()
+            if email and "text/html" in accept:
+                try:
+                    response = templates.TemplateResponse(
+                        request, "no_tenant.html",
+                        {
+                            "email": email,
+                            "business_name": _public_business_name(),
+                            "contact_email": _public_contact_email(),
+                            "public_url": PUBLIC_URL,
+                        },
+                        status_code=403,
+                    )
+                    return response
+                except Exception:
+                    # Template-render failure must not lock the
+                    # user out of the explanation; fall through
+                    # to the plain-text response so the 403 still
+                    # ships SOMETHING they can read.
+                    pass
             response = Response(
-                "Forbidden — your email is not a member of any tenant on this stash.",
+                "Forbidden — your email is not a member of any "
+                "tenant on this stash.",
                 status_code=403,
                 media_type="text/plain",
             )
