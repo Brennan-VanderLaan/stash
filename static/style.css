@@ -455,6 +455,176 @@ main.main-wide {
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+/* === Feedback widget ===
+   Floating launcher (bottom-right on desktop, above the bottom nav
+   on mobile) + modal dialog.  The launcher is always visible to
+   authenticated tenant members; the dialog opens with the textarea
+   focused so a user can start typing without a second tap. */
+.feedback-launcher {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(1rem + var(--safe-bottom));
+  z-index: 200;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.feedback-launcher:hover { transform: translateY(-1px); }
+.feedback-launcher-icon { font-size: 1.05rem; }
+/* On phones where the bottom nav already lives, scoot the launcher
+   above it so it doesn't sit on top of the nav buttons. */
+@media (max-width: 639px) {
+  .feedback-launcher {
+    bottom: calc(72px + var(--safe-bottom));
+    padding: 0.5rem 0.85rem;
+    font-size: 0.85rem;
+  }
+  .feedback-launcher-label { display: none; }
+}
+.feedback-dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0;
+  width: min(420px, 100vw - 1.5rem);
+  max-height: 85vh;
+  overflow: hidden;
+}
+.feedback-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+.feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1rem 0.85rem;
+  max-height: 85vh;
+  overflow: auto;
+}
+.feedback-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.feedback-dialog-head h2 {
+  font-size: 1rem;
+  margin: 0;
+  color: var(--accent);
+}
+.feedback-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+.feedback-close:hover { color: var(--accent); }
+.feedback-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.feedback-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.feedback-form textarea {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+  font-family: inherit;
+  padding: 0.5rem;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.feedback-screenshot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.feedback-screenshot-status {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.feedback-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.feedback-result {
+  font-size: 0.85rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+}
+.feedback-result-ok {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.feedback-result-err {
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.15);
+}
+
+/* Admin feedback queue */
+.feedback-queue-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.5rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--border);
+  align-items: start;
+}
+.feedback-queue-row:first-of-type { border-top: 0; }
+.feedback-queue-status {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.feedback-queue-status-open { background: var(--accent-dim); color: var(--accent); }
+.feedback-queue-status-accepted { background: rgba(59,130,246,0.18); color: #93c5fd; }
+.feedback-queue-status-rejected { background: rgba(220,38,38,0.18); color: #fca5a5; }
+.feedback-queue-status-done { background: rgba(34,197,94,0.18); color: #86efac; }
+.feedback-queue-body {
+  white-space: pre-wrap;
+  font-size: 0.88rem;
+}
+.feedback-queue-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.feedback-queue-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
 /* Same when the title is followed by a short sub-headline / description —
    keep them visually paired with a tight gap. */
 .card-title-tight { margin-bottom: 0.25rem; }

@@ -402,6 +402,60 @@
   {% endif %}
 </div>
 
+{# ── Feedback queue ──────────────────────────────────────────── #}
+<div class="card maintenance-card" id="feedback">
+  <div class="card-title">
+    Feedback queue
+    {% if feedback_counts.get('open', 0) %}
+      <span class="feedback-queue-status feedback-queue-status-open">
+        {{ feedback_counts['open'] }} open
+      </span>
+    {% endif %}
+  </div>
+  <p class="text-sm text-muted">
+    In-app feedback from the floating widget on every page.  Triage
+    by setting each row's status — Accepted = "we'll fix it",
+    Rejected = "won't fix", Done = "shipped".
+  </p>
+  {% if feedback_queue %}
+  {% for fb in feedback_queue %}
+  <div class="feedback-queue-row">
+    <span class="feedback-queue-status feedback-queue-status-{{ fb.status }}">
+      {{ fb.status }}
+    </span>
+    <div>
+      <div class="feedback-queue-body">{{ fb.body }}</div>
+      <div class="feedback-queue-meta">
+        #{{ fb.id }} · {{ fb.actor_email or '(anon)' }}
+        · {{ fb.tenant_name or 'no tenant' }}
+        · {{ fb.created_at }}
+        {% if fb.source_url %} · <a href="{{ fb.source_url }}">{{ fb.source_url }}</a>{% endif %}
+        {% if fb.viewport_w %} · {{ fb.viewport_w }}×{{ fb.viewport_h }}{% endif %}
+        {% if fb.screenshot %}
+          · <a href="/admin/feedback/{{ fb.id }}/screenshot" target="_blank">📸 screenshot</a>
+        {% endif %}
+        {% if fb.resolved_by %}
+          · resolved by {{ fb.resolved_by }} at {{ fb.resolved_at }}
+        {% endif %}
+      </div>
+    </div>
+    <div class="feedback-queue-actions">
+      {% for s in ('accepted', 'rejected', 'done', 'open') %}
+        {% if fb.status != s %}
+        <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">
+          <input type="hidden" name="status" value="{{ s }}">
+          <button type="submit" class="btn btn-secondary btn-sm">{{ s }}</button>
+        </form>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="text-muted">Nothing in the feedback queue yet.</p>
+  {% endif %}
+</div>
+
 {# ── Recent activity feed ───────────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">Recent activity ({{ recent_activity | length }})</div>

@@ -162,5 +162,169 @@
     });
   })();
   </script>
+
+  {# ── Feedback widget ───────────────────────────────────────────
+     Floating "Tell us what's wrong" button on every page.  Opens a
+     dialog with a textarea + an optional screenshot button.  Screen-
+     shot capture uses html2canvas (lazy-loaded from /static/vendor
+     so we don't ship 50 kB on every page when the user never opens
+     the widget).  Submissions POST to /feedback and land in the
+     operator queue on /admin.  Suppressed on the OAuth consent
+     page (auth-flow surface — don't put a feedback button on a
+     security-critical screen). #}
+  {% if not hide_feedback_widget and request.state.actor and request.state.actor.tenant_id %}
+  <button type="button" id="feedback-launcher" class="feedback-launcher"
+          aria-label="{{ _('Send feedback') }}"
+          title="{{ _('Tell us what is broken') }}">
+    <span class="feedback-launcher-icon" aria-hidden="true">💬</span>
+    <span class="feedback-launcher-label">{{ _('Feedback') }}</span>
+  </button>
+  <dialog id="feedback-dialog" class="feedback-dialog">
+    <form id="feedback-form" class="feedback-form" method="post" action="/feedback">
+      <header class="feedback-dialog-head">
+        <h2>{{ _('What is broken?') }}</h2>
+        <button type="button" class="feedback-close" data-feedback-close
+                aria-label="{{ _('Close') }}">×</button>
+      </header>
+      <label class="feedback-field">
+        <span class="feedback-label">{{ _('What happened?') }}</span>
+        <textarea name="body" rows="4" required maxlength="4000"
+                  placeholder="{{ _('Describe what is going wrong or what you would like to see…') }}"></textarea>
+      </label>
+      <div class="feedback-screenshot-row">
+        <button type="button" id="feedback-screenshot-btn"
+                class="btn btn-secondary btn-sm">
+          📸 {{ _('Attach screenshot') }}
+        </button>
+        <span id="feedback-screenshot-status" class="feedback-screenshot-status"
+              aria-live="polite"></span>
+        <input type="hidden" name="screenshot_data" id="feedback-screenshot-data">
+      </div>
+      <footer class="feedback-dialog-foot">
+        <button type="button" class="btn btn-secondary" data-feedback-close>
+          {{ _('Cancel') }}
+        </button>
+        <button type="submit" class="btn btn-primary" id="feedback-submit">
+          {{ _('Send') }}
+        </button>
+      </footer>
+      <p class="feedback-result" id="feedback-result" hidden></p>
+    </form>
+  </dialog>
+  <script>
+  (function() {
+    const launcher = document.getElementById('feedback-launcher');
+    const dialog = document.getElementById('feedback-dialog');
+    if (!launcher || !dialog) return;
+    const form = document.getElementById('feedback-form');
+    const result = document.getElementById('feedback-result');
+    const shotBtn = document.getElementById('feedback-screenshot-btn');
+    const shotStatus = document.getElementById('feedback-screenshot-status');
+    const shotData = document.getElementById('feedback-screenshot-data');
+    const submit = document.getElementById('feedback-submit');
+
+    function open() {
+      result.hidden = true;
+      result.textContent = '';
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    }
+    function close() {
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+    }
+    launcher.addEventListener('click', open);
+    dialog.querySelectorAll('[data-feedback-close]').forEach(b =>
+      b.addEventListener('click', close));
+    dialog.addEventListener('click', (e) => {
+      // Click on the backdrop closes; click inside the form does not.
+      if (e.target === dialog) close();
+    });
+
+    // html2canvas is lazy-loaded only when the user taps "Attach
+    // screenshot" — the widget itself is ~1 kB of HTML + CSS, the
+    // 50 kB capture lib only loads if it's actually used.
+    let h2cPromise = null;
+    function loadH2C() {
+      if (h2cPromise) return h2cPromise;
+      h2cPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/static/vendor/html2canvas.min.js';
+        s.onload = () => resolve(window.html2canvas);
+        s.onerror = () => reject(new Error('html2canvas could not load'));
+        document.head.appendChild(s);
+      });
+      return h2cPromise;
+    }
+
+    shotBtn.addEventListener('click', async () => {
+      shotStatus.textContent = '…';
+      shotBtn.disabled = true;
+      // Close the dialog briefly so it's not captured in the shot.
+      const wasOpen = dialog.hasAttribute('open');
+      if (wasOpen) close();
+      try {
+        const h2c = await loadH2C();
+        // One paint cycle so the closed dialog isn't in the canvas.
+        await new Promise(r => requestAnimationFrame(r));
+        const canvas = await h2c(document.body, {
+          backgroundColor: null,
+          useCORS: true,
+          // Cap to viewport to keep payload size reasonable.
+          width: Math.min(document.documentElement.clientWidth, 1600),
+          height: Math.min(document.documentElement.clientHeight, 1600),
+          x: window.scrollX, y: window.scrollY,
+        });
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        shotData.value = dataUrl;
+        shotStatus.textContent = `📎 ${Math.round(dataUrl.length / 1024)} KB`;
+      } catch (err) {
+        shotStatus.textContent = `(${err.message || err})`;
+        shotData.value = '';
+      } finally {
+        shotBtn.disabled = false;
+        if (wasOpen) open();
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submit.disabled = true;
+      result.hidden = true;
+      const fd = new FormData(form);
+      // Always include the page context so the operator knows where
+      // the user was when they hit Send.
+      fd.append('source_url', window.location.href);
+      fd.append('user_agent', navigator.userAgent);
+      fd.append('viewport_w', String(window.innerWidth));
+      fd.append('viewport_h', String(window.innerHeight));
+      try {
+        const r = await fetch('/feedback', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          body: fd,
+        });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+        }
+        result.hidden = false;
+        result.textContent = '{{ _("Thanks — sent!") }}';
+        result.className = 'feedback-result feedback-result-ok';
+        form.reset();
+        shotData.value = '';
+        shotStatus.textContent = '';
+        setTimeout(close, 1200);
+      } catch (err) {
+        result.hidden = false;
+        result.textContent = (err.message || err);
+        result.className = 'feedback-result feedback-result-err';
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>

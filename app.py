@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import base64
 import secrets
 from pathlib import Path
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ from dao import api_tokens as dao_api_tokens
 from dao import audit as dao_audit
 from dao import backups as dao_backups
 from dao import boxes as dao_boxes
+from dao import feedback as dao_feedback
 from dao import floors as dao_floors
 from dao import ingest_jobs as dao_ingest_jobs
 from dao import invites as dao_invites
@@ -1135,6 +1137,31 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id, created_at);
+
+        -- In-app feedback widget: every page carries a floating button
+        -- that opens a "tell us what's wrong" form.  Submissions land
+        -- here; operators triage on /admin (status: open → accepted /
+        -- rejected / done).  Screenshot is the encrypted filename
+        -- (same encryption pipeline as photos) so a hostile
+        -- screenshot can't leak cross-tenant on disk.
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER,
+            actor_email TEXT,
+            body TEXT NOT NULL,
+            screenshot TEXT,
+            source_url TEXT,
+            user_agent TEXT,
+            viewport_w INTEGER,
+            viewport_h INTEGER,
+            status TEXT NOT NULL DEFAULT 'open',
+            operator_notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TEXT,
+            resolved_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_feedback_tenant ON feedback(tenant_id, created_at DESC);
 
         -- ── App data tables (existing) ────────────────────────────────
         CREATE TABLE IF NOT EXISTS locations (
@@ -4490,6 +4517,131 @@ def usage_page(
     return _render_usage_page(request, invite_url=invite_url)
 
 
+_MAX_FEEDBACK_BODY = 4000
+_MAX_FEEDBACK_SCREENSHOT_BYTES = 1_500_000
+
+
+def _decode_feedback_screenshot(data_url: str) -> bytes | None:
+    """Decode the ``data:image/jpeg;base64,…`` payload the widget
+    POSTs into raw bytes.  Returns None for missing / malformed
+    inputs so the feedback row can still land without a screenshot.
+    Capped at 1.5 MB so a runaway capture can't OOM the worker."""
+    if not data_url:
+        return None
+    head, _, payload = data_url.partition(",")
+    if "base64" not in head or not payload:
+        return None
+    try:
+        raw = base64.b64decode(payload, validate=False)
+    except Exception:
+        return None
+    if len(raw) > _MAX_FEEDBACK_SCREENSHOT_BYTES:
+        return None
+    return raw
+
+
+@app.post("/feedback")
+def submit_feedback(
+    request: Request,
+    body: str = Form(...),
+    screenshot_data: str = Form(""),
+    source_url: str = Form(""),
+    user_agent: str = Form(""),
+    viewport_w: str = Form(""),
+    viewport_h: str = Form(""),
+):
+    """In-app feedback widget submission.  Authenticated tenant
+    members only — the widget is hidden for anonymous visitors and
+    the route enforces the same.  Optional screenshot is encrypted
+    with the tenant's DEK (same pipeline as item photos) so a
+    cross-tenant leak on disk is impossible."""
+    actor: Actor = request.state.actor
+    if not actor.tenant_id:
+        raise HTTPException(403, "Feedback requires an active tenant")
+    body = (body or "").strip()
+    if not body:
+        raise HTTPException(400, "Feedback body is required")
+    body = body[:_MAX_FEEDBACK_BODY]
+    screenshot_name: str | None = None
+    raw = _decode_feedback_screenshot(screenshot_data)
+    if raw:
+        screenshot_name = f"feedback-{secrets.token_hex(8)}.jpg"
+        try:
+            _write_encrypted(actor.tenant_id, screenshot_name, raw)
+        except Exception:
+            # Screenshot write failure is non-fatal — the feedback
+            # is more valuable than the attached image.
+            screenshot_name = None
+    try:
+        viewport_w_int = int(viewport_w) if viewport_w else None
+    except ValueError:
+        viewport_w_int = None
+    try:
+        viewport_h_int = int(viewport_h) if viewport_h else None
+    except ValueError:
+        viewport_h_int = None
+    feedback_id = dao_feedback.create(
+        tenant_id=actor.tenant_id,
+        actor_email=actor.email,
+        body=body,
+        screenshot=screenshot_name,
+        source_url=(source_url or "")[:512] or None,
+        user_agent=(user_agent or "")[:256] or None,
+        viewport_w=viewport_w_int,
+        viewport_h=viewport_h_int,
+    )
+    if _wants_json(request):
+        return {"ok": True, "feedback_id": feedback_id}
+    return RedirectResponse(source_url or "/", status_code=303)
+
+
+@app.get("/admin/feedback/{feedback_id}/screenshot")
+def admin_feedback_screenshot(request: Request, feedback_id: int):
+    """Operator-only screenshot fetch.  Reads + decrypts the tenant
+    blob.  Same role gate as the rest of /admin."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        row = dao_feedback.get(feedback_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    if not row.get("screenshot") or not row.get("tenant_id"):
+        raise HTTPException(404, "No screenshot attached")
+    tenant_id = row["tenant_id"]
+    p = _tenant_file(tenant_id, row["screenshot"])
+    if not p.exists():
+        raise HTTPException(404, "Screenshot file missing")
+    try:
+        plaintext = _decrypt_for(tenant_id, p.read_bytes())
+    except Exception:
+        raise HTTPException(500, "Screenshot decrypt failed")
+    return Response(content=plaintext, media_type="image/jpeg")
+
+
+@app.post("/admin/feedback/{feedback_id}/status")
+def admin_feedback_status(
+    request: Request,
+    feedback_id: int,
+    status: str = Form(...),
+    notes: str = Form(""),
+):
+    """Operator transitions feedback through the queue (accepted /
+    rejected / done).  Stamps resolved_at + resolved_by."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_feedback.set_status(
+            feedback_id, status,
+            operator_email=actor.email or "operator",
+            notes=(notes or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin#feedback", status_code=303)
+
+
 @app.get("/usage/gdpr-export")
 def usage_gdpr_export(request: Request):
     """GDPR Article 20 portability bundle — same per-tenant data as
@@ -5409,6 +5561,8 @@ def admin_dashboard(
     recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)
     vendor_cost = dao_usage.operator_cost_summary(actor)
     oauth_clients = dao_oauth.list_clients(actor)
+    feedback_queue = dao_feedback.list_for_operator(limit=50)
+    feedback_counts = dao_feedback.queue_counts()
     try:
         dao_backups._b2_config()
         b2_configured = True
@@ -5422,6 +5576,8 @@ def admin_dashboard(
             "recent_activity": recent_activity,
             "vendor_cost": vendor_cost,
             "oauth_clients": oauth_clients,
+            "feedback_queue": feedback_queue,
+            "feedback_counts": feedback_counts,
             "current_email": actor.email,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
