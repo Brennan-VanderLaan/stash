@@ -64,6 +64,24 @@ def test_about_pages_render_without_auth(tmp_path, monkeypatch):
             assert r.status_code == 200, f"{path} returned {r.status_code}"
 
 
+def test_static_assets_bypass_auth_so_public_pages_render_styled(
+    tmp_path, monkeypatch,
+):
+    """The public /about pages link to /static/style.css.  Without
+    a /static/ auth bypass an unauthenticated browser fetches the
+    HTML page fine but gets a 401/403 (or oauth2-proxy redirect)
+    on the stylesheet — the pages render as bare HTML.  Pin the
+    bypass so a future "tighten static access" refactor doesn't
+    silently break the Stripe verification surface."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        # No auth headers — same posture as an unauthenticated
+        # Stripe crawler hitting the page.
+        r = c.get("/static/style.css", follow_redirects=False)
+        assert r.status_code == 200
+        assert "text/css" in r.headers.get("content-type", "").lower()
+
+
 def test_about_pages_carry_business_name(tmp_path, monkeypatch):
     """Stripe requires the business name to match what we registered
     with them.  Env-var-configurable so prod can swap in a different

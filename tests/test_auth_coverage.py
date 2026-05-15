@@ -191,9 +191,15 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         assert r.json()["resource"].endswith("/mcp")
         r = c.get("/.well-known/oauth-authorization-server")
         assert r.status_code == 200
-        # Static files: not exempt — auth wall fires for them too.
+        # Static files bypass the auth wall: the public /about
+        # pages need to load /static/style.css to render styled
+        # for unauthenticated viewers (Stripe's KYC crawler being
+        # the load-bearing example).  Static carries no tenant
+        # data — only stash's own CSS/JS/vendor bundles — so the
+        # bypass is safe.  User-uploaded photos live at /uploads/
+        # which stays gated.
         r = c.get("/static/style.css", follow_redirects=False)
-        assert r.status_code in (401, 403)
+        assert r.status_code == 200
     # Pin the exact bypass set — split into exact + prefix forms
     # to support RFC 9728 path-suffixed protected-resource
     # metadata (``/.well-known/oauth-protected-resource/mcp``).
@@ -207,11 +213,14 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
     # business name, refund policy, sub-processor list, etc. to be
     # publicly reachable without a Google sign-in.  Both the
     # trailing-slash + bare forms are listed so /about itself and
-    # every /about/* page bypass.
+    # every /about/* page bypass.  /static/ added so the public
+    # pages can fetch CSS/JS without bouncing through Google
+    # login — these are stash's own assets, no tenant data.
     assert app_mod._AUTH_BYPASS_PREFIXES == (
         "/.well-known/oauth-protected-resource",
         "/about/",
         "/about",
+        "/static/",
     )
 
 

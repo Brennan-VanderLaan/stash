@@ -518,12 +518,17 @@ _AUTH_BYPASS_EXACT = frozenset((
 # Stripe (and any KYC-grade financial partner) requires the
 # business name, description, contact, refund + cancellation
 # policy, and sub-processor list to be publicly reachable
-# without a login.  Tightly scoped to deliberate prefixes so
-# adding a new bypass surface remains a code change.
+# without a login.  ``/static/`` bypasses too — these are
+# stash's own CSS/JS/vendor assets, no tenant data; without
+# the bypass the public /about pages render unstyled because
+# the browser sees Google's login redirect instead of CSS.
+# Tightly scoped to deliberate prefixes so adding a new bypass
+# surface remains a code change.
 _AUTH_BYPASS_PREFIXES = (
     "/.well-known/oauth-protected-resource",
     "/about/",
     "/about",
+    "/static/",
 )
 
 
