@@ -710,14 +710,28 @@ main.main-wide {
 }
 .feedback-launcher:hover { transform: translateY(-1px); }
 .feedback-launcher-icon { font-size: 1.05rem; }
-/* On phones where the bottom nav already lives, scoot the launcher
-   above it so it doesn't sit on top of the nav buttons. */
+/* On phones where the bottom nav already lives, scoot the
+   launcher above it so it doesn't sit on top of the nav
+   buttons.  Also collapse to a circular icon-only button — the
+   text label is redundant for the second-most-common phone
+   user-flow, and the icon-only shape (with a ring of contrast
+   shadow) reads more clearly as a "this is a button" than the
+   pill-with-tiny-emoji we shipped first. */
 @media (max-width: 639px) {
   .feedback-launcher {
     bottom: calc(72px + var(--safe-bottom));
-    padding: 0.5rem 0.85rem;
-    font-size: 0.85rem;
+    right: 0.85rem;
+    padding: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    justify-content: center;
+    /* Stronger shadow so it reads as floating above content,
+       even when scrolled over a busy card. */
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45),
+                0 0 0 1px var(--accent-ring);
   }
+  .feedback-launcher-icon { font-size: 1.4rem; }
   .feedback-launcher-label { display: none; }
 }
 .feedback-dialog {
@@ -2008,6 +2022,15 @@ body:has(.admin-hero) {
   margin: 0;
   font-size: 0.85rem;
   color: var(--muted);
+  /* Long emails in inline ``<code>`` (eg ``some.long.address+
+     tag@trustyninjas.com``) blew past the hero on narrow phone
+     viewports — added wrap so the cell breaks at any character
+     instead of forcing a horizontal scroll. */
+  overflow-wrap: anywhere;
+}
+.admin-hero-sub code {
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 .admin-kpis {
   display: grid;
