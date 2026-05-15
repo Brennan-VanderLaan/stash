@@ -553,32 +553,13 @@ _AUTH_BYPASS_PATHS = frozenset(
 
 @app.middleware("http")
 async def current_actor(request: Request, call_next):
-    # Healthcheck + a tiny set of unauthenticated probes bypass the
-    # auth wall entirely.  Container HEALTHCHECKs and external
-    # probes hit /healthz without any identity headers; the route's
-    # response carries no tenant data, so a bypass is safe.
-    if _path_bypasses_auth(request.url.path):
-        return await call_next(request)
-
-    # Stamp a fresh request_id first so every log line emitted under
-    # this request — including the 403 + invite-bypass paths below —
-    # carries it.  Trust an inbound X-Request-Id when present (lets
-    # an upstream proxy correlate access logs with our records), but
-    # cap length so a hostile header can't bloat memory.
-    incoming = (request.headers.get("X-Request-Id") or "").strip()[:64]
-    request_id = incoming if incoming else obs.new_request_id()
-    request.state.request_id = request_id
-    rid_token = obs.bind_request_id(request_id)
-
-    import time as _time
-    started = _time.monotonic()
-
     # Defensive scan: if a stash-shaped token appears in the URL
     # query string or any header *other* than Authorization, treat
     # it as a leak — auto-revoke and 401 regardless of whether
-    # auth would otherwise succeed.  Runs on every request so a
-    # token leaking via, say, /search?q=stash_<...> gets caught
-    # even when the request is otherwise unauthenticated.
+    # auth would otherwise succeed.  Runs BEFORE the bypass check
+    # so that a leak in ``/?token=...`` or ``/about/foo?token=...``
+    # is still caught even though those paths skip the rest of the
+    # auth wall.  A token in the URL is always a misuse signal.
     leak = _scan_request_for_token_leak(request)
     if leak is not None:
         leaked_plaintext, where = leak
@@ -601,6 +582,26 @@ async def current_actor(request: Request, call_next):
             status_code=401,
             media_type="text/plain",
         )
+
+    # Healthcheck + a tiny set of unauthenticated probes bypass the
+    # auth wall entirely.  Container HEALTHCHECKs and external
+    # probes hit /healthz without any identity headers; the route's
+    # response carries no tenant data, so a bypass is safe.
+    if _path_bypasses_auth(request.url.path):
+        return await call_next(request)
+
+    # Stamp a fresh request_id first so every log line emitted under
+    # this request — including the 403 + invite-bypass paths below —
+    # carries it.  Trust an inbound X-Request-Id when present (lets
+    # an upstream proxy correlate access logs with our records), but
+    # cap length so a hostile header can't bloat memory.
+    incoming = (request.headers.get("X-Request-Id") or "").strip()[:64]
+    request_id = incoming if incoming else obs.new_request_id()
+    request.state.request_id = request_id
+    rid_token = obs.bind_request_id(request_id)
+
+    import time as _time
+    started = _time.monotonic()
 
     # Bearer auth (phase 11): if Authorization: Bearer <token> is
     # present, resolve via the api_tokens DAO and short-circuit the
@@ -4841,7 +4842,14 @@ def submit_feedback(
     )
     if _wants_json(request):
         return {"ok": True, "feedback_id": feedback_id}
-    return RedirectResponse(source_url or "/", status_code=303)
+    # ``source_url`` is set by JS in the feedback widget to
+    # ``window.location.href`` — the page the user was on when they
+    # opened the widget.  Treat it as untrusted: a malicious caller
+    # could POST any URL here.  ``_safe_internal_redirect`` rejects
+    # off-site targets and falls back to /home.
+    return RedirectResponse(
+        _safe_internal_redirect(source_url), status_code=303,
+    )
 
 
 _FEEDBACK_EXPORT_COLUMNS = (
@@ -5120,8 +5128,13 @@ def tour_mark_seen(request: Request, feature: str):
     dao_tours.mark_seen(email, feature)
     if _wants_json(request):
         return {"ok": True, "feature": feature}
+    # ``Referer`` is browser-supplied but ultimately attacker-
+    # controllable (a form on evil.com can drive this request with
+    # any Referer the browser will send).  Guard against using it
+    # as an off-site redirect target.
     return RedirectResponse(
-        request.headers.get("referer") or "/", status_code=303,
+        _safe_internal_redirect(request.headers.get("referer")),
+        status_code=303,
     )
 
 
@@ -5386,13 +5399,32 @@ _TENANT_SWITCH_COOKIE = "stash_active_tenant"
 _TENANT_SWITCH_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
 
+def _safe_internal_redirect(target: str | None, default: str = "/home") -> str:
+    """Open-redirect guard.  Returns ``target`` only if it's a
+    relative path beneath this app (``/foo``, never ``//host`` or
+    ``http://evil/``).  Falls back to ``default`` otherwise.
+
+    Used wherever a route echoes a user-supplied URL back as a 303
+    Location — feedback ``source_url``, tour-seen ``referer``,
+    tenant-switch ``next``.  Without this, any of those become a
+    classic open-redirect: ``GET /...?next=https://evil.example``
+    returns a 303 that the browser follows off-site, which is a
+    phishing primer that originates on our domain."""
+    if not target:
+        return default
+    # Strip leading whitespace/control chars + any ``\`` that some
+    # browsers normalise to ``/`` (cf. CVE-2017-1000080 style).
+    t = target.strip().replace("\\", "/")
+    if not t.startswith("/") or t.startswith("//"):
+        return default
+    return t
+
+
 def _safe_switch_redirect(target: str) -> str:
-    """Open-redirect guard for ``next`` on /tenants/switch — only
-    relative paths beneath this app, never a //host or a foreign
-    scheme."""
-    if not target or not target.startswith("/") or target.startswith("//"):
-        return "/"
-    return target
+    """Open-redirect guard for ``next`` on /tenants/switch.  Thin
+    wrapper around :func:`_safe_internal_redirect` so the call-site
+    reads as "switch redirect" rather than the generic helper."""
+    return _safe_internal_redirect(target, default="/home")
 
 
 @app.post("/tenants/switch")

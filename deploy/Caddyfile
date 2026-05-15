@@ -5,23 +5,30 @@
 {$DOMAIN} {
 	encode zstd gzip
 
-	# Security headers applied to every response. Layered defenses:
-	#   - HSTS forces HTTPS for the next year (preload-eligible).
-	#   - nosniff stops browsers from rendering uploaded bytes as anything
-	#     other than the declared Content-Type — closes the residual upload
-	#     XSS path even if a fallback served odd bytes.
-	#   - frame-ancestors 'none' blocks clickjacking (modern X-Frame-Options).
-	#   - Permissions-Policy locks down camera/mic/geo/FLoC at the platform
-	#     level — the app doesn't need any of these.
-	#   - Referrer-Policy avoids leaking the path (which can carry IDs)
-	#     to third-party assets.
-	#   - -Server hides "Caddy" from response headers.
+	# Edge security headers — layered defenses.
+	#
+	# The app's middleware (see ``_SECURITY_HEADERS`` in app.py)
+	# already stamps a richer set of headers — including the full
+	# Content-Security-Policy with ``default-src``, ``script-src``,
+	# ``form-action``, etc.  We deliberately do NOT re-declare CSP
+	# here because Caddy's ``header`` directive defaults to
+	# *replace*, which would clobber the app's comprehensive policy
+	# with whatever short string we wrote on this side.  An older
+	# pass shipped ``Content-Security-Policy "frame-ancestors 'none'"``
+	# at the edge; in production that overrode the app's CSP and
+	# dropped script-src / object-src / form-action / etc.
+	#
+	# What we DO set here is strictly additive (HSTS — only valid
+	# over TLS, so it's an edge concern by definition; ``-Server``
+	# to suppress Caddy's identifier).  Everything else is fine to
+	# leave to the app so the policy is defined in exactly one
+	# place.
+	#
+	# When you do need to add a header here, prefer the ``?Name``
+	# form (set if missing) so the app's value still wins:
+	#     header ?Permissions-Policy "camera=()"
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-		X-Content-Type-Options "nosniff"
-		Content-Security-Policy "frame-ancestors 'none'"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
 		-Server
 	}
 
