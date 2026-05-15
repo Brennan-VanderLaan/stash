@@ -745,6 +745,115 @@ main.main-wide {
   margin-bottom: 0.75rem;
 }
 
+/* === Floorplan editor (Fabric.js) ===
+   Reached from /floors/{id}/edit-image.  Toolbar sits at the top,
+   canvas fills the rest.  Touch-friendly action sizes; tool group
+   stays on a single row on phones via horizontal scroll. */
+.floor-edit-main {
+  /* The editor wants the full window width — opt out of the
+     content max-width the rest of the app uses so the floorplan
+     canvas can stretch on a desktop. */
+  max-width: none !important;
+  padding: 0 !important;
+}
+.floor-edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+.floor-edit-tool-group {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding-right: 0.4rem;
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.floor-edit-tool-group:last-child { border-right: 0; padding-right: 0; }
+.floor-edit-tool-group-trailing { margin-left: auto; }
+.floor-edit-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.floor-edit-tool:hover { border-color: var(--accent); }
+.floor-edit-tool.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.floor-edit-tool-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.floor-edit-tool-primary:hover { filter: brightness(1.05); }
+.floor-edit-tool-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.floor-edit-tool-danger { color: #fca5a5; }
+
+.floor-edit-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--swatch, #888);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.floor-edit-swatch.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.floor-edit-status {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  min-height: 1.4em;
+}
+.floor-edit-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 0.6rem;
+  background: var(--bg);
+  min-height: 50vh;
+}
+#floor-edit-canvas {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  max-width: 100%;
+  height: auto;
+}
+
+@media (max-width: 720px) {
+  .floor-edit-tool span:not([aria-hidden]) {
+    /* Drop the label on phones, keep the icon — saves horizontal
+       space and the title attr still describes each button. */
+    display: none;
+  }
+  .floor-edit-tool { padding: 0.5rem 0.6rem; }
+}
+
 /* === Onboarding tour overlay ===
    First-run walkthrough rendered by a single overlay div in
    base.html.  Spotlight is an absolutely-positioned hole that lets

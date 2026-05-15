@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+{% block title %}Edit floorplan: {{ floor.name }} · Stash{% endblock %}
+{% block header_left %}
+<a href="/locations/{{ floor.location_id }}?floor={{ floor.id }}&edit=1"
+   class="header-back">← {{ floor.name }}</a>
+<h1>{% include "_brand.html" %}</h1>
+{% endblock %}
+{% block main_class %}floor-edit-main{% endblock %}
+{% block content %}
+
+{# ──────────────────────────────────────────────────────────────────
+   In-browser floorplan editor.  Fabric.js renders the existing
+   floorplan as a locked background image; the user adds shapes
+   on top (rectangle / line / text), with selection-based delete
+   and undo.  Save flattens the canvas to PNG and POSTs it through
+   the existing /floors/{id}/floorplan upload route — annotations
+   bake into the bitmap, no schema change.
+   ────────────────────────────────────────────────────────────── #}
+<header class="floor-edit-toolbar" aria-label="Floorplan editor toolbar">
+  <div class="floor-edit-tool-group" role="radiogroup" aria-label="Active tool">
+    <button type="button" class="floor-edit-tool is-active"
+            data-tool="select" title="Select / move (V)">
+      <span aria-hidden="true">↖</span><span>Select</span>
+    </button>
+    <button type="button" class="floor-edit-tool"
+            data-tool="rect" title="Rectangle — drag to draw (R)">
+      <span aria-hidden="true">▭</span><span>Rectangle</span>
+    </button>
+    <button type="button" class="floor-edit-tool"
+            data-tool="line" title="Line — drag two endpoints (L)">
+      <span aria-hidden="true">／</span><span>Line</span>
+    </button>
+    <button type="button" class="floor-edit-tool"
+            data-tool="text" title="Text — click to place (T)">
+      <span aria-hidden="true">T</span><span>Text</span>
+    </button>
+  </div>
+
+  <div class="floor-edit-tool-group" role="group" aria-label="Color">
+    {% for c, name in [
+      ('#ef4444', 'red'),
+      ('#3b82f6', 'blue'),
+      ('#22c55e', 'green'),
+      ('#facc15', 'yellow'),
+      ('#111111', 'black'),
+    ] %}
+    <button type="button" class="floor-edit-swatch {% if loop.first %}is-active{% endif %}"
+            data-color="{{ c }}" title="{{ name }}"
+            style="--swatch: {{ c }};" aria-label="{{ name }}"></button>
+    {% endfor %}
+  </div>
+
+  <div class="floor-edit-tool-group" role="group" aria-label="History">
+    <button type="button" class="floor-edit-tool" data-action="undo"
+            title="Undo (Ctrl+Z)">
+      <span aria-hidden="true">↶</span><span>Undo</span>
+    </button>
+    <button type="button" class="floor-edit-tool floor-edit-tool-danger"
+            data-action="delete" title="Delete selected (Del)">
+      <span aria-hidden="true">🗑</span><span>Delete</span>
+    </button>
+  </div>
+
+  <div class="floor-edit-tool-group floor-edit-tool-group-trailing">
+    <a href="/locations/{{ floor.location_id }}?floor={{ floor.id }}&edit=1"
+       class="floor-edit-tool" title="Cancel — return to the floor view">
+      <span aria-hidden="true">✗</span><span>Cancel</span>
+    </a>
+    <button type="button" class="floor-edit-tool floor-edit-tool-primary"
+            data-action="save" id="floor-edit-save">
+      <span aria-hidden="true">✓</span><span>Save</span>
+    </button>
+  </div>
+</header>
+
+<div class="floor-edit-status" id="floor-edit-status" aria-live="polite"></div>
+
+<div class="floor-edit-canvas-wrap" id="floor-edit-canvas-wrap">
+  <canvas id="floor-edit-canvas"></canvas>
+</div>
+
+{# Hidden form: the Save button uses fetch() but a no-JS fallback
+   would post the original image back unchanged (no edits captured).
+   Cleaner to render a notice telling no-JS users to use the
+   existing Replace floorplan flow. #}
+<noscript>
+  <div class="card mt-2">
+    <p>The image editor needs JavaScript.  Use the "Replace floorplan"
+       form on the floor page to upload a new image.</p>
+  </div>
+</noscript>
+
+<script src="/static/vendor/fabric.min.js"></script>
+<script>
+(function () {
+  const canvasEl = document.getElementById('floor-edit-canvas');
+  const wrap = document.getElementById('floor-edit-canvas-wrap');
+  const status = document.getElementById('floor-edit-status');
+  const saveBtn = document.getElementById('floor-edit-save');
+  const toolBtns = document.querySelectorAll('[data-tool]');
+  const swatches = document.querySelectorAll('.floor-edit-swatch');
+  const FLOORPLAN_URL = "/uploads/{{ floor.floorplan }}";
+  const SAVE_URL = "/floors/{{ floor.id }}/floorplan";
+  const RETURN_URL = "/locations/{{ floor.location_id }}?floor={{ floor.id }}&edit=1";
+
+  // ── Canvas init ──────────────────────────────────────────────
+  // Size the canvas to fit its wrapper at load.  We load the
+  // floorplan as a Fabric Image, set it as the background (which
+  // is locked + not selectable), then scale the canvas to match
+  // the image's aspect ratio.
+  const canvas = new fabric.Canvas(canvasEl, {
+    backgroundColor: '#fff',
+    selection: true,
+    preserveObjectStacking: true,
+  });
+
+  let activeTool = 'select';
+  let activeColor = '#ef4444';
+  let drawing = null;     // in-progress shape during drag
+  let drawingStart = null;
+  const history = [];     // shape stack for undo
+
+  function setTool(tool) {
+    activeTool = tool;
+    toolBtns.forEach(b => b.classList.toggle(
+      'is-active', b.dataset.tool === tool,
+    ));
+    canvas.isDrawingMode = false;
+    canvas.selection = (tool === 'select');
+    canvas.defaultCursor = (tool === 'select') ? 'default' : 'crosshair';
+    canvas.discardActiveObject().requestRenderAll();
+  }
+  function setColor(c) {
+    activeColor = c;
+    swatches.forEach(s => s.classList.toggle(
+      'is-active', s.dataset.color === c,
+    ));
+    // Recolor any current selection so the swatch click feels
+    // like an instant edit, not just a "next stroke" setter.
+    const obj = canvas.getActiveObject();
+    if (obj) {
+      if (obj.type === 'i-text' || obj.type === 'text') obj.set('fill', c);
+      else obj.set('stroke', c);
+      canvas.requestRenderAll();
+    }
+  }
+
+  toolBtns.forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  swatches.forEach(s => s.addEventListener('click', () => setColor(s.dataset.color)));
+
+  // ── Load the floorplan as a locked background ────────────────
+  function fitCanvasToImage(img) {
+    // Pick the largest canvas size that fits the wrapper's width
+    // while preserving the image's aspect ratio.  Cap height so
+    // the toolbar + canvas both fit on a single phone screen.
+    const wrapW = Math.max(320, wrap.clientWidth);
+    const maxH = Math.max(360, window.innerHeight - 200);
+    const ratio = img.height / img.width;
+    let w = wrapW, h = wrapW * ratio;
+    if (h > maxH) { h = maxH; w = h / ratio; }
+    canvas.setDimensions({ width: w, height: h });
+    return { w, h };
+  }
+
+  fabric.Image.fromURL(FLOORPLAN_URL, { crossOrigin: 'anonymous' }).then((img) => {
+    const dims = fitCanvasToImage(img);
+    img.scaleToWidth(dims.w);
+    canvas.backgroundImage = img;
+    canvas.requestRenderAll();
+  }).catch(err => {
+    status.textContent = 'Failed to load floorplan: ' + (err.message || err);
+  });
+
+  // ── Drag-to-draw for rect + line ──────────────────────────────
+  canvas.on('mouse:down', (opt) => {
+    if (activeTool === 'select') return;
+    const p = canvas.getViewportPoint(opt.e);
+    drawingStart = p;
+    if (activeTool === 'rect') {
+      drawing = new fabric.Rect({
+        left: p.x, top: p.y, width: 1, height: 1,
+        fill: 'rgba(0,0,0,0)', stroke: activeColor, strokeWidth: 3,
+        strokeUniform: true, cornerStyle: 'circle',
+        cornerSize: 9, transparentCorners: false,
+      });
+      canvas.add(drawing);
+    } else if (activeTool === 'line') {
+      drawing = new fabric.Line([p.x, p.y, p.x, p.y], {
+        stroke: activeColor, strokeWidth: 3, strokeUniform: true,
+        cornerStyle: 'circle', cornerSize: 9,
+        transparentCorners: false, strokeLineCap: 'round',
+      });
+      canvas.add(drawing);
+    } else if (activeTool === 'text') {
+      const t = new fabric.IText('Text', {
+        left: p.x, top: p.y, fill: activeColor,
+        fontSize: 22, fontFamily: 'sans-serif', editable: true,
+      });
+      canvas.add(t);
+      canvas.setActiveObject(t);
+      t.enterEditing();
+      t.selectAll();
+      history.push(t);
+      setTool('select');
+      drawing = null;
+    }
+  });
+  canvas.on('mouse:move', (opt) => {
+    if (!drawing) return;
+    const p = canvas.getViewportPoint(opt.e);
+    if (drawing.type === 'rect') {
+      const w = p.x - drawingStart.x;
+      const h = p.y - drawingStart.y;
+      drawing.set({
+        left: Math.min(p.x, drawingStart.x),
+        top: Math.min(p.y, drawingStart.y),
+        width: Math.abs(w),
+        height: Math.abs(h),
+      });
+    } else if (drawing.type === 'line') {
+      drawing.set({ x2: p.x, y2: p.y });
+    }
+    drawing.setCoords();
+    canvas.requestRenderAll();
+  });
+  canvas.on('mouse:up', () => {
+    if (drawing) {
+      // If the drag barely moved, drop the shape — accidental
+      // taps shouldn't litter the canvas.
+      const tiny = (drawing.type === 'rect' && (drawing.width < 6 || drawing.height < 6))
+        || (drawing.type === 'line'
+            && Math.abs(drawing.x2 - drawing.x1) + Math.abs(drawing.y2 - drawing.y1) < 6);
+      if (tiny) {
+        canvas.remove(drawing);
+      } else {
+        history.push(drawing);
+        setTool('select');
+        canvas.setActiveObject(drawing);
+      }
+    }
+    drawing = null;
+    drawingStart = null;
+  });
+
+  // ── Undo / delete ─────────────────────────────────────────────
+  function undoOne() {
+    while (history.length) {
+      const obj = history.pop();
+      if (canvas.getObjects().includes(obj)) {
+        canvas.remove(obj);
+        canvas.requestRenderAll();
+        return;
+      }
+    }
+  }
+  function deleteSelection() {
+    const objs = canvas.getActiveObjects();
+    if (!objs.length) return;
+    objs.forEach(o => canvas.remove(o));
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+  }
+
+  document.querySelector('[data-action="undo"]').addEventListener('click', undoOne);
+  document.querySelector('[data-action="delete"]').addEventListener('click', deleteSelection);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    const inText = e.target && (
+      e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'
+    );
+    // Don't intercept while the user is editing IText on the canvas.
+    if (canvas.getActiveObject() && canvas.getActiveObject().isEditing) return;
+    if (inText) return;
+    if (e.key === 'v' || e.key === 'V') setTool('select');
+    else if (e.key === 'r' || e.key === 'R') setTool('rect');
+    else if (e.key === 'l' || e.key === 'L') setTool('line');
+    else if (e.key === 't' || e.key === 'T') setTool('text');
+    else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault(); deleteSelection();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault(); undoOne();
+    }
+  });
+
+  // ── Save ──────────────────────────────────────────────────────
+  // Flatten canvas → PNG dataURL → blob → multipart POST to the
+  // existing /floors/{id}/floorplan upload endpoint.  Server
+  // stores it like any other floorplan upload; old image is
+  // orphan-cleaned by the same path.
+  async function save() {
+    saveBtn.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+      // multiplier raises the export resolution above the on-screen
+      // canvas size so the saved floorplan isn't a 600 px washout
+      // when the user re-opens on a desktop.  2x gives a sensible
+      // floor while keeping the upload small.
+      const dataUrl = canvas.toDataURL({
+        format: 'png', quality: 1, multiplier: 2,
+      });
+      const blob = await (await fetch(dataUrl)).blob();
+      const fd = new FormData();
+      fd.append('image', blob, 'floorplan-edited.png');
+      const r = await fetch(SAVE_URL, {
+        method: 'POST', body: fd,
+        headers: { 'Accept': 'application/json,text/html' },
+        redirect: 'manual',
+      });
+      // The endpoint redirects to the location page on success.
+      // ``redirect: manual`` returns the redirect as an opaque
+      // response we can't read directly; treat any 0/200-299/303
+      // as success.
+      if (r.type === 'opaqueredirect' || r.ok) {
+        status.textContent = 'Saved.';
+        window.location = RETURN_URL;
+      } else {
+        throw new Error('HTTP ' + r.status);
+      }
+    } catch (err) {
+      status.textContent = 'Save failed: ' + (err.message || err);
+      saveBtn.disabled = false;
+    }
+  }
+  saveBtn.addEventListener('click', save);
+
+  // Re-fit canvas on window resize so a phone rotation doesn't
+  // wedge the editor into a weird aspect ratio.
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const img = canvas.backgroundImage;
+      if (!img) return;
+      const dims = fitCanvasToImage(img);
+      img.scaleToWidth(dims.w);
+      canvas.requestRenderAll();
+    }, 120);
+  });
+})();
+</script>
+
+{% endblock %}

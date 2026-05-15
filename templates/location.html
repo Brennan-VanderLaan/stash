@@ -182,6 +182,12 @@
       <label>Floor name<input type="text" name="name" value="{{ current_floor.name }}" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Rename floor</button>
     </form>
+    {% if current_floor.floorplan %}
+    <a href="/floors/{{ current_floor.id }}/edit-image"
+       class="btn btn-primary btn-block mt-1">
+      🖌 Edit this floorplan in the browser
+    </a>
+    {% endif %}
     <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data" class="mt-1">
       <label>Replace floorplan image<input type="file" name="image" accept="image/*" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Replace floorplan</button>

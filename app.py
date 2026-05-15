@@ -4389,6 +4389,33 @@ def edit_floor(request: Request, floor_id: int, name: str = Form(...)):
     )
 
 
+@app.get("/floors/{floor_id}/edit-image", response_class=HTMLResponse)
+def floor_edit_image(request: Request, floor_id: int):
+    """In-browser floorplan editor.  Loads the floor's existing
+    floorplan as a locked background image in a Fabric.js canvas;
+    the user adds rectangles, lines, text on top + saves the merged
+    PNG back through the existing ``/floors/{id}/floorplan`` POST
+    endpoint.  No schema change — annotations bake into the bitmap
+    on save."""
+    actor: Actor = request.state.actor
+    try:
+        floor = dao_floors.get_by_id(actor, floor_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    if not floor.get("floorplan"):
+        # Editing requires an existing image to draw on.  Bounce
+        # the user back to the location page where they can upload
+        # one — same convention as the rest of the floor surface.
+        return RedirectResponse(
+            f"/locations/{floor['location_id']}?floor={floor_id}&edit=1",
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        request, "floor_edit_image.html",
+        {"floor": floor},
+    )
+
+
 @app.post("/floors/{floor_id}/floorplan")
 async def upload_floor_floorplan(request: Request, floor_id: int, image: UploadFile = File(...)):
     if not image or not image.filename:

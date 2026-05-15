@@ -4,6 +4,49 @@ import io
 from PIL import Image
 
 
+def _setup_location_and_floor_with_plan(client):
+    """Stand up one location + one floor + one floorplan upload so
+    the in-browser editor route has an image to render against."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    return loc_id, floor_id
+
+
+def test_edit_image_renders_for_floor_with_floorplan(client):
+    """``GET /floors/{id}/edit-image`` renders the Fabric.js editor
+    when the floor has an existing floorplan to draw on."""
+    _, fid = _setup_location_and_floor_with_plan(client)
+    page = client.get(f"/floors/{fid}/edit-image").text
+    assert 'id="floor-edit-canvas"' in page
+    assert 'src="/static/vendor/fabric.min.js"' in page
+    # Save target reuses the existing /floors/{id}/floorplan endpoint
+    # so no new upload route is in play.
+    assert f'"/floors/{fid}/floorplan"' in page
+
+
+def test_edit_image_redirects_when_no_floorplan(client):
+    """Editor needs an existing image to layer annotations on; the
+    route 303s back to the floor view when the floor has no
+    floorplan yet so the user can upload one first."""
+    client.post("/locations", data={"name": "House"})
+    client.post("/locations/1/floors", data={"name": "Main"})
+    r = client.get("/floors/1/edit-image", follow_redirects=False)
+    assert r.status_code == 303
+    assert "edit=1" in r.headers["location"]
+
+
+def test_edit_image_404_for_unknown_floor(client):
+    r = client.get("/floors/999/edit-image", follow_redirects=False)
+    assert r.status_code == 404
+
+
+def test_location_page_links_to_editor(client):
+    """The "Edit this floorplan in the browser" CTA on the floor
+    view points at the new route."""
+    loc_id, fid = _setup_location_and_floor_with_plan(client)
+    page = client.get(f"/locations/{loc_id}?floor={fid}&edit=1").text
+    assert f'href="/floors/{fid}/edit-image"' in page
+
+
 def _fake_jpg() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (200, 200), color=(20, 60, 30)).save(buf, format="JPEG")
