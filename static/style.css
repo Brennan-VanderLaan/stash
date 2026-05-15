@@ -640,6 +640,54 @@ main.main-wide {
   color: var(--accent);
 }
 
+/* "Download my data" vs "Encrypted backup" — two adjacent cards
+   that need clear differentiation so users pick the right one.
+   The portability card is the primary CTA (most users want this);
+   the encrypted backup is recessed visually as the self-host / DR
+   path. */
+.data-choice-card {
+  position: relative;
+}
+.data-choice-card .data-choice-list {
+  list-style: none;
+  margin: 0.5rem 0 0.85rem;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.data-choice-card .data-choice-list li {
+  padding-left: 1rem;
+  position: relative;
+}
+.data-choice-card .data-choice-list li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  opacity: 0.6;
+}
+.data-choice-card-advanced {
+  background: var(--panel-2);
+  opacity: 0.92;
+}
+.data-choice-card-advanced .card-title { color: var(--muted); }
+.data-choice-badge {
+  display: inline-block;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.45rem;
+  margin-left: 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  vertical-align: middle;
+}
+
 /* Admin feedback queue */
 .feedback-queue-row {
   display: grid;

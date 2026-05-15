@@ -247,30 +247,47 @@
 </div>
 
 {% if is_maintainer %}
-<h2 class="usage-section" id="backups">{{ _("Backups") }}</h2>
-{% endif %}
+<h2 class="usage-section" id="backups">{{ _("Your data") }}</h2>
 
-{# ── Backup ───────────────────────────────────────────────────── #}
-{% if is_maintainer %}
-<div class="card maintenance-card">
-  <div class="card-title">{{ _("Backup") }}</div>
-  <p class="text-sm text-muted">
-    {{ _("Downloads a zip of just this tenant's DB rows + photos. The blobs are encrypted; the zip is useless without your STASH_KEK — keep them stored separately.") }}
-  </p>
-  <a href="/usage/backup" class="btn btn-primary btn-block"
-     download>
-    {{ _("Download backup") }}
-  </a>
-</div>
-{# ── GDPR portability ─────────────────────────────────────────── #}
-<div class="card maintenance-card">
+{# Two downloads — they sound similar but serve different needs.
+   Decision-tree framing rather than terms-of-art so a non-engineer
+   picks the right one on the first read. #}
+<div class="card maintenance-card data-choice-card">
   <div class="card-title">{{ _("Download my data") }}</div>
-  <p class="text-sm text-muted">
-    {{ _("GDPR Article 20 portability bundle — your tenant's DB rows + decrypted photos + a README explaining the layout. Different from the encrypted backup above: you can read this zip without STASH_KEK and take it to another service.") }}
+  <p class="text-sm">
+    <strong>{{ _("Pick this if:") }}</strong>
+    {{ _("you want a readable copy of everything you've stored — to keep, share, or move to another service.") }}
   </p>
+  <ul class="data-choice-list">
+    <li>{{ _("Includes: your boxes, items, rooms, tags, plus every photo as a regular JPEG.") }}</li>
+    <li>{{ _("Format: a zip with a SQLite database and an uploads/ folder.  A README explains what's inside.") }}</li>
+    <li>{{ _("Opens with: any SQLite browser + your normal photo viewer — no special key required.") }}</li>
+    <li>{{ _("Why it exists: this is your GDPR Article 20 portability bundle.") }}</li>
+  </ul>
   <a href="/usage/gdpr-export" class="btn btn-primary btn-block"
      download>
-    {{ _("Download my data") }}
+    {{ _("Download my data") }} ↓
+  </a>
+</div>
+
+<div class="card maintenance-card data-choice-card data-choice-card-advanced">
+  <div class="card-title">
+    {{ _("Encrypted backup") }}
+    <span class="data-choice-badge">{{ _("self-host / DR") }}</span>
+  </div>
+  <p class="text-sm">
+    <strong>{{ _("Pick this if:") }}</strong>
+    {{ _("you self-host Stash and want a disaster-recovery archive you can restore from on a fresh deploy.") }}
+  </p>
+  <ul class="data-choice-list">
+    <li>{{ _("Includes: same data, but photos travel as encrypted blobs (faster + no rights leakage on the wire).") }}</li>
+    <li>{{ _("Format: a zip with the SQLite database and an uploads/ folder of ciphertext.") }}</li>
+    <li>{{ _("Opens with: a Stash instance that has the matching STASH_KEK environment variable.  Without that key it is unreadable, by design.") }}</li>
+    <li>{{ _("Why it exists: nightly off-site DR + safe restore workflow.") }}</li>
+  </ul>
+  <a href="/usage/backup" class="btn btn-secondary btn-block"
+     download>
+    {{ _("Download encrypted backup") }}
   </a>
 </div>
 {% endif %}
