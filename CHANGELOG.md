@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.26.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.25.1...v1.26.0) (2026-05-15)
+
+
+### Features
+
+* **labels:** printer-compat warnings + inkjet Avery templates ([1360357](https://github.com/Brennan-VanderLaan/stash/commit/13603578a9bf7e4e556dffef308ff5dd07465148))
+* **mobile:** tab-bar + header-nav now highlight the active page ([eca9db9](https://github.com/Brennan-VanderLaan/stash/commit/eca9db91f9de4e17f7f384ffa846e5c40546bd28))
+* **ui:** sad-face placeholder for broken item photos ([4bbf17c](https://github.com/Brennan-VanderLaan/stash/commit/4bbf17c36aef27703c2dcc2b51b362828aad4708))
+* **usage:** roll up OAuth-minted tokens by client (parity with /admin) ([e1cd972](https://github.com/Brennan-VanderLaan/stash/commit/e1cd972db2e7108f789ff38de55b3900ecfb9f8c))
+
+
+### Bug Fixes
+
+* **admin:** compact KPI bar got out-painted by in-flow section cards ([eb9d590](https://github.com/Brennan-VanderLaan/stash/commit/eb9d59033539dfb4401bb6574ea80b7118c3c5ba))
+* **admin:** hero description was clipped mid-line on phones ([a4468cf](https://github.com/Brennan-VanderLaan/stash/commit/a4468cf81432b7aa3a9a44d43ed6a48569a968dd))
+* **admin:** scroll-anchor / sticky-hero collapse loop made the page feel stuck ([01d567e](https://github.com/Brennan-VanderLaan/stash/commit/01d567eb952abdc545795fc31b33b08f8a4f59ad))
+* **audit:** auto-start the session on first visit instead of gating on a button ([af04235](https://github.com/Brennan-VanderLaan/stash/commit/af0423526486672096e4af9001fc03d7191d0f4f))
+* **boxes:** room-group separator was a hairline that visually cut off ([3345fdb](https://github.com/Brennan-VanderLaan/stash/commit/3345fdb7226ef43a059685c63d7a54daf402fa37))
+* **feedback:** screenshot widget choked on color-mix() in computed styles ([409680f](https://github.com/Brennan-VanderLaan/stash/commit/409680fea6d58f49a5cd8f72f1913ed671cda422))
+* **floors:** box-preview modal couldn't scroll when the box had many items ([3dffe5c](https://github.com/Brennan-VanderLaan/stash/commit/3dffe5cd42d795346263e58802fd25b6b09cb1bb))
+* **floors:** drawing tools dragged the shape underneath the cursor ([e5906b7](https://github.com/Brennan-VanderLaan/stash/commit/e5906b73e07b7e054795c7baa50ceeec56a4ee67))
+* **floors:** floorplan save broken by tightened CSP connect-src ([dfad45f](https://github.com/Brennan-VanderLaan/stash/commit/dfad45fe3dbf60d6f242446c902480d65d9afc49))
+* **floors:** wheel-zoom captured scroll past max zoom-out — release at boundary ([ed6da68](https://github.com/Brennan-VanderLaan/stash/commit/ed6da6860a09cdf0b0913f3cdefb8e38406ccda7))
+* **mobile:** long-email overflow + feedback launcher visibility ([570cd67](https://github.com/Brennan-VanderLaan/stash/commit/570cd6769d246d5ad067ac8ddf3de7696c7e0b4e))
+* **tours:** spotlight too subtle, didn't follow scrolling — beef + reposition ([e53c203](https://github.com/Brennan-VanderLaan/stash/commit/e53c203dc2e50ce499a3f57d23e2bf638895fc89))
+
 ## [1.25.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.25.0...v1.25.1) (2026-05-15)
 
 
