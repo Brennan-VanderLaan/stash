@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.27.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.26.0...v1.27.0) (2026-05-15)
+
+
+### Features
+
+* **tags:** redesign /tags landing as a distribution dashboard ([63dfd02](https://github.com/Brennan-VanderLaan/stash/commit/63dfd02bacc7fa8dd8eafdd34c396e1fdd2c1f17))
+
+
+### Bug Fixes
+
+* **usage:** trend sparklines overflowed the card on narrow mobile viewports ([b22404f](https://github.com/Brennan-VanderLaan/stash/commit/b22404f1e3a1b96d89b2b6341eb01d92931e7290))
+
 ## [1.26.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.25.1...v1.26.0) (2026-05-15)
 
 
