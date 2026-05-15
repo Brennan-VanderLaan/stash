@@ -1934,12 +1934,20 @@ body:has(.admin-hero) {
 .admin-hero {
   position: sticky;
   top: 3.25rem;
-  /* Bumped 30 → 50: the create-tenant quick-action disclosure
-     inside the tenants section also sits at z-30, and DOM order
-     was putting it on top of the hero during scroll.  Hero needs
-     to dominate everything between it and the page-level header
-     (z-100) so the floating compact bar is never obscured. */
-  z-index: 50;
+  /* z-index history: 30 → 50 (quick-action disclosure at z-30
+     was painting over the hero) → 95 (feedback #16: in-flow
+     section cards that opened their own stacking context via
+     ``transform``/``filter`` on hover were still rendering on
+     top of the compact KPI bar during scroll).  95 sits one
+     below the page-level ``<header>`` (z 100) and well below
+     any modal-class overlay (z 200+), giving the hero exactly
+     the "on top of every page surface, but under modals"
+     layer the operator asked for.
+     ``isolation: isolate`` opens a stacking context on the
+     hero itself so children's z-indexes stay scoped here and
+     can't escape upward into something that out-paints us. */
+  z-index: 95;
+  isolation: isolate;
   margin-bottom: 1rem;
   padding: 1rem 1.15rem 0.9rem;
   background: var(--panel);
