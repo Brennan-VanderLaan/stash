@@ -92,12 +92,24 @@
 </div>
 {% endif %}
 
-{# ── Feedback queue ─────────────────────────────────────────── #}
+{# ── Feedback queue (Kanban) ─────────────────────────────────
+   Four columns (Open / Accepted / Rejected / Done) with scrollable
+   bodies, capped height so the section doesn't dominate the page.
+   Filters (tenant + free-text) hide cards across all columns at
+   once.  Status transitions are still the same POST form per card
+   — the Kanban is presentational. #}
+{% set fb_buckets = {'open': [], 'accepted': [], 'rejected': [], 'done': []} %}
+{% for fb in feedback_queue %}
+  {% if fb.status in fb_buckets %}
+    {% set _ = fb_buckets[fb.status].append(fb) %}
+  {% endif %}
+{% endfor %}
+{% set fb_tenants = feedback_queue | map(attribute='tenant_name') | reject('none') | unique | sort | list %}
 <section class="admin-section" id="feedback">
   <header class="admin-section-head">
     <h2>Feedback queue</h2>
     <div class="admin-section-actions">
-      <span class="text-sm text-muted">Export queue:</span>
+      <span class="text-sm text-muted">Export:</span>
       <a href="/admin/feedback/export?format=json"
          class="btn btn-secondary btn-sm" download>JSON</a>
       <a href="/admin/feedback/export?format=csv"
@@ -107,54 +119,92 @@
     </div>
   </header>
   <p class="text-sm text-muted">
-    In-app feedback from the floating widget on every page.  Triage
-    by setting each row's status — Accepted = "we'll fix it",
+    In-app feedback from the floating widget on every page.
+    Triage by transitioning a card — Accepted = "we'll fix it",
     Rejected = "won't fix", Done = "shipped".
   </p>
+
   {% if feedback_queue %}
-  <div class="admin-feedback-list">
-    {% for fb in feedback_queue %}
-    <article class="admin-feedback-row admin-feedback-{{ fb.status }}">
-      <header class="admin-feedback-row-head">
-        <span class="pill pill-{{ fb.status }}">{{ fb.status }}</span>
-        <span class="admin-feedback-row-meta">
-          #{{ fb.id }} ·
-          {{ fb.actor_email or '(anon)' }} ·
-          {{ fb.tenant_name or 'no tenant' }} ·
-          {{ fb.created_at }}
-        </span>
+  <div class="kanban-filter-bar" data-kanban-filter>
+    <label>
+      Tenant
+      <select data-kanban-filter-key="tenant">
+        <option value="">All</option>
+        {% for name in fb_tenants %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="kanban-filter-search">
+      Search
+      <input type="search" data-kanban-filter-key="search"
+             placeholder="match body / email / source URL…"
+             autocomplete="off">
+    </label>
+    <span class="kanban-filter-count text-sm text-muted" data-kanban-filter-count>
+      {{ feedback_queue | length }} of {{ feedback_queue | length }}
+    </span>
+  </div>
+
+  <div class="kanban-board">
+    {% for col_key, col_title in [
+      ('open', 'Open'), ('accepted', 'Accepted'),
+      ('rejected', 'Rejected'), ('done', 'Done'),
+    ] %}
+    <div class="kanban-column kanban-column-{{ col_key }}"
+         data-kanban-column="{{ col_key }}">
+      <header class="kanban-column-head">
+        <span class="kanban-column-title">{{ col_title }}</span>
+        <span class="kanban-column-count">{{ fb_buckets[col_key] | length }}</span>
       </header>
-      <div class="admin-feedback-row-body">{{ fb.body }}</div>
-      <footer class="admin-feedback-row-foot">
-        <div class="admin-feedback-row-context">
-          {% if fb.source_url %}
-          <a href="{{ fb.source_url }}" class="text-sm">{{ fb.source_url }}</a>
-          {% endif %}
-          {% if fb.viewport_w %}
-          <span class="text-sm text-muted">{{ fb.viewport_w }}×{{ fb.viewport_h }}</span>
-          {% endif %}
-          {% if fb.screenshot %}
-          <a href="/admin/feedback/{{ fb.id }}/screenshot"
-             target="_blank" class="text-sm">📸 screenshot</a>
-          {% endif %}
-          {% if fb.resolved_by %}
-          <span class="text-sm text-muted">
-            resolved by {{ fb.resolved_by }} · {{ fb.resolved_at[:16] }}
-          </span>
-          {% endif %}
-        </div>
-        <div class="admin-feedback-row-actions">
-          {% for s in ('accepted', 'rejected', 'done', 'open') %}
-            {% if fb.status != s %}
-            <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">
-              <input type="hidden" name="status" value="{{ s }}">
-              <button type="submit" class="btn btn-secondary btn-sm">{{ s }}</button>
-            </form>
+      <div class="kanban-column-body">
+        {% for fb in fb_buckets[col_key] %}
+        <article class="kanban-card kanban-card-{{ fb.status }}"
+                 data-kanban-card
+                 data-kanban-tenant="{{ fb.tenant_name or '' }}"
+                 data-kanban-search="{{ (fb.body or '') ~ ' ' ~ (fb.actor_email or '') ~ ' ' ~ (fb.source_url or '') }}">
+          <header class="kanban-card-head">
+            <span class="kanban-card-id">#{{ fb.id }}</span>
+            <span class="kanban-card-when">{{ fb.created_at[:16] }}</span>
+          </header>
+          <div class="kanban-card-body">{{ fb.body }}</div>
+          <div class="kanban-card-meta">
+            <span>{{ fb.actor_email or '(anon)' }}</span>
+            <span>·</span>
+            <span>{{ fb.tenant_name or 'no tenant' }}</span>
+            {% if fb.screenshot %}
+              · <a href="/admin/feedback/{{ fb.id }}/screenshot"
+                   target="_blank">📸</a>
             {% endif %}
-          {% endfor %}
-        </div>
-      </footer>
-    </article>
+            {% if fb.source_url %}
+              · <a href="{{ fb.source_url }}" target="_blank"
+                   class="kanban-card-source"
+                   title="{{ fb.source_url }}">↗</a>
+            {% endif %}
+          </div>
+          {% if fb.resolved_by %}
+          <div class="kanban-card-resolved text-sm text-muted">
+            resolved by {{ fb.resolved_by }} · {{ fb.resolved_at[:16] }}
+          </div>
+          {% endif %}
+          <footer class="kanban-card-actions">
+            {% for s in ('open', 'accepted', 'rejected', 'done') %}
+              {% if fb.status != s %}
+              <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">
+                <input type="hidden" name="status" value="{{ s }}">
+                <button type="submit" class="btn btn-secondary btn-sm kanban-card-action kanban-card-action-{{ s }}"
+                        title="Transition to {{ s }}">→ {{ s }}</button>
+              </form>
+              {% endif %}
+            {% endfor %}
+          </footer>
+        </article>
+        {% endfor %}
+        {% if not fb_buckets[col_key] %}
+        <div class="kanban-column-empty">—</div>
+        {% endif %}
+      </div>
+    </div>
     {% endfor %}
   </div>
   {% else %}
@@ -166,6 +216,51 @@
   </div>
   {% endif %}
 </section>
+
+<script>
+// Kanban filter: hides cards that don't match the tenant + search
+// across every column at once.  Column counts update live so an
+// operator can see "5 open, but only 2 from Acme" at a glance.
+(function () {
+  const bar = document.querySelector('[data-kanban-filter]');
+  if (!bar) return;
+  const cards = document.querySelectorAll('[data-kanban-card]');
+  const countEl = document.querySelector('[data-kanban-filter-count]');
+  const total = cards.length;
+
+  function apply() {
+    const tenant = bar.querySelector('[data-kanban-filter-key="tenant"]').value;
+    const search = bar.querySelector('[data-kanban-filter-key="search"]').value
+                      .trim().toLowerCase();
+    let shown = 0;
+    const perColumn = {};
+    cards.forEach(c => {
+      const tenantOK = !tenant || c.dataset.kanbanTenant === tenant;
+      const searchOK = !search ||
+                        (c.dataset.kanbanSearch || '').toLowerCase().includes(search);
+      const ok = tenantOK && searchOK;
+      c.style.display = ok ? '' : 'none';
+      if (ok) {
+        shown += 1;
+        const col = c.closest('[data-kanban-column]');
+        if (col) {
+          const k = col.dataset.kanbanColumn;
+          perColumn[k] = (perColumn[k] || 0) + 1;
+        }
+      }
+    });
+    if (countEl) countEl.textContent = shown + ' of ' + total;
+    document.querySelectorAll('[data-kanban-column]').forEach(col => {
+      const c = col.querySelector('.kanban-column-count');
+      if (c) c.textContent = perColumn[col.dataset.kanbanColumn] || 0;
+    });
+  }
+  bar.querySelectorAll('[data-kanban-filter-key]').forEach(el => {
+    el.addEventListener('input', apply);
+    el.addEventListener('change', apply);
+  });
+})();
+</script>
 
 {# ── Recent activity ────────────────────────────────────────── #}
 <section class="admin-section" id="activity">
