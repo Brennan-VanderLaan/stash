@@ -113,6 +113,42 @@
     {% endif %}
   </header>
 
+  {# Global broken-image fallback.  ``<img>`` is a void element so
+     we can't attach a CSS ``::after`` to dress up a failed load;
+     listen for the ``error`` event in the capture phase and swap
+     the <img> for a styled placeholder span with a sad-face
+     emoji.  Feedback #21: "if an item picture cannot load, I
+     want to show a sad face, not the default error jpeg thing."
+     Installed near the top of <body> so it's listening before
+     any <img> in the page's content has finished loading. #}
+  <script>
+  (function () {
+    document.addEventListener('error', function (e) {
+      var img = e.target;
+      if (!img || img.tagName !== 'IMG') return;
+      if (img.dataset.brokenHandled) return;
+      img.dataset.brokenHandled = '1';
+      var alt = img.alt || '';
+      // Build the replacement: keep the image's class list so any
+      // size / shape rules (item-thumb, audit-thumb, etc.) still
+      // apply and the placeholder lays out where the image did.
+      var span = document.createElement('span');
+      span.className = 'img-broken ' + (img.className || '');
+      span.setAttribute('role', 'img');
+      span.setAttribute('aria-label', alt || 'Image unavailable');
+      span.title = alt
+        ? (alt + ' — image unavailable')
+        : 'Image unavailable';
+      span.textContent = '😿';
+      try {
+        img.replaceWith(span);
+      } catch (err) {
+        // IE / very old fallback — leave the original img in place.
+      }
+    }, true);
+  })();
+  </script>
+
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
   {# Compute "what page am I on" for tab-bar highlighting.  The
