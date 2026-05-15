@@ -4901,6 +4901,17 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   width: min(1100px, 96vw);
   max-width: 96vw;
   max-height: calc(94vh - var(--safe-bottom));
+  /* Drop the browser default <dialog> padding so the inner
+     preview can fill the full dialog rect and host its own
+     scroll.  Without this, "max-height: inherit" on the preview
+     inherits the dialog's outer max-height but the dialog's
+     content area is smaller (by the default padding), so the
+     thumbs grid for a 60-item box overflows the dialog and
+     looks "cut off" — feedback #18. */
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .floorplan-box-preview {
   padding: 0.8rem 0.85rem 0.95rem;
@@ -4908,7 +4919,13 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
-  max-height: inherit;
+  /* ``flex: 1 1 auto`` + ``min-height: 0`` lets the preview
+     occupy the dialog's full vertical area AND scroll inside
+     itself when the thumbs grid is taller than the viewport.
+     The dialog already caps the outer height; we don't need a
+     redundant max-height here. */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 @media (min-width: 640px) {
