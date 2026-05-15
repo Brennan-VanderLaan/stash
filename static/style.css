@@ -435,7 +435,7 @@ header h1 a { color: var(--accent); text-decoration: none; }
   text-decoration: none;
   color: var(--muted);
   font-size: 0.65rem;
-  padding: 0.25rem 0.5rem;
+  padding: 0.35rem 0.5rem 0.25rem;
   min-width: 48px;
   min-height: 44px;
   justify-content: center;
@@ -445,8 +445,30 @@ header h1 a { color: var(--accent); text-decoration: none; }
   border: 0;
   cursor: pointer;
   font-family: inherit;
+  /* For the ``::before`` accent-stripe positioning when active. */
+  position: relative;
 }
-.tab-bar a.active { color: var(--accent); }
+/* Active-page indication.  The server stamps ``active`` on
+   whichever tab matches the current URL prefix (and on the More
+   button when the current page lives inside the sheet) — see
+   base.html.  We give the active item the accent text colour AND
+   a small accent stripe pinned to the top edge so it reads as a
+   tab in the iOS sense rather than just "this label looks
+   slightly different". */
+.tab-bar a.active,
+.tab-bar button.tab-bar-more.active { color: var(--accent); }
+.tab-bar a.active::before,
+.tab-bar button.tab-bar-more.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 0 0 3px 3px;
+}
 .tab-bar a:hover, .tab-bar button.tab-bar-more:hover { color: var(--accent); }
 .tab-bar button.tab-bar-more[aria-expanded="true"] { color: var(--accent); }
 .tab-icon { font-size: 1.3rem; line-height: 1; }
@@ -521,6 +543,10 @@ header h1 a { color: var(--accent); text-decoration: none; }
 }
 .more-sheet-panel a:last-of-type { border-bottom: 1px solid var(--border); }
 .more-sheet-panel a:hover { color: var(--accent); }
+.more-sheet-panel a.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
 .more-sheet-panel a .tab-icon { font-size: 1.25rem; }
 .more-sheet-panel button.more-sheet-close {
   justify-content: center;

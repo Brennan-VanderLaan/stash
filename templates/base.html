@@ -29,21 +29,37 @@
     {% block header_left %}
     <h1>{% include "_brand.html" %}</h1>
     {% endblock %}
+    {# Desktop header-nav: shares the same prefix-matching logic
+       as the bottom tab-bar (see further below in the template),
+       but hoisted here because the header renders before we
+       compute ``_p``.  Recompute inline; cheap. #}
+    {% set _hp = request.url.path %}
     <nav class="header-nav">
-      <a href="/home">{{ _("Boxes") }}</a>
-      <a href="/locations">{{ _("Where") }}</a>
-      <a href="/ingest">{{ _("Ingest") }}</a>
-      <a href="/queue">{{ _("Sort") }}</a>
-      <a href="/search">{{ _("Search") }}</a>
-      <a href="/labels">{{ _("Labels") }}</a>
-      <a href="/tags">{{ _("Tags") }}</a>
-      <a href="/usage">{{ _("Usage") }}</a>
+      <a href="/home"
+         class="{{ 'active' if _hp == '/home' or _hp.startswith('/boxes') else '' }}">{{ _("Boxes") }}</a>
+      <a href="/locations"
+         class="{{ 'active' if _hp.startswith('/locations') or _hp.startswith('/rooms') or _hp.startswith('/floors') else '' }}">{{ _("Where") }}</a>
+      <a href="/ingest"
+         class="{{ 'active' if _hp.startswith('/ingest') else '' }}">{{ _("Ingest") }}</a>
+      <a href="/queue"
+         class="{{ 'active' if _hp.startswith('/queue') else '' }}">{{ _("Sort") }}</a>
+      <a href="/search"
+         class="{{ 'active' if _hp.startswith('/search') else '' }}">{{ _("Search") }}</a>
+      <a href="/labels"
+         class="{{ 'active' if _hp.startswith('/labels') else '' }}">{{ _("Labels") }}</a>
+      <a href="/tags"
+         class="{{ 'active' if _hp.startswith('/tags') else '' }}">{{ _("Tags") }}</a>
+      <a href="/usage"
+         class="{{ 'active' if _hp.startswith('/usage') else '' }}">{{ _("Usage") }}</a>
       {% if request.state.actor and request.state.actor.shares %}
-      <a href="/shared">{{ _("Shared") }}</a>
+      <a href="/shared"
+         class="{{ 'active' if _hp.startswith('/shared') else '' }}">{{ _("Shared") }}</a>
       {% endif %}
-      <a href="/maintenance">{{ _("Maintenance") }}</a>
+      <a href="/maintenance"
+         class="{{ 'active' if _hp.startswith('/maintenance') else '' }}">{{ _("Maintenance") }}</a>
       {% if request.state.actor and request.state.actor.is_operator %}
-      <a href="/admin">{{ _("Admin") }}</a>
+      <a href="/admin"
+         class="{{ 'active' if _hp.startswith('/admin') else '' }}">{{ _("Admin") }}</a>
       {% endif %}
     </nav>
     {% block header_actions %}{% endblock %}
@@ -99,16 +115,51 @@
 
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
+  {# Compute "what page am I on" for tab-bar highlighting.  The
+     server has the URL — let it stamp ``active`` instead of doing
+     a fragile JS pass on every page load.  Path-prefix matching
+     keeps Boxes lit when the user opens an individual /boxes/{id},
+     Where lit on /locations/{id}/.../rooms/{id}/edit, etc. #}
+  {% set _p = request.url.path %}
+  {% set _tab_more_paths = ['/queue', '/labels', '/tags', '/usage',
+                            '/maintenance', '/admin', '/shared'] %}
+  {% set _tab_more_active = false %}
+  {% for _mp in _tab_more_paths %}
+    {% if _p == _mp or _p.startswith(_mp + '/') %}
+      {% set _tab_more_active = true %}
+    {% endif %}
+  {% endfor %}
   <nav class="tab-bar">
-    <a href="/home"><span class="tab-icon">📦</span>{{ _("Boxes") }}</a>
-    <a href="/locations"><span class="tab-icon">🗺️</span>{{ _("Where") }}</a>
-    <a href="/ingest"><span class="tab-icon">📷</span>{{ _("Ingest") }}</a>
-    <a href="/search"><span class="tab-icon">🔍</span>{{ _("Search") }}</a>
+    <a href="/home"
+       class="{{ 'active' if _p == '/home' or _p.startswith('/boxes') else '' }}"
+       {% if _p == '/home' or _p.startswith('/boxes') %}aria-current="page"{% endif %}>
+      <span class="tab-icon">📦</span>{{ _("Boxes") }}
+    </a>
+    <a href="/locations"
+       class="{{ 'active' if _p.startswith('/locations') or _p.startswith('/rooms') or _p.startswith('/floors') else '' }}"
+       {% if _p.startswith('/locations') or _p.startswith('/rooms') or _p.startswith('/floors') %}aria-current="page"{% endif %}>
+      <span class="tab-icon">🗺️</span>{{ _("Where") }}
+    </a>
+    <a href="/ingest"
+       class="{{ 'active' if _p.startswith('/ingest') else '' }}"
+       {% if _p.startswith('/ingest') %}aria-current="page"{% endif %}>
+      <span class="tab-icon">📷</span>{{ _("Ingest") }}
+    </a>
+    <a href="/search"
+       class="{{ 'active' if _p.startswith('/search') else '' }}"
+       {% if _p.startswith('/search') %}aria-current="page"{% endif %}>
+      <span class="tab-icon">🔍</span>{{ _("Search") }}
+    </a>
     {# "More" opens the secondary-nav sheet below.  ``button``
        intentionally — a link would 404 if JS were off; the
-       button is a no-op without JS, which fails closed. #}
-    <button type="button" class="tab-bar-more" id="more-tab"
-            aria-expanded="false" aria-controls="more-sheet">
+       button is a no-op without JS, which fails closed.
+       Highlighted when the user is on a page that lives inside
+       the sheet (Usage, Maintenance, Admin, Sort queue, etc.)
+       so the mobile user doesn't lose orientation. #}
+    <button type="button" class="tab-bar-more {{ 'active' if _tab_more_active else '' }}"
+            id="more-tab"
+            aria-expanded="false" aria-controls="more-sheet"
+            {% if _tab_more_active %}aria-current="page"{% endif %}>
       <span class="tab-icon">☰</span>{{ _("More") }}
     </button>
   </nav>
@@ -122,16 +173,37 @@
     <div class="more-sheet-backdrop" data-more-close></div>
     <nav class="more-sheet-panel" aria-label="{{ _('More navigation') }}">
       <div class="more-sheet-handle" aria-hidden="true"></div>
-      <a href="/queue"><span class="tab-icon">📋</span>{{ _("Sort queue") }}</a>
-      <a href="/labels"><span class="tab-icon">🏷️</span>{{ _("Labels") }}</a>
-      <a href="/tags"><span class="tab-icon">#️⃣</span>{{ _("Tags") }}</a>
-      <a href="/usage"><span class="tab-icon">⚙️</span>{{ _("Usage") }}</a>
+      <a href="/queue"
+         class="{{ 'active' if _p.startswith('/queue') else '' }}">
+        <span class="tab-icon">📋</span>{{ _("Sort queue") }}
+      </a>
+      <a href="/labels"
+         class="{{ 'active' if _p.startswith('/labels') else '' }}">
+        <span class="tab-icon">🏷️</span>{{ _("Labels") }}
+      </a>
+      <a href="/tags"
+         class="{{ 'active' if _p.startswith('/tags') else '' }}">
+        <span class="tab-icon">#️⃣</span>{{ _("Tags") }}
+      </a>
+      <a href="/usage"
+         class="{{ 'active' if _p.startswith('/usage') else '' }}">
+        <span class="tab-icon">⚙️</span>{{ _("Usage") }}
+      </a>
       {% if request.state.actor and request.state.actor.shares %}
-      <a href="/shared"><span class="tab-icon">🔗</span>{{ _("Shared with you") }}</a>
+      <a href="/shared"
+         class="{{ 'active' if _p.startswith('/shared') else '' }}">
+        <span class="tab-icon">🔗</span>{{ _("Shared with you") }}
+      </a>
       {% endif %}
-      <a href="/maintenance"><span class="tab-icon">🛠️</span>{{ _("Maintenance") }}</a>
+      <a href="/maintenance"
+         class="{{ 'active' if _p.startswith('/maintenance') else '' }}">
+        <span class="tab-icon">🛠️</span>{{ _("Maintenance") }}
+      </a>
       {% if request.state.actor and request.state.actor.is_operator %}
-      <a href="/admin"><span class="tab-icon">🛡️</span>{{ _("Admin") }}</a>
+      <a href="/admin"
+         class="{{ 'active' if _p.startswith('/admin') else '' }}">
+        <span class="tab-icon">🛡️</span>{{ _("Admin") }}
+      </a>
       {% endif %}
       <button type="button" class="more-sheet-close" data-more-close>
         {{ _("Close") }}
