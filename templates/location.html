@@ -346,7 +346,28 @@
 
   // Wheel = zoom anchored on cursor (Google Maps / Figma style).
   // No modifier required, since pan happens via click+drag below.
+  //
+  // The boundary release matters: at ZOOM_MIN the floorplan is
+  // already "fit", so a scroll-down wheel event has nowhere to
+  // zoom out to.  Without releasing, ``preventDefault`` consumed
+  // every wheel notch and the user couldn't scroll past the
+  // floorplan to read the rest of the page (feedback #19,
+  // "it keeps trying to zoom out … when you are all the way
+  // zoomed out I want it to start scrolling again").  Same
+  // logic at ZOOM_MAX on the other end, for completeness.
   viewport.addEventListener('wheel', (e) => {
+    const wantsZoomOut = e.deltaY > 0;
+    const wantsZoomIn  = e.deltaY < 0;
+    const atMin = zoom <= ZOOM_MIN + 0.001;
+    const atMax = zoom >= ZOOM_MAX - 0.001;
+    if ((wantsZoomOut && atMin) || (wantsZoomIn && atMax)) {
+      // Boundary hit — don't preventDefault, let the page
+      // scroll naturally.  ``return`` here is the load-bearing
+      // bit: we never call preventDefault on this code path,
+      // so the wheel event continues up the DOM and the page
+      // scrolls under the user's input.
+      return;
+    }
     e.preventDefault();
     const factor = Math.exp(-e.deltaY * 0.0015);  // smooth, momentum-aware
     setZoom(zoom * factor, e.clientX, e.clientY);
