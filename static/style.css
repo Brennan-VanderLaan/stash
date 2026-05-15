@@ -868,23 +868,23 @@ main.main-wide {
   z-index: 9999;
   pointer-events: auto;
 }
-.tour-overlay::before {
-  /* Backdrop dim — the spotlight cuts a hole into it via the
-     spotlight element's massive outer box-shadow. */
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  pointer-events: auto;
-}
+/* No separate ::before backdrop anymore — the spotlight's outer
+   ``box-shadow`` is the dimmer.  When a step has no target the
+   spotlight gets positioned off-screen so the shadow covers the
+   whole viewport with no visible cutout.  Two layers was causing
+   the spotlight to flash on/off as one was hidden during step
+   transitions; one layer is always visible. */
 .tour-spotlight {
   position: absolute;
   border-radius: 8px;
   pointer-events: none;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65),
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72),
               0 0 0 3px var(--accent),
               0 0 18px var(--accent);
-  transition: all 0.18s ease;
+  /* Smooth slide between targets so consecutive steps feel
+     continuous rather than blinking from one rect to the next. */
+  transition: left 0.22s ease, top 0.22s ease,
+              width 0.22s ease, height 0.22s ease;
 }
 .tour-tooltip {
   position: absolute;
@@ -938,7 +938,11 @@ main.main-wide {
   justify-content: space-between;
   gap: 0.4rem;
 }
-body.tour-active { overflow: hidden; }
+/* Earlier passes locked body overflow while a tour was active; that
+   caused the page to snap-scroll to top when the tour finished
+   (browser restoring layout after overflow:hidden ↔ auto toggle).
+   Letting the page scroll keeps user-initiated position stable
+   and lets the user scroll past the spotlight if they want to. */
 
 /* Tour management list on /usage */
 .tour-catalogue {

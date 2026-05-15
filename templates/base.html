@@ -238,12 +238,10 @@
     function showOverlay() {
       overlay.hidden = false;
       overlay.setAttribute('aria-hidden', 'false');
-      document.body.classList.add('tour-active');
     }
     function hideOverlay() {
       overlay.hidden = true;
       overlay.setAttribute('aria-hidden', 'true');
-      document.body.classList.remove('tour-active');
       activeTour = null;
       stepIdx = 0;
     }
@@ -265,63 +263,53 @@
     }
 
     function positionTooltip(step) {
-      // Spotlight + tooltip placement.  Target may be null
-      // (centred modal) or a CSS selector that may match nothing
-      // on this particular tenant's data (e.g., the welcome tour
-      // pointing at .box-list when the user has no boxes yet).
-      // In the no-target case the tooltip centres on screen and
-      // the spotlight is hidden.
-      spotlight.hidden = true;
+      // Spotlight + tooltip placement.  Earlier passes hid the
+      // spotlight during step transitions and re-fired after a
+      // 240 ms timeout — combined with the smooth-scroll the user
+      // saw the highlight blink on then off.  The spotlight is
+      // now ALWAYS visible (its outer box-shadow doubles as the
+      // page dim), and CSS transitions on left/top/width/height
+      // animate the slide between targets.
+      //
+      // For steps with no target (centred modal welcome step, or
+      // a missing target on this tenant's data) we park the
+      // spotlight off-screen so the box-shadow still covers the
+      // viewport but no visible cutout draws attention to a
+      // random corner.
       tooltip.classList.remove('tour-tooltip-positioned');
-      if (!step.target) {
+      function parkSpotlightOffscreen() {
+        spotlight.style.left = '-9999px';
+        spotlight.style.top = '-9999px';
+        spotlight.style.width = '1px';
+        spotlight.style.height = '1px';
+      }
+      function centreTooltip() {
         tooltip.style.left = '50%';
         tooltip.style.top = '50%';
         tooltip.style.transform = 'translate(-50%, -50%)';
+      }
+      if (!step.target) {
+        parkSpotlightOffscreen();
+        centreTooltip();
         return;
       }
       let el = null;
       try { el = document.querySelector(step.target); } catch (e) { el = null; }
       if (!el) {
-        // Target missing on this page state — fall through to
-        // centred-modal positioning.
-        tooltip.style.left = '50%';
-        tooltip.style.top = '50%';
-        tooltip.style.transform = 'translate(-50%, -50%)';
+        parkSpotlightOffscreen();
+        centreTooltip();
         return;
       }
-      // Force the target into the middle of the viewport before
-      // measuring — on tall pages (large floorplan, long tenant
-      // list) the target may live off-screen and the tooltip
-      // would land somewhere the user can't see.  ``smooth`` is
-      // intentional: a hard jump on a long page is disorienting.
-      // We delay the measurement to the next animation frame so
-      // the scroll-induced layout has settled before
-      // getBoundingClientRect runs.
+      // Snap-scroll the target to the centre of the viewport.
+      // Instant scroll (default) so the rect we measure on the
+      // very next line is correct — earlier ``smooth`` + 240 ms
+      // re-entry was the flicker source.
       try {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.scrollIntoView({ block: 'center', inline: 'center' });
       } catch (e) {
         el.scrollIntoView();
       }
-      // Re-call ourselves after layout settles so the spotlight
-      // + tooltip lock onto the post-scroll position.  We only
-      // re-enter once (via the .tour-scrolled flag) so we don't
-      // recurse infinitely.
-      if (!tooltip.dataset.tourScrolled) {
-        tooltip.dataset.tourScrolled = "1";
-        // Wait long enough for a smooth-scroll to land; 240ms is
-        // longer than a single rAF but still fast enough to feel
-        // tight.
-        setTimeout(() => {
-          delete tooltip.dataset.tourScrolled;
-          positionTooltip(step);
-        }, 240);
-        return;
-      }
-      delete tooltip.dataset.tourScrolled;
       const r = el.getBoundingClientRect();
-      // Spotlight: a transparent rect drawn over the element, the
-      // backdrop's outer box-shadow darkens the surrounding page.
-      spotlight.hidden = false;
       spotlight.style.left = (r.left - 6) + 'px';
       spotlight.style.top = (r.top - 6) + 'px';
       spotlight.style.width = (r.width + 12) + 'px';
