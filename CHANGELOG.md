@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.29.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.28.0...v1.29.0) (2026-05-15)
+
+
+### Features
+
+* **feedback:** stars + cross-user leaderboard for shipped feedback ([35f72c5](https://github.com/Brennan-VanderLaan/stash/commit/35f72c5066a2a74a7f168afce7ae1cf08e7ef412))
+
+
+### Bug Fixes
+
+* **admin:** surface open invite URLs on each tenant card ([d746982](https://github.com/Brennan-VanderLaan/stash/commit/d7469826da90eca5ca0d48003b83483ba4633ff4))
+
 ## [1.28.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.27.0...v1.28.0) (2026-05-15)
 
 
