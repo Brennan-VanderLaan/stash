@@ -263,6 +263,51 @@ def test_print_page_back_link_omits_querystring_when_empty(client):
     assert 'href="/labels"' in r.text
 
 
+def test_print_page_copies_duplicates_each_box(client):
+    """``?copies=3`` lays out three cells per selected box.  Three
+    boxes × 3 copies = 9 cells; on 5523 (10/sheet) that still fits
+    on one sheet.  Each box's name appears 3 times in the rendered
+    HTML — once per duplicated cell."""
+    client.post("/boxes", data={"name": "Alpha"})
+    client.post("/boxes", data={"name": "Bravo"})
+    client.post("/boxes", data={"name": "Charlie"})
+    r = client.get("/labels/print?copies=3")
+    html = r.text
+    assert html.count("Alpha") == 3
+    assert html.count("Bravo") == 3
+    assert html.count("Charlie") == 3
+
+
+def test_print_page_copies_paginates_across_sheets(client):
+    """4 boxes × 4 copies = 16 cells on 5523 (10/sheet) → 2 sheets."""
+    for n in ("A", "B", "C", "D"):
+        client.post("/boxes", data={"name": n})
+    r = client.get("/labels/print?copies=4")
+    assert r.text.count('class="sheet"') == 2
+
+
+def test_print_page_copies_clamped_to_max(client):
+    """A forged ``copies=999`` must clamp to the configured max so
+    the page count can't be blown up by a query-string attacker."""
+    client.post("/boxes", data={"name": "Solo"})
+    r = client.get("/labels/print?copies=9999")
+    # Max is 4, so 1 box × 4 copies = 4 cells = 1 sheet, name appears 4×.
+    assert r.text.count("Solo") == 4
+
+
+def test_print_page_copies_invalid_falls_back_to_one(client):
+    client.post("/boxes", data={"name": "Solo"})
+    r = client.get("/labels/print?copies=notanumber")
+    assert r.text.count("Solo") == 1
+
+
+def test_labels_page_renders_copies_selector(client):
+    client.post("/boxes", data={"name": "X"})
+    page = client.get("/labels").text
+    assert 'id="copies-select"' in page
+    assert "Copies" in page
+
+
 def test_print_page_respects_persisted_orientation(client):
     """Regression for the bug where the print + PDF paths fell
     back to landscape because ``_selected_boxes`` didn't pull

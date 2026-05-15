@@ -3520,6 +3520,37 @@ def _resolve_label_format(request: Request) -> labels.AveryFormat:
     return labels.get_format(request.query_params.get("format"))
 
 
+_LABEL_COPIES_MAX = 4
+
+
+def _resolve_label_copies(request: Request) -> int:
+    """How many duplicates of each selected box to lay out on the
+    sheet.  User wraps tape around the box, so a single label gets
+    lost on three of four sides — 2-4 copies covers a box visibly
+    from any angle.  Clamped [1, 4] so a forged ``?copies=9999``
+    can't blow up the page count."""
+    raw = request.query_params.get("copies")
+    if not raw:
+        return 1
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(_LABEL_COPIES_MAX, n))
+
+
+def _expand_copies(boxes: list, copies: int) -> list:
+    """Duplicate each box ``copies`` times in place.  Used by the
+    sheet + PDF + print paths so one logical "selection" of N
+    boxes lays out as N × copies cells on the printed sheet."""
+    if copies <= 1:
+        return boxes
+    out: list = []
+    for b in boxes:
+        out.extend([b] * copies)
+    return out
+
+
 @app.get("/labels", response_class=HTMLResponse)
 def labels_page(request: Request):
     """Per-tenant label-print surface.  Avery shipping-label
@@ -3535,6 +3566,7 @@ def labels_page(request: Request):
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
     use_room_tint = _resolve_room_tint(request)
+    copies = _resolve_label_copies(request)
     with db() as conn:
         # Mirrors dao_boxes.list_with_counts' join + ordering so the
         # `_group_boxes_for_index` bucketing loop walks the rows in
@@ -3571,6 +3603,8 @@ def labels_page(request: Request):
             "labels_per_page": fmt.labels_per_page,
             "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
             "use_room_tint": use_room_tint,
+            "copies": copies,
+            "copies_max": _LABEL_COPIES_MAX,
         },
     )
 
@@ -3610,13 +3644,14 @@ def labels_sheet_pdf(request: Request):
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
     use_room_tint = _resolve_room_tint(request)
+    copies = _resolve_label_copies(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
         boxes = _selected_boxes(conn, actor, box_ids_raw)
-    payload = [
+    payload = _expand_copies([
         _attach_color_tint(_attach_art_bytes(dict(b)), enabled=use_room_tint)
         for b in boxes
-    ]
+    ], copies)
     try:
         pdf_bytes = labels.render_sheet_pdf(payload, PUBLIC_URL, fmt=fmt)
     except ImportError:
@@ -3643,14 +3678,15 @@ def labels_print(request: Request):
     actor: Actor = request.state.actor
     fmt = _resolve_label_format(request)
     use_room_tint = _resolve_room_tint(request)
+    copies = _resolve_label_copies(request)
     box_ids_raw = request.query_params.getlist("box_ids")
     with db() as conn:
-        boxes = [
+        boxes = _expand_copies([
             _attach_color_tint(
                 _attach_art_bytes(dict(b)), enabled=use_room_tint,
             )
             for b in _selected_boxes(conn, actor, box_ids_raw)
-        ]
+        ], copies)
     pages = []
     for chunk_start in range(0, max(len(boxes), 1), fmt.labels_per_page):
         chunk = boxes[chunk_start:chunk_start + fmt.labels_per_page]
