@@ -1,10 +1,10 @@
 import io
 
 
-def _make_item(client, box_id, name="thing"):
+def _make_item(client, box_id, name="thing", tags=""):
     client.post(
         f"/boxes/{box_id}/items",
-        data={"name": name},
+        data={"name": name, "tags": tags},
         files={"photo": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
     )
 
@@ -195,4 +195,136 @@ def test_audit_view_shows_items(client):
     page = client.get("/boxes/1/audit").text
     assert "Audit: Box A" in page
     assert "spatula" in page
+    # ``type="checkbox"`` lives in the <noscript> fallback so JS-off
+    # clients still complete an audit in one POST.
     assert 'type="checkbox"' in page
+
+
+# ── Tinder-style swipe audit ────────────────────────────────────────
+
+
+def test_audit_start_stamps_session(client):
+    """``POST /boxes/{id}/audit/start`` writes
+    last_audit_started_at so the per-item swipe endpoints know
+    which items belong to the current session."""
+    client.post("/boxes", data={"name": "Closet"})
+    _make_item(client, 1, "scarf")
+    r = client.post("/boxes/1/audit/start",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT last_audit_started_at FROM boxes WHERE id = 1"
+        ).fetchone()
+    assert row["last_audit_started_at"], "session timestamp not set"
+
+
+def test_audit_mark_present_advances_last_seen(client):
+    """``/audit/items/{id}/present`` stamps ``items.last_seen_at``
+    so the resume query skips it on the next page load."""
+    client.post("/boxes", data={"name": "Closet"})
+    _make_item(client, 1, "scarf")
+    client.post("/boxes/1/audit/start",
+                headers={"Accept": "application/json"})
+    r = client.post("/boxes/1/audit/items/1/present",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["ok"] is True
+    assert payload["remaining"] == 0  # only item, marked present
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT last_seen_at FROM items WHERE id = 1"
+        ).fetchone()
+    assert row["last_seen_at"], "last_seen_at not stamped"
+
+
+def test_audit_mark_missing_moves_to_queue(client):
+    """``/audit/items/{id}/missing`` extracts the item to the sort
+    queue with provenance preserved + carries tags over."""
+    client.post("/boxes", data={"name": "Garage"})
+    _make_item(client, 1, "drill", tags="tools, room:garage")
+    client.post("/boxes/1/audit/start",
+                headers={"Accept": "application/json"})
+    r = client.post("/boxes/1/audit/items/1/missing",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["ok"] is True
+    assert "pending_id" in payload
+    # Item is gone from the box.
+    with client.app_module.db() as conn:
+        items = conn.execute(
+            "SELECT id FROM items WHERE box_id = 1"
+        ).fetchall()
+        assert items == []
+        # Pending row carries provenance + the original tags.
+        pending = conn.execute(
+            "SELECT name, previous_box_name FROM pending_items"
+        ).fetchone()
+        assert pending["name"] == "drill"
+        assert pending["previous_box_name"] == "Garage"
+        tag_count = conn.execute(
+            "SELECT COUNT(*) FROM pending_item_tags"
+        ).fetchone()[0]
+        assert tag_count == 2  # both tags carried over
+
+
+def test_audit_resume_skips_already_audited(client):
+    """Reloading mid-session: items the user already swiped right
+    on don't reappear in the deck, but items they haven't touched
+    do."""
+    client.post("/boxes", data={"name": "Drawer"})
+    _make_item(client, 1, "fork")
+    _make_item(client, 1, "spoon")
+    _make_item(client, 1, "knife")
+    client.post("/boxes/1/audit/start",
+                headers={"Accept": "application/json"})
+    # Confirm "fork" (id 1) — the other two should still be remaining.
+    client.post("/boxes/1/audit/items/1/present",
+                headers={"Accept": "application/json"})
+    page = client.get("/boxes/1/audit").text
+    # The remaining-cards deck should carry spoon + knife only.
+    deck_idx = page.find('data-audit-deck')
+    actions_idx = page.find('data-audit-actions')
+    assert deck_idx >= 0 and actions_idx > deck_idx
+    deck_html = page[deck_idx:actions_idx]
+    assert "spoon" in deck_html
+    assert "knife" in deck_html
+    # "fork" only appears in the no-JS <noscript> fallback list,
+    # not in the active swipe deck.
+    assert "fork" not in deck_html
+
+
+def test_audit_finish_clears_session_and_stamps_box(client):
+    """``/audit/finish`` writes last_audited_at and clears the
+    session start so a future Start resets cleanly."""
+    client.post("/boxes", data={"name": "Pantry"})
+    _make_item(client, 1, "rice")
+    client.post("/boxes/1/audit/start",
+                headers={"Accept": "application/json"})
+    r = client.post("/boxes/1/audit/finish",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT last_audited_at, last_audit_started_at "
+            "FROM boxes WHERE id = 1"
+        ).fetchone()
+    assert row["last_audited_at"], "last_audited_at not stamped"
+    assert row["last_audit_started_at"] is None, "session not cleared"
+
+
+def test_audit_swipe_endpoints_reject_cross_tenant(client):
+    """Forged item-id pointing at someone else's box must 404 —
+    the JOIN guard on the SQL keeps the swipe endpoints from
+    leaking cross-tenant."""
+    client.post("/boxes", data={"name": "Closet"})
+    _make_item(client, 1, "scarf")
+    r = client.post("/boxes/1/audit/items/999/present",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 404
+    r = client.post("/boxes/1/audit/items/999/missing",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 404

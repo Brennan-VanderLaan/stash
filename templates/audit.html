@@ -6,29 +6,362 @@
 {% endblock %}
 {% block content %}
 
-<div class="card">
-  <div class="card-title card-title-tight">Audit: {{ box.name }}</div>
-  <p class="text-sm text-muted">
-    Tick every item you find in the box. Unchecked items move to the sort queue.
+{# ──────────────────────────────────────────────────────────────────
+   Tinder-style swipe audit.  One card at a time, photo-first, with
+   three big always-visible action buttons so the user never has to
+   scroll to accept/reject.  Touch swipe (left = missing, right =
+   found) and keyboard (← → space) for accessibility.  Partial
+   progress survives reload via ``boxes.last_audit_started_at``.
+
+   ``items`` carries every item in the box for the no-JS fallback
+   form below (which is what the legacy bulk POST endpoint still
+   reads).  ``remaining`` is just the un-audited subset that the JS
+   path actually iterates over.
+   ────────────────────────────────────────────────────────────── #}
+
+<header class="audit-hero">
+  <h1 class="audit-hero-title">Audit: {{ box.name }}</h1>
+  <p class="audit-hero-sub">
+    Confirm what's still in the box.  Swipe right (or tap
+    <strong>✓ Found</strong>) to keep an item; swipe left (or tap
+    <strong>✗ Missing</strong>) to move it to the sort queue.
+    Your progress saves automatically.
   </p>
+  <div class="audit-progress" data-audit-progress
+       data-total="{{ total_count }}"
+       data-audited="{{ audited_count }}">
+    <div class="audit-progress-bar">
+      <div class="audit-progress-fill"
+           style="width: {{ (100 * audited_count / total_count) if total_count else 0 }}%"></div>
+    </div>
+    <div class="audit-progress-label">
+      <span data-audit-audited>{{ audited_count }}</span>
+      / {{ total_count }} audited
+      {% if session_started_at %}
+        <span class="text-muted text-sm">· resumed session</span>
+      {% endif %}
+    </div>
+  </div>
+</header>
+
+{% if not items %}
+<div class="card empty">No items to audit.</div>
+{% elif not session_started_at and audited_count == 0 %}
+{# Pre-start screen — gives the user a moment to grab the box,
+   and an explicit "Start audit" so the session timestamp is set
+   on the first action rather than the first page load. #}
+<div class="card audit-start-card">
+  <h2>Ready when you are.</h2>
+  <p>
+    {{ total_count }} item{{ '' if total_count == 1 else 's' }} to confirm.
+  </p>
+  <form method="post" action="/boxes/{{ box.id }}/audit/start">
+    <button type="submit" class="btn btn-primary btn-block btn-lg">
+      Start audit →
+    </button>
+  </form>
+</div>
+{% elif not remaining %}
+<div class="card audit-complete-card">
+  <h2>🎉 All audited.</h2>
+  <p>
+    {{ audited_count }} item{{ '' if audited_count == 1 else 's' }} confirmed.
+    Tap below to wrap up — the box's last-audited timestamp will be
+    stamped so you know when it last got attention.
+  </p>
+  <form method="post" action="/boxes/{{ box.id }}/audit/finish">
+    <button type="submit" class="btn btn-primary btn-block btn-lg">
+      Finish audit
+    </button>
+  </form>
+</div>
+{% else %}
+<div class="audit-deck" data-audit-deck data-box-id="{{ box.id }}">
+  {# Render every remaining card up front; JS rotates through them
+     so each ✓ / ✗ tap doesn't need a network round-trip to find
+     the next item.  The server still authoritatively tracks
+     audited-state via last_seen_at, so a reload picks up exactly
+     where the user left off. #}
+  {% for it in remaining %}
+  <article class="audit-card {% if loop.first %}is-active{% endif %}"
+           data-audit-card
+           data-item-id="{{ it.id }}"
+           data-item-name="{{ it.name }}">
+    {% if it.photo %}
+    <div class="audit-card-photo">
+      <img src="/uploads/{{ it.photo }}" alt="" loading="lazy">
+    </div>
+    {% else %}
+    <div class="audit-card-photo audit-card-photo-empty">
+      <span aria-hidden="true">📦</span>
+    </div>
+    {% endif %}
+    <div class="audit-card-body">
+      <h2 class="audit-card-name">{{ it.name }}</h2>
+      {% if it.notes %}
+      <p class="audit-card-notes">{{ it.notes }}</p>
+      {% endif %}
+      {% if it.last_seen_at %}
+      <p class="audit-card-meta text-muted text-sm">
+        Last seen {{ it.last_seen_at[:10] }}
+      </p>
+      {% endif %}
+    </div>
+    <div class="audit-card-stamps" aria-hidden="true">
+      <span class="audit-stamp audit-stamp-found">FOUND</span>
+      <span class="audit-stamp audit-stamp-missing">MISSING</span>
+    </div>
+  </article>
+  {% endfor %}
 </div>
 
-{% if items %}
-<form method="post" action="/boxes/{{ box.id }}/audit">
-  {% for it in items %}
-  <label class="audit-item" for="found-{{ it.id }}">
-    <input type="checkbox" id="found-{{ it.id }}" name="found" value="{{ it.id }}" checked>
-    {% if it.photo %}<img src="/thumbs/{{ it.photo }}" alt="" class="audit-thumb" loading="lazy">{% endif %}
-    <div>
-      <div class="item-name">{{ it.name }}</div>
-      {% if it.notes %}<div class="item-desc">{{ it.notes }}</div>{% endif %}
-    </div>
-  </label>
-  {% endfor %}
-  <button type="submit" class="btn btn-primary btn-block mt-2">Complete audit</button>
-</form>
-{% else %}
-<div class="card empty">No items to audit.</div>
+<div class="audit-actions" data-audit-actions>
+  <button type="button" class="btn btn-danger audit-action"
+          data-audit-action="missing"
+          aria-label="Missing (or press left arrow)">
+    <span class="audit-action-icon">✗</span>
+    <span class="audit-action-label">Missing</span>
+    <span class="audit-action-hint">←</span>
+  </button>
+  <button type="button" class="btn btn-secondary audit-action audit-action-skip"
+          data-audit-action="skip"
+          aria-label="Skip (or press down arrow)">
+    <span class="audit-action-icon">⤓</span>
+    <span class="audit-action-label">Skip</span>
+    <span class="audit-action-hint">↓</span>
+  </button>
+  <button type="button" class="btn btn-primary audit-action"
+          data-audit-action="present"
+          aria-label="Found (or press right arrow)">
+    <span class="audit-action-icon">✓</span>
+    <span class="audit-action-label">Found</span>
+    <span class="audit-action-hint">→</span>
+  </button>
+</div>
+{% endif %}
+
+{# No-JS fallback: the original bulk-checkbox form still works
+   exactly the way it used to.  Tests that scrape ``type="checkbox"``
+   keep passing; users on text-only browsers / scrapers / poor
+   connectivity still complete an audit in one POST. #}
+<noscript>
+  <div class="card mt-2">
+    <p class="text-sm text-muted">
+      JavaScript disabled — falling back to the bulk checklist form.
+    </p>
+    {% if items %}
+    <form method="post" action="/boxes/{{ box.id }}/audit">
+      {% for it in items %}
+      <label class="audit-item" for="found-{{ it.id }}">
+        <input type="checkbox" id="found-{{ it.id }}" name="found" value="{{ it.id }}" checked>
+        {% if it.photo %}<img src="/thumbs/{{ it.photo }}" alt="" class="audit-thumb" loading="lazy">{% endif %}
+        <div>
+          <div class="item-name">{{ it.name }}</div>
+          {% if it.notes %}<div class="item-desc">{{ it.notes }}</div>{% endif %}
+        </div>
+      </label>
+      {% endfor %}
+      <button type="submit" class="btn btn-primary btn-block mt-2">Complete audit</button>
+    </form>
+    {% endif %}
+  </div>
+</noscript>
+
+{% if remaining %}
+<script>
+(function() {
+  const deck = document.querySelector('[data-audit-deck]');
+  if (!deck) return;
+  const boxId = deck.dataset.boxId;
+  const cards = Array.from(deck.querySelectorAll('[data-audit-card]'));
+  const actions = document.querySelector('[data-audit-actions]');
+  const progress = document.querySelector('[data-audit-progress]');
+  const audited = progress ? progress.querySelector('[data-audit-audited]') : null;
+  const progressFill = progress ? progress.querySelector('.audit-progress-fill') : null;
+  const total = progress ? parseInt(progress.dataset.total, 10) : cards.length;
+  let auditedCount = progress ? parseInt(progress.dataset.audited, 10) : 0;
+
+  // ── Card iteration ────────────────────────────────────────────
+  let index = 0;
+
+  function activeCard() { return cards[index] || null; }
+
+  function paintActive() {
+    cards.forEach((c, i) => {
+      c.classList.toggle('is-active', i === index);
+      c.classList.toggle('is-stacked', i === index + 1);
+      c.classList.toggle('is-buried', i > index + 1);
+    });
+  }
+  paintActive();
+
+  function setBusy(busy) {
+    if (actions) actions.classList.toggle('is-busy', busy);
+  }
+
+  function bumpProgress(delta) {
+    auditedCount += delta;
+    if (audited) audited.textContent = auditedCount;
+    if (progressFill && total > 0) {
+      progressFill.style.width = (100 * auditedCount / total) + '%';
+    }
+  }
+
+  function showFinished() {
+    deck.innerHTML =
+      '<article class="audit-card is-active audit-card-finished">' +
+      '<div class="audit-card-body">' +
+      '<h2>🎉 All audited.</h2>' +
+      '<p class="text-sm text-muted">Tap Finish below to wrap up.</p>' +
+      '</div></article>';
+    if (actions) {
+      actions.innerHTML =
+        '<form method="post" action="/boxes/' + boxId + '/audit/finish" style="flex:1;">' +
+        '<button type="submit" class="btn btn-primary btn-block btn-lg">' +
+        'Finish audit' +
+        '</button></form>';
+    }
+  }
+
+  async function postAction(action, card) {
+    setBusy(true);
+    const itemId = card.dataset.itemId;
+    try {
+      const r = await fetch(
+        `/boxes/${boxId}/audit/items/${itemId}/${action}`,
+        {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+        },
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function animateOut(card, direction) {
+    return new Promise(resolve => {
+      const tx = direction === 'right' ? '120%' : (direction === 'left' ? '-120%' : '0');
+      const rot = direction === 'right' ? '14deg' : (direction === 'left' ? '-14deg' : '0deg');
+      const ty = direction === 'down' ? '120%' : '0';
+      card.style.transition = 'transform 220ms ease-out, opacity 220ms ease-out';
+      card.style.transform = `translate(${tx}, ${ty}) rotate(${rot})`;
+      card.style.opacity = '0';
+      setTimeout(() => {
+        card.classList.add('is-gone');
+        card.style.transition = '';
+        resolve();
+      }, 230);
+    });
+  }
+
+  async function commit(action) {
+    const card = activeCard();
+    if (!card) return;
+    const direction = action === 'present' ? 'right'
+                    : action === 'missing' ? 'left'
+                    : 'down';
+    if (action !== 'skip') {
+      try {
+        await postAction(action, card);
+        bumpProgress(1);
+      } catch (err) {
+        alert('Audit save failed: ' + (err.message || err));
+        return;
+      }
+    }
+    await animateOut(card, direction);
+    index += 1;
+    if (index >= cards.length) {
+      showFinished();
+      return;
+    }
+    paintActive();
+  }
+
+  // ── Button bindings ───────────────────────────────────────────
+  if (actions) {
+    actions.querySelectorAll('[data-audit-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (actions.classList.contains('is-busy')) return;
+        commit(btn.dataset.auditAction);
+      });
+    });
+  }
+
+  // ── Keyboard shortcuts ────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); commit('present'); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); commit('missing'); }
+    else if (e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); commit('skip'); }
+  });
+
+  // ── Touch + mouse swipe ───────────────────────────────────────
+  // Pointer Events covers both touch and mouse uniformly.  We track
+  // the active card's translate as the user drags; on release, if
+  // the absolute horizontal offset crosses the threshold (or the
+  // velocity is high), we commit the corresponding action.  Under
+  // the threshold the card snaps back to centre.
+  const SWIPE_THRESHOLD = 110;          // px
+  const SWIPE_VELOCITY = 0.6;           // px/ms at release
+  let drag = null;
+
+  function onDown(e) {
+    const card = activeCard();
+    if (!card) return;
+    drag = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      startT: performance.now(),
+      lastX: e.clientX,
+      lastT: performance.now(),
+      card: card,
+    };
+    card.setPointerCapture(e.pointerId);
+    card.style.transition = 'none';
+  }
+
+  function onMove(e) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    drag.lastX = e.clientX;
+    drag.lastT = performance.now();
+    drag.card.style.transform =
+      `translate(${dx}px, ${dy * 0.3}px) rotate(${dx / 12}deg)`;
+    const intent = Math.max(-1, Math.min(1, dx / SWIPE_THRESHOLD));
+    drag.card.classList.toggle('intent-right', intent > 0.4);
+    drag.card.classList.toggle('intent-left', intent < -0.4);
+  }
+
+  function onUp(e) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const dx = e.clientX - drag.startX;
+    const velocity = (e.clientX - drag.startX) /
+      Math.max(1, performance.now() - drag.startT);
+    const card = drag.card;
+    drag = null;
+    card.style.transition = '';
+    card.classList.remove('intent-right', 'intent-left');
+    if (dx > SWIPE_THRESHOLD || velocity > SWIPE_VELOCITY) {
+      commit('present');
+    } else if (dx < -SWIPE_THRESHOLD || velocity < -SWIPE_VELOCITY) {
+      commit('missing');
+    } else {
+      card.style.transform = '';
+    }
+  }
+
+  deck.addEventListener('pointerdown', onDown);
+  deck.addEventListener('pointermove', onMove);
+  deck.addEventListener('pointerup', onUp);
+  deck.addEventListener('pointercancel', onUp);
+})();
+</script>
 {% endif %}
 
 {% endblock %}

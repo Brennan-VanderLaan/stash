@@ -745,6 +745,216 @@ main.main-wide {
   margin-bottom: 0.75rem;
 }
 
+/* === /audit Tinder-style swipe ===
+   One card at a time, photo-first, three always-visible action
+   buttons so accept/reject is never below the fold.  Cards stack
+   visually (next card peeks behind the active one) for the "deck"
+   feel.  Drag offsets are set inline by the swipe JS; the CSS
+   transitions return cards to centre on release. */
+.audit-hero {
+  margin-bottom: 0.85rem;
+  padding: 0.9rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.audit-hero-title {
+  margin: 0 0 0.3rem;
+  font-size: 1.2rem;
+  color: var(--accent);
+}
+.audit-hero-sub {
+  margin: 0 0 0.6rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+  max-width: 60ch;
+}
+.audit-progress { margin-top: 0.4rem; }
+.audit-progress-bar {
+  height: 6px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+.audit-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease-out;
+}
+.audit-progress-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-start-card, .audit-complete-card {
+  text-align: center;
+  padding: 1.6rem 1.2rem;
+}
+.audit-start-card h2, .audit-complete-card h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.3rem;
+  color: var(--accent);
+}
+
+/* The card deck: position relative so each card sits on top of the
+   next.  Min-height ensures the swipe area is generous on phones
+   even when the photo is small. */
+.audit-deck {
+  position: relative;
+  margin: 0 auto 1rem;
+  width: 100%;
+  max-width: 460px;
+  min-height: 460px;
+  touch-action: pan-y;  /* allow vertical page scroll but let JS
+                          handle horizontal drag */
+}
+.audit-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  user-select: none;
+  cursor: grab;
+  transform: translateY(8px) scale(0.97);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.audit-card.is-active {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
+}
+.audit-card.is-stacked {
+  transform: translateY(8px) scale(0.97);
+  opacity: 0.6;
+  z-index: 1;
+}
+.audit-card.is-buried {
+  opacity: 0;
+  z-index: 0;
+}
+.audit-card.is-gone { display: none; }
+
+.audit-card-photo {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.audit-card-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.audit-card-photo-empty {
+  font-size: 4rem;
+  color: var(--muted);
+  background: var(--panel-2);
+}
+.audit-card-body {
+  padding: 0.85rem 1rem 0.9rem;
+  background: var(--panel);
+}
+.audit-card-name {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--text);
+}
+.audit-card-notes {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.audit-card-meta { margin: 0.4rem 0 0; }
+
+/* Stamps that fade in based on drag intent — purely visual hint. */
+.audit-card-stamps {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.audit-stamp {
+  position: absolute;
+  top: 1.2rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  border-radius: var(--radius-sm);
+  border: 4px solid currentColor;
+  opacity: 0;
+  transform: rotate(-12deg);
+  transition: opacity 0.12s;
+  text-transform: uppercase;
+}
+.audit-stamp-found {
+  right: 1rem;
+  color: #22c55e;
+  transform: rotate(-15deg);
+}
+.audit-stamp-missing {
+  left: 1rem;
+  color: #ef4444;
+  transform: rotate(15deg);
+}
+.audit-card.intent-right .audit-stamp-found { opacity: 1; }
+.audit-card.intent-left .audit-stamp-missing { opacity: 1; }
+.audit-card-finished {
+  position: static;
+  text-align: center;
+  padding: 2rem 1.2rem;
+  transform: none;
+  opacity: 1;
+}
+
+/* Always-visible action bar — never below the fold. */
+.audit-actions {
+  position: sticky;
+  bottom: calc(var(--safe-bottom, 0) + 0.5rem);
+  display: grid;
+  grid-template-columns: 1fr 0.6fr 1fr;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 30;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.25);
+}
+.audit-actions.is-busy { opacity: 0.6; pointer-events: none; }
+.audit-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.7rem 0.5rem;
+}
+.audit-action-icon { font-size: 1.4rem; line-height: 1; }
+.audit-action-label { font-size: 0.85rem; font-weight: 600; }
+.audit-action-hint {
+  font-size: 0.7rem;
+  opacity: 0.5;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+@media (max-width: 640px) {
+  .audit-deck { min-height: 60vh; }
+  .audit-action-hint { display: none; }
+}
+
 /* === /ingest facelift ===
    Lead with the primary action (Take photo / From gallery as big
    icon-and-label cards), keep detection scope as visible secondary

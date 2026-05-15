@@ -377,3 +377,160 @@ def clear_background_art(actor: Actor, box_id: int) -> str | None:
         )
         conn.commit()
     return row["background_art"]
+
+
+# ── Tinder-style swipe audit ───────────────────────────────────────
+
+
+def _audit_resolve_box(conn, box_id: int, tenant_id: int):
+    """Look up + tenant-verify a box for the audit endpoints.
+    Returns the row dict or raises NotFoundError."""
+    row = conn.execute(
+        "SELECT id, name, tenant_id, last_audit_started_at "
+        "FROM boxes WHERE id = ? AND tenant_id = ?",
+        (box_id, tenant_id),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError(f"box {box_id}")
+    return row
+
+
+def audit_session_remaining(actor: Actor, box_id: int) -> list[dict]:
+    """Items in ``box_id`` that haven't been audited in the current
+    session.  When no session is running every item is "remaining".
+
+    String compare on ``last_seen_at >= started_at`` is safe because
+    SQLite's ``CURRENT_TIMESTAMP`` always produces
+    ``YYYY-MM-DD HH:MM:SS``, which is lex-sortable."""
+    if actor.tenant_id is None:
+        raise NotFoundError(f"box {box_id}")
+    with db() as conn:
+        box = _audit_resolve_box(conn, box_id, actor.tenant_id)
+        started_at = box["last_audit_started_at"]
+        if started_at:
+            rows = conn.execute(
+                "SELECT id, name, notes, photo, last_seen_at FROM items "
+                "WHERE box_id = ? AND tenant_id = ? "
+                "  AND (last_seen_at IS NULL OR last_seen_at < ?) "
+                "ORDER BY name COLLATE NOCASE",
+                (box_id, actor.tenant_id, started_at),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, notes, photo, last_seen_at FROM items "
+                "WHERE box_id = ? AND tenant_id = ? "
+                "ORDER BY name COLLATE NOCASE",
+                (box_id, actor.tenant_id),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def audit_session_start(actor: Actor, box_id: int) -> None:
+    """Begin (or restart) an audit session.  Idempotent on the
+    "already running" case — Start while running resets the
+    session timestamp, which matches user expectations when
+    they reopen the page in a fresh state."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"box {box_id}")
+    with db() as conn:
+        _audit_resolve_box(conn, box_id, actor.tenant_id)
+        conn.execute(
+            "UPDATE boxes SET last_audit_started_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND tenant_id = ?",
+            (box_id, actor.tenant_id),
+        )
+        conn.commit()
+    _log.info("audit.start box_id=%s by=%s", box_id, actor.email)
+
+
+def audit_mark_present(actor: Actor, box_id: int, item_id: int) -> int:
+    """Mark one item as found-in-the-box this session.  Stamps
+    ``items.last_seen_at = now`` so the remaining-items query
+    drops it.  Returns the remaining count after the update."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"item {item_id} not in box {box_id}")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT i.id FROM items i "
+            "JOIN boxes b ON b.id = i.box_id "
+            "WHERE i.id = ? AND i.box_id = ? "
+            "  AND b.tenant_id = ?",
+            (item_id, box_id, actor.tenant_id),
+        ).fetchone()
+        if not row:
+            raise NotFoundError(f"item {item_id} not in box {box_id}")
+        conn.execute(
+            "UPDATE items SET last_seen_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+    return len(audit_session_remaining(actor, box_id))
+
+
+def audit_mark_missing(
+    actor: Actor, box_id: int, item_id: int,
+) -> tuple[int, int]:
+    """Mark one item as missing.  Moves it to the sort queue with
+    provenance (``previous_box_name``) + tags preserved, then
+    deletes the items row.  Returns ``(remaining_count, pending_id)``
+    so the caller can link to the just-created queue row."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"item {item_id} not in box {box_id}")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT i.id, i.name, i.notes, i.photo, b.name AS box_name, "
+            "       b.tenant_id "
+            "FROM items i "
+            "JOIN boxes b ON b.id = i.box_id "
+            "WHERE i.id = ? AND i.box_id = ? "
+            "  AND b.tenant_id = ?",
+            (item_id, box_id, actor.tenant_id),
+        ).fetchone()
+        if not row:
+            raise NotFoundError(f"item {item_id} not in box {box_id}")
+        tenant_id = row["tenant_id"] or actor.tenant_id
+        cur = conn.execute(
+            "INSERT INTO pending_items "
+            "(name, description, photo, previous_box_name, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row["name"], row["notes"], row["photo"],
+             row["box_name"], tenant_id),
+        )
+        pending_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO pending_item_tags "
+            "(pending_item_id, tag_id, value, tenant_id) "
+            "SELECT ?, tag_id, value, ? FROM item_tags WHERE item_id = ?",
+            (pending_id, tenant_id, item_id),
+        )
+        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.commit()
+    _log.info(
+        "audit.missing box_id=%s item_id=%s pending_id=%s by=%s",
+        box_id, item_id, pending_id, actor.email,
+    )
+    return len(audit_session_remaining(actor, box_id)), pending_id
+
+
+def audit_session_finish(actor: Actor, box_id: int) -> None:
+    """Wrap up an audit session: stamp ``last_audited_at = now`` +
+    clear ``last_audit_started_at``.  Items still un-audited stay
+    in the box — finishing is "I'm done", not "auto-flag the rest
+    as missing"."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"box {box_id}")
+    with db() as conn:
+        _audit_resolve_box(conn, box_id, actor.tenant_id)
+        conn.execute(
+            "UPDATE boxes SET last_audited_at = CURRENT_TIMESTAMP, "
+            "                  last_audit_started_at = NULL "
+            "WHERE id = ? AND tenant_id = ?",
+            (box_id, actor.tenant_id),
+        )
+        conn.commit()
+    _log.info("audit.finish box_id=%s by=%s", box_id, actor.email)

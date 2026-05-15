@@ -1320,6 +1320,13 @@ def migrate_db():
         _add_column_if_missing(
             conn, "tenants", "subscription_current_period_end", "TEXT",
         )
+        # Audit session start timestamp.  The Tinder-style swipe UI
+        # at /boxes/{id}/audit lets a user pause + resume — we know
+        # an item has been audited in the current session if its
+        # ``items.last_seen_at`` is >= this column.  Stamped on
+        # "Start audit"; cleared on "Finish".  No separate audit
+        # session table needed.
+        _add_column_if_missing(conn, "boxes", "last_audit_started_at", "TEXT")
         # Packing-session hint (carried from /ingest's box picker).
         # The session lives entirely in the page form — leave the
         # /ingest page or reload it and there's no session to clean
@@ -2526,18 +2533,107 @@ async def bulk_move_items(request: Request, box_id: int):
 
 @app.get("/boxes/{box_id}/audit", response_class=HTMLResponse)
 def audit_box(request: Request, box_id: int):
+    """Tinder-style swipe audit.  Each item gets a full-screen card;
+    the user swipes right for "found" or left for "missing", with
+    keyboard + button alternatives.  Partial progress persists via
+    ``boxes.last_audit_started_at`` so the user can pause + resume.
+
+    The page renders a no-JS fallback that posts the legacy bulk
+    form for accessibility + scraper-safety."""
     actor: Actor = request.state.actor
     try:
         box = dao_boxes.get_by_id(actor, box_id)
+        remaining = dao_boxes.audit_session_remaining(actor, box_id)
     except NotFoundError:
         raise HTTPException(404)
-    items = sorted(
+    all_items = sorted(
         dao_items.list_for_box(actor, box_id),
         key=lambda it: (it["name"] or ""),
     )
+    started_at = box.get("last_audit_started_at")
     return templates.TemplateResponse(
-        request, "audit.html", {"box": box, "items": items}
+        request, "audit.html",
+        {
+            "box": box,
+            "items": all_items,
+            "remaining": remaining,
+            "audited_count": len(all_items) - len(remaining),
+            "total_count": len(all_items),
+            "session_started_at": started_at,
+        },
     )
+
+
+@app.post("/boxes/{box_id}/audit/start")
+def audit_session_start(request: Request, box_id: int):
+    """Begin (or restart) an audit session.  Idempotent on the
+    'already running' case — Start while running resets the session
+    timestamp, matching user expectation when they reopen the page."""
+    actor: Actor = request.state.actor
+    try:
+        dao_boxes.audit_session_start(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if _wants_json(request):
+        return {"ok": True, "box_id": box_id}
+    return RedirectResponse(
+        f"/boxes/{box_id}/audit", status_code=303,
+    )
+
+
+@app.post("/boxes/{box_id}/audit/items/{item_id}/present")
+def audit_mark_present(request: Request, box_id: int, item_id: int):
+    """Mark one item as found-in-the-box.  Returns JSON for the
+    swipe UI to advance to the next card without a reload."""
+    actor: Actor = request.state.actor
+    try:
+        remaining = dao_boxes.audit_mark_present(actor, box_id, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if _wants_json(request):
+        return {"ok": True, "remaining": remaining}
+    return RedirectResponse(
+        f"/boxes/{box_id}/audit", status_code=303,
+    )
+
+
+@app.post("/boxes/{box_id}/audit/items/{item_id}/missing")
+def audit_mark_missing(request: Request, box_id: int, item_id: int):
+    """Mark one item as missing from the box.  Moves it to the sort
+    queue with provenance + tags preserved."""
+    actor: Actor = request.state.actor
+    try:
+        remaining, pending_id = dao_boxes.audit_mark_missing(
+            actor, box_id, item_id,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if _wants_json(request):
+        return {"ok": True, "remaining": remaining,
+                "pending_id": pending_id}
+    return RedirectResponse("/queue", status_code=303)
+
+
+@app.post("/boxes/{box_id}/audit/finish")
+def audit_session_finish(request: Request, box_id: int):
+    """Wrap up an audit session.  Stamps ``last_audited_at`` +
+    clears the session start so a future Start resets cleanly."""
+    actor: Actor = request.state.actor
+    try:
+        dao_boxes.audit_session_finish(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    if _wants_json(request):
+        return {"ok": True, "box_id": box_id}
+    return RedirectResponse(f"/boxes/{box_id}", status_code=303)
 
 
 @app.post("/boxes/{box_id}/audit")
