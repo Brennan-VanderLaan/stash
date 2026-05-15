@@ -669,11 +669,18 @@ async def current_actor(request: Request, call_next):
                 headers=headers,
             )
         actor_email = f"api_token:{token_row['id']}"
+        # Honour operator status on bearer-auth too: a token minted
+        # by an operator email (see _OPERATOR_EMAILS) carries that
+        # operator scope on every request.  This is what lets the
+        # operator-MCP tools work from an MCP client that authn's
+        # with the same api_token surface as the tenant tools.
+        creator = (token_row.get("created_by_email") or "").strip().lower()
+        token_is_operator = bool(creator) and creator in _OPERATOR_EMAILS
         request.state.actor = Actor(
             email=actor_email,
             tenant_id=token_row["tenant_id"],
             role=token_row["role"],
-            is_operator=False,
+            is_operator=token_is_operator,
             memberships=((token_row["tenant_id"], token_row["role"]),),
             shares=(),
         )
@@ -4593,6 +4600,73 @@ def submit_feedback(
     if _wants_json(request):
         return {"ok": True, "feedback_id": feedback_id}
     return RedirectResponse(source_url or "/", status_code=303)
+
+
+_FEEDBACK_EXPORT_COLUMNS = (
+    "id", "status", "tenant_id", "tenant_name", "actor_email",
+    "body", "source_url", "user_agent", "viewport_w", "viewport_h",
+    "screenshot", "operator_notes", "created_at", "resolved_at",
+    "resolved_by",
+)
+
+
+@app.get("/admin/feedback/export")
+def admin_feedback_export(request: Request):
+    """Operator-only export of the feedback queue for offline
+    triage (paste into a chat with an AI assistant, drop into a
+    spreadsheet, whatever).  ``format=json`` returns a structured
+    list; ``format=csv`` returns a spreadsheet-friendly dump.
+    ``status=open|accepted|rejected|done`` filters; default ``all``.
+
+    Screenshot bytes don't ride along — the column carries the
+    filename, fetch the actual image via
+    ``/admin/feedback/{id}/screenshot`` when needed.  Keeps the
+    export size predictable so a big queue doesn't blow the
+    download."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    fmt = (request.query_params.get("format") or "json").lower()
+    status = request.query_params.get("status") or None
+    if status == "all":
+        status = None
+    rows = dao_feedback.list_for_operator(status=status, limit=500)
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    if fmt == "csv":
+        import csv
+        import io as _io
+        buf = _io.StringIO()
+        writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(_FEEDBACK_EXPORT_COLUMNS)
+        for r in rows:
+            writer.writerow([r.get(c, "") for c in _FEEDBACK_EXPORT_COLUMNS])
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="stash-feedback-{stamp}.csv"',
+            },
+        )
+    # JSON default.
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": actor.email,
+        "filter": {"status": status or "all"},
+        "count": len(rows),
+        "feedback": [
+            {c: r.get(c) for c in _FEEDBACK_EXPORT_COLUMNS}
+            for r in rows
+        ],
+    }
+    return Response(
+        content=json.dumps(payload, indent=2, default=str),
+        media_type="application/json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="stash-feedback-{stamp}.json"',
+        },
+    )
 
 
 @app.get("/admin/feedback/{feedback_id}/screenshot")

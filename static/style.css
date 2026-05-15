@@ -677,6 +677,13 @@ main.main-wide {
   gap: 0.25rem;
   flex-wrap: wrap;
 }
+.feedback-export-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
 /* Same when the title is followed by a short sub-headline / description —
    keep them visually paired with a tight gap. */
 .card-title-tight { margin-bottom: 0.25rem; }

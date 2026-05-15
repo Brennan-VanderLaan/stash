@@ -40,6 +40,7 @@ from dao import (
     NotFoundError,
 )
 from dao import boxes as dao_boxes
+from dao import feedback as dao_feedback
 from dao import floors as dao_floors
 from dao import items as dao_items
 from dao import locations as dao_locations
@@ -921,6 +922,143 @@ def _tool_remove_tag(actor: Actor, item_id: int, tag_id: int) -> dict:
 def _tool_mark_missing(actor: Actor, item_id: int) -> dict:
     dao_items.mark_missing(actor, item_id, True)
     return {"ok": True, "item_id": item_id, "is_missing": True}
+
+
+# ── Operator-scoped tools (admin_*) ────────────────────────────────
+#
+# These mirror the operator surface on /admin so an AI assistant
+# authenticated with an operator-minted api_token can read + triage
+# the feedback queue without a copy-paste round trip.  Every
+# operator tool gates on ``actor.is_operator`` and returns a
+# structured tool-error for non-operators rather than a transport
+# 401 — that way a non-operator client can still call
+# ``tools/list`` and see what's available.
+
+
+def _require_operator(actor: Actor) -> dict | None:
+    """Return a tool-error dict when the actor isn't an operator,
+    or ``None`` to proceed.  Tools call this at the top so the
+    error path is one consistent shape."""
+    if not actor.is_operator:
+        return _tool_text_result(
+            "Operator-only tool.  Bearer token must be minted by an "
+            "email listed in STASH_OPERATOR_EMAILS.",
+            is_error=True,
+        )
+    return None
+
+
+@_tool(
+    "admin_list_feedback",
+    description=(
+        "Operator-only.  List in-app feedback rows, optionally "
+        "filtered by status (open / accepted / rejected / done)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["open", "accepted", "rejected", "done", "all"],
+                "description": "Filter by status; 'all' returns every row.",
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+        },
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_list_feedback(actor: Actor,
+                              status: str = "open",
+                              limit: int = 100) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    rows = dao_feedback.list_for_operator(
+        status=None if status == "all" else status,
+        limit=max(1, min(int(limit), 500)),
+    )
+    return {
+        "ok": True,
+        "filter": {"status": status},
+        "count": len(rows),
+        "feedback": rows,
+    }
+
+
+@_tool(
+    "admin_get_feedback",
+    description="Operator-only.  Fetch a single feedback row by id.",
+    input_schema={
+        "type": "object",
+        "properties": {"feedback_id": {"type": "integer"}},
+        "required": ["feedback_id"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_get_feedback(actor: Actor, feedback_id: int) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    row = dao_feedback.get(int(feedback_id))
+    return {"ok": True, "feedback": row}
+
+
+@_tool(
+    "admin_set_feedback_status",
+    description=(
+        "Operator-only.  Transition a feedback row to "
+        "accepted / rejected / done / open.  Optional notes append "
+        "to operator_notes; resolved_by stamps with the operator's "
+        "email."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "feedback_id": {"type": "integer"},
+            "status": {
+                "type": "string",
+                "enum": ["open", "accepted", "rejected", "done"],
+            },
+            "notes": {"type": "string"},
+        },
+        "required": ["feedback_id", "status"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_set_feedback_status(
+    actor: Actor, feedback_id: int, status: str,
+    notes: str | None = None,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    # ``actor.email`` for bearer auth is ``api_token:<id>`` — record
+    # that as the operator identity so the resolved_by column traces
+    # back to the actual token that made the call.
+    updated = dao_feedback.set_status(
+        int(feedback_id), status,
+        operator_email=actor.email or "operator",
+        notes=(notes or "").strip() or None,
+    )
+    return {"ok": True, "feedback": updated}
+
+
+@_tool(
+    "admin_feedback_counts",
+    description=(
+        "Operator-only.  Per-status counts for the feedback queue "
+        "(open / accepted / rejected / done).  Cheap call; safe to "
+        "poll if an agent wants to wait for new submissions."
+    ),
+    input_schema={
+        "type": "object", "properties": {}, "additionalProperties": False,
+    },
+)
+def _tool_admin_feedback_counts(actor: Actor) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    return {"ok": True, "counts": dao_feedback.queue_counts()}
 
 
 # ── Resources ──────────────────────────────────────────────────────

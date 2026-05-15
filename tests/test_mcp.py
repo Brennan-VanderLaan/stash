@@ -743,3 +743,139 @@ def test_unknown_method_returns_rpc_error(tmp_path, monkeypatch):
         body = _rpc(c, _headers(token), method="not_a_real_method")
     assert "error" in body
     assert body["error"]["code"] == -32601
+
+
+# ── Operator MCP tools (admin_*) ────────────────────────────────────
+
+
+def _insert_feedback(app_mod, tenant_id: int, body: str,
+                     actor_email: str = "me@t1.example") -> int:
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO feedback (tenant_id, actor_email, body) "
+            "VALUES (?, ?, ?)",
+            (tenant_id, actor_email, body),
+        )
+        fb_id = cur.lastrowid
+        conn.commit()
+    return fb_id
+
+
+def test_admin_tools_visible_in_tools_list(tmp_path, monkeypatch):
+    """``tools/list`` enumerates the operator surface alongside the
+    tenant tools.  Non-operator clients see them too — calling them
+    is what surfaces the auth failure."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    token = _mint(app_mod, ids["t1"], "me@t1.example")
+    with TestClient(app_mod.app) as c:
+        body = _rpc(c, _headers(token), method="tools/list")
+    names = {t["name"] for t in body["result"]["tools"]}
+    assert {"admin_list_feedback", "admin_get_feedback",
+            "admin_set_feedback_status",
+            "admin_feedback_counts"}.issubset(names)
+
+
+def test_admin_tools_blocked_for_non_operator(tmp_path, monkeypatch):
+    """A bearer minted by a non-operator email gets a tool-error
+    (not a transport 401) so the client can render a clean
+    'operator-only' message instead of dying at the wire."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    token = _mint(app_mod, ids["t1"], "me@t1.example")
+    _insert_feedback(app_mod, ids["t1"], "needs fixing")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_list_feedback")
+    assert body["result"]["isError"] is True
+    txt = body["result"]["content"][0]["text"]
+    assert "operator" in txt.lower()
+
+
+def test_admin_list_feedback_for_operator_returns_rows(tmp_path, monkeypatch):
+    """Operator-minted token unlocks the queue read."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    # Sole maintainer of T1 for the ops email so api_tokens.create
+    # has somewhere to bind.
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    _insert_feedback(app_mod, ids["t1"], "first issue")
+    _insert_feedback(app_mod, ids["t1"], "second issue")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_list_feedback")
+    payload = _result_json(body)
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    bodies = sorted(fb["body"] for fb in payload["feedback"])
+    assert bodies == ["first issue", "second issue"]
+
+
+def test_admin_set_feedback_status_via_mcp(tmp_path, monkeypatch):
+    """An operator MCP client can flip a row to accepted; the DB
+    update is observable and resolved_by carries the token's
+    synthetic actor email."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    fb_id = _insert_feedback(app_mod, ids["t1"], "fix this")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(
+            c, _headers(token),
+            "admin_set_feedback_status",
+            {"feedback_id": fb_id, "status": "accepted",
+             "notes": "queued for next sprint"},
+        )
+    payload = _result_json(body)
+    assert payload["ok"] is True
+    assert payload["feedback"]["status"] == "accepted"
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT status, resolved_by, operator_notes "
+            "FROM feedback WHERE id = ?",
+            (fb_id,),
+        ).fetchone()
+    assert row["status"] == "accepted"
+    # resolved_by stamps with the synthetic api_token:N actor email
+    # so the audit trail traces back to a specific token.
+    assert row["resolved_by"].startswith("api_token:")
+    assert row["operator_notes"] == "queued for next sprint"
+
+
+def test_admin_feedback_counts_returns_per_status(tmp_path, monkeypatch):
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    _insert_feedback(app_mod, ids["t1"], "one")
+    _insert_feedback(app_mod, ids["t1"], "two")
+    with TestClient(app_mod.app) as c:
+        # Move one row to accepted so we can see two buckets.
+        _tool_call(c, _headers(token), "admin_set_feedback_status",
+                   {"feedback_id": 1, "status": "accepted"})
+        body = _tool_call(c, _headers(token), "admin_feedback_counts")
+    payload = _result_json(body)
+    assert payload["counts"]["open"] == 1
+    assert payload["counts"]["accepted"] == 1

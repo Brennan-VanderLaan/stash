@@ -206,6 +206,78 @@ def test_admin_feedback_screenshot_decrypts(client, monkeypatch):
     assert r.content == plaintext
 
 
+def test_admin_feedback_export_json(client, monkeypatch):
+    """JSON export carries every feedback row + an exported_at
+    timestamp + a count.  Used by the operator's offline triage
+    flow (paste into a chat with an AI assistant)."""
+    client.post(
+        "/feedback", data={"body": "needs fixing"},
+        headers={"Accept": "application/json"},
+    )
+    client.post(
+        "/feedback", data={"body": "another one"},
+        headers={"Accept": "application/json"},
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    r = client.get("/admin/feedback/export?format=json")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/json"
+    assert "attachment" in r.headers["content-disposition"]
+    payload = json.loads(r.content)
+    assert payload["count"] == 2
+    assert payload["exported_by"] == "test@example.com"
+    bodies = sorted(fb["body"] for fb in payload["feedback"])
+    assert bodies == ["another one", "needs fixing"]
+
+
+def test_admin_feedback_export_csv(client, monkeypatch):
+    client.post(
+        "/feedback", data={"body": "spreadsheet please"},
+        headers={"Accept": "application/json"},
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    r = client.get("/admin/feedback/export?format=csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    body = r.content.decode()
+    assert body.splitlines()[0].startswith("id,status,tenant_id")
+    assert "spreadsheet please" in body
+
+
+def test_admin_feedback_export_status_filter(client, monkeypatch):
+    client.post(
+        "/feedback", data={"body": "first"},
+        headers={"Accept": "application/json"},
+    )
+    client.post(
+        "/feedback", data={"body": "second"},
+        headers={"Accept": "application/json"},
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    client.post(
+        "/admin/feedback/1/status", data={"status": "done"},
+        follow_redirects=False,
+    )
+    r = client.get("/admin/feedback/export?status=open&format=json")
+    payload = json.loads(r.content)
+    assert payload["count"] == 1
+    assert payload["feedback"][0]["body"] == "second"
+
+
+def test_admin_feedback_export_404_for_non_operator(client):
+    r = client.get("/admin/feedback/export")
+    assert r.status_code == 404  # opaque, per /admin convention
+
+
 def test_non_operator_cannot_view_feedback_screenshot(client):
     """A regular member must not be able to read other tenants'
     screenshots through /admin (also a 404 — the /admin family

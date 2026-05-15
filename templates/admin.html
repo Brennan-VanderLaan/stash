@@ -417,6 +417,15 @@
     by setting each row's status — Accepted = "we'll fix it",
     Rejected = "won't fix", Done = "shipped".
   </p>
+  <div class="feedback-export-row">
+    <span class="text-sm text-muted">Export queue:</span>
+    <a href="/admin/feedback/export?format=json"
+       class="btn btn-secondary btn-sm" download>JSON</a>
+    <a href="/admin/feedback/export?format=csv"
+       class="btn btn-secondary btn-sm" download>CSV</a>
+    <a href="/admin/feedback/export?format=json&status=open"
+       class="btn btn-secondary btn-sm" download>Open only (JSON)</a>
+  </div>
   {% if feedback_queue %}
   {% for fb in feedback_queue %}
   <div class="feedback-queue-row">

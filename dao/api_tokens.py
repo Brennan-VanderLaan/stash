@@ -167,7 +167,7 @@ def authenticate(
     with db() as conn:
         row = conn.execute(
             "SELECT id, tenant_id, role, name, audience, expires_at, "
-            "       oauth_client_id "
+            "       oauth_client_id, created_by_email "
             "FROM api_tokens "
             "WHERE token_hash = ? "
             "  AND revoked_at IS NULL "
