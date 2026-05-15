@@ -745,6 +745,171 @@ main.main-wide {
   margin-bottom: 0.75rem;
 }
 
+/* === /ingest facelift ===
+   Lead with the primary action (Take photo / From gallery as big
+   icon-and-label cards), keep detection scope as visible secondary
+   control, hide packing-into behind a disclosure since it's
+   optional and used in <10% of sessions.  No more wide-but-
+   left-justified column. */
+.ingest-hero {
+  background: linear-gradient(140deg, var(--panel) 0%, var(--panel-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.25rem 0.9rem;
+  margin-bottom: 1rem;
+}
+.ingest-hero-head { margin-bottom: 1rem; }
+.ingest-hero-title {
+  font-size: 1.4rem;
+  margin: 0 0 0.3rem;
+  color: var(--accent);
+}
+.ingest-hero-sub {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--muted);
+  max-width: 60ch;
+}
+.ingest-cta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.ingest-upload { display: contents; }
+.ingest-cta-button {
+  display: flex !important;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  cursor: pointer;
+  min-height: 70px;
+}
+.ingest-cta-icon {
+  font-size: 1.6rem;
+  flex: 0 0 auto;
+}
+.ingest-cta-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  line-height: 1.15;
+}
+.ingest-cta-label strong { font-size: 1rem; }
+.ingest-cta-label small { font-size: 0.78rem; opacity: 0.75; }
+
+.ingest-scope {
+  border: 0;
+  padding: 0;
+  margin: 0 0 0.85rem;
+}
+.ingest-scope-legend {
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+.ingest-scope-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.4rem;
+}
+.ingest-scope-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ingest-scope-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.ingest-scope-option:hover { border-color: var(--accent); }
+.ingest-scope-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.ingest-scope-option-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.ingest-scope-option-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ingest-scope-option:has(input:checked) .ingest-scope-option-title {
+  color: var(--accent);
+}
+
+.ingest-packing {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.ingest-packing-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  list-style: none;
+}
+.ingest-packing-summary::-webkit-details-marker { display: none; }
+.ingest-packing-summary::after {
+  content: "▾";
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+}
+.ingest-packing[open] .ingest-packing-summary::after { content: "▴"; }
+.ingest-packing-summary-label small { color: var(--muted); font-weight: normal; }
+.ingest-packing-current {
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+.ingest-packing-body {
+  padding: 0 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.ingest-packing-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.ingest-packing-field select { width: 100%; font-size: 0.9rem; }
+.ingest-packing-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+.ingest-packing-banner[hidden] { display: none; }
+
+.ingest-jobs-section { margin-top: 0.5rem; }
+
 /* === /admin dashboard facelift ===
    Modern dashboard pattern: hero KPI strip, sticky anchor TOC,
    section cards in priority order (feedback first because it's

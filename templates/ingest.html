@@ -2,150 +2,125 @@
 {% block title %}Ingest · Stash{% endblock %}
 {% block content %}
 
-<div class="card">
-  <div class="card-title">Ingest a pile</div>
-  <p class="text-sm text-muted mb-2">
-    Snap a photo — Claude spots every item and queues them for sorting.
-  </p>
+{# ──────────────────────────────────────────────────────────────────
+   /ingest hero: lead with the primary action.  The page exists to
+   take a photo of a pile and have AI break it into items, so the
+   "Take photo" + "Select from gallery" buttons get pole position.
+   Detection scope is the user's main control over how the model
+   reads the photo — visible but secondary.  Packing-into is genuinely
+   optional (most photo runs don't use it), so it lives behind a
+   disclosure to keep the page tidy.
+   ────────────────────────────────────────────────────────────── #}
+<section class="ingest-hero">
+  <header class="ingest-hero-head">
+    <h1 class="ingest-hero-title">Ingest a pile</h1>
+    <p class="ingest-hero-sub">
+      Snap a photo and the AI picks out every item it sees, then
+      drops them into your sort queue for naming and box placement.
+    </p>
+  </header>
 
-  {# ── Packing-session picker ───────────────────────────────────
-     Per the design, state lives entirely in the page: leaving or
-     reloading drops the selection.  The select drives a hidden
-     ``target_box_id`` input on each upload form via JS so both
-     "Take photo" and "Select from gallery" carry the hint.  The
-     sort queue then pre-fills the box selection so accepting a
-     packing-session item is one tap.  No server-side session
-     table, no stale-state cleanup. #}
+  <div class="ingest-cta">
+    <form method="post" action="/ingest" enctype="multipart/form-data"
+          class="ingest-upload">
+      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
+      <input type="hidden" name="scope" value="auto" data-scope-mirror>
+      <label class="btn btn-primary ingest-cta-button">
+        <span class="ingest-cta-icon" aria-hidden="true">📷</span>
+        <span class="ingest-cta-label">
+          <strong>Take photo</strong>
+          <small>open the camera now</small>
+        </span>
+        <input type="file" name="photos" accept="image/*"
+               capture="environment" hidden data-auto-submit>
+      </label>
+    </form>
+    <form method="post" action="/ingest" enctype="multipart/form-data"
+          class="ingest-upload">
+      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
+      <input type="hidden" name="scope" value="auto" data-scope-mirror>
+      <label class="btn btn-secondary ingest-cta-button">
+        <span class="ingest-cta-icon" aria-hidden="true">🖼️</span>
+        <span class="ingest-cta-label">
+          <strong>From gallery</strong>
+          <small>pick one or many</small>
+        </span>
+        <input type="file" name="photos" accept="image/*" multiple
+               hidden data-auto-submit>
+      </label>
+    </form>
+  </div>
+
+  {# Detection scope — tunes the prompt so a photo of one bag
+     doesn't get split into ten "items" (plastic, label, contents,
+     shadow…).  Defaults to Auto so the existing flow is unchanged. #}
+  <fieldset class="ingest-scope" aria-label="Detection scope">
+    <legend class="ingest-scope-legend">How should the AI read this photo?</legend>
+    <div class="ingest-scope-options" role="radiogroup">
+      <label class="ingest-scope-option">
+        <input type="radio" name="ingest-scope" value="auto" checked data-scope-input>
+        <span class="ingest-scope-option-title">Auto</span>
+        <span class="ingest-scope-option-hint">let the model decide</span>
+      </label>
+      <label class="ingest-scope-option">
+        <input type="radio" name="ingest-scope" value="single" data-scope-input>
+        <span class="ingest-scope-option-title">Single item</span>
+        <span class="ingest-scope-option-hint">one thing, one row</span>
+      </label>
+      <label class="ingest-scope-option">
+        <input type="radio" name="ingest-scope" value="many" data-scope-input>
+        <span class="ingest-scope-option-title">Many items</span>
+        <span class="ingest-scope-option-hint">crowded pile</span>
+      </label>
+    </div>
+  </fieldset>
+
+  {# Packing session — entirely optional, so behind a disclosure.
+     Sessions live only on this page; refreshing or navigating away
+     drops the choice.  No server-side cleanup. #}
   {% if boxes %}
-  <label class="ingest-packing-row">
-    <span class="ingest-packing-label">Packing into</span>
-    <select id="ingest-target-box" autocomplete="off">
-      <option value="">— No session (sort manually) —</option>
-      {% for b in boxes %}
-      <option value="{{ b.id }}">
-        {{ b.name }}{% if b.location_name %} · {{ b.location_name }}{% if b.room_name %} / {{ b.room_name }}{% endif %}{% endif %}
-      </option>
-      {% endfor %}
-    </select>
-  </label>
-  <div id="ingest-packing-banner" class="ingest-packing-banner" hidden>
-    <span>Packing into <strong data-banner-name></strong></span>
-    <button type="button" class="btn btn-link btn-sm" data-banner-clear>
-      End session
-    </button>
-  </div>
+  <details class="ingest-packing" id="ingest-packing-disclosure">
+    <summary class="ingest-packing-summary">
+      <span class="ingest-packing-summary-label">
+        ⛓️ Pack into a specific box <small>(optional)</small>
+      </span>
+      <span class="ingest-packing-current" data-packing-current hidden></span>
+    </summary>
+    <div class="ingest-packing-body">
+      <p class="text-sm text-muted">
+        Pre-fills the sort queue's box selection so accepting an item
+        is one tap.  Pick a box below; the choice only sticks while
+        this tab is open — reload to clear it.
+      </p>
+      <label class="ingest-packing-field">
+        <span>Packing into</span>
+        <select id="ingest-target-box" autocomplete="off">
+          <option value="">— No session (sort manually) —</option>
+          {% for b in boxes %}
+          <option value="{{ b.id }}">
+            {{ b.name }}{% if b.location_name %} · {{ b.location_name }}{% if b.room_name %} / {{ b.room_name }}{% endif %}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      <div id="ingest-packing-banner" class="ingest-packing-banner" hidden>
+        <span>Packing into <strong data-banner-name></strong></span>
+        <button type="button" class="btn btn-link btn-sm" data-banner-clear>
+          End session
+        </button>
+      </div>
+    </div>
+  </details>
   {% endif %}
+</section>
 
-  {# ── Detection scope ────────────────────────────────────────
-     Hints the Gemini prompt.  "Single item" was added because
-     an over-zealous detect-everything prompt would split a
-     single bag of parts into a dozen fake items (plastic,
-     label, contents, shadow, …).  Defaults to Auto so the
-     existing pile-of-stuff workflow is unchanged.  The radios
-     live OUTSIDE the upload forms; JS mirrors the chosen value
-     into a hidden ``scope`` field on each form so both
-     "Take photo" and "Select from gallery" pick it up. #}
-  <div class="ingest-scope-row" role="radiogroup" aria-label="Detection scope">
-    <label class="ingest-scope-option">
-      <input type="radio" name="ingest-scope" value="auto" checked data-scope-input>
-      <span>Auto</span>
-    </label>
-    <label class="ingest-scope-option">
-      <input type="radio" name="ingest-scope" value="single" data-scope-input>
-      <span>Single item</span>
-    </label>
-    <label class="ingest-scope-option">
-      <input type="radio" name="ingest-scope" value="many" data-scope-input>
-      <span>Many items</span>
-    </label>
-  </div>
-
-  <div class="btn-row">
-    <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
-      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
-      <input type="hidden" name="scope" value="auto" data-scope-mirror>
-      <label class="btn btn-primary btn-block">
-        Take photo
-        <input type="file" name="photos" accept="image/*" capture="environment" hidden data-auto-submit>
-      </label>
-    </form>
-    <form method="post" action="/ingest" enctype="multipart/form-data" class="flex-1 ingest-upload">
-      <input type="hidden" name="target_box_id" value="" data-target-box-mirror>
-      <input type="hidden" name="scope" value="auto" data-scope-mirror>
-      <label class="btn btn-secondary btn-block">
-        Select from gallery
-        <input type="file" name="photos" accept="image/*" multiple hidden data-auto-submit>
-      </label>
-    </form>
-  </div>
-</div>
-
-<div id="ingest-jobs">
+<section id="ingest-jobs" class="ingest-jobs-section">
   {% include "_ingest_jobs.html" %}
-</div>
-
-<style>
-  .ingest-packing-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-bottom: 0.75rem;
-  }
-  .ingest-packing-label {
-    font-size: 0.85rem;
-    color: var(--text-muted, #aaa);
-  }
-  .ingest-packing-row select {
-    width: 100%;
-  }
-  .ingest-packing-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 0.75rem;
-    background: rgba(63, 169, 245, 0.12);
-    border: 1px solid rgba(63, 169, 245, 0.4);
-    border-radius: 0.4rem;
-    font-size: 0.9rem;
-  }
-  /* CSS ``display: flex`` overrides the implicit ``display: none``
-     that the [hidden] attribute provides, so without this rule
-     ``banner.hidden = true`` does nothing visually — End session
-     would clear the picker but leave the banner stuck on screen. */
-  .ingest-packing-banner[hidden] {
-    display: none;
-  }
-  .ingest-scope-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
-  }
-  .ingest-scope-option {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.75rem;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 0.4rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    user-select: none;
-  }
-  .ingest-scope-option:has(input:checked) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-  }
-  .ingest-scope-option input {
-    margin: 0;
-  }
-</style>
+</section>
 
 <script>
 (function() {
-  // ── Packing-session picker → hidden inputs ───────────────────────
+  // ── Packing-session picker → hidden inputs + disclosure summary ─
   // The select is the single source of truth; both upload forms
   // mirror its value into a hidden field so each form carries the
   // hint regardless of which button the user taps.  No server-
@@ -155,6 +130,9 @@
   const bannerName = banner ? banner.querySelector('[data-banner-name]') : null;
   const bannerClear = banner ? banner.querySelector('[data-banner-clear]') : null;
   const mirrors = document.querySelectorAll('[data-target-box-mirror]');
+  const disclosure = document.getElementById('ingest-packing-disclosure');
+  const summaryCurrent = disclosure
+    ? disclosure.querySelector('[data-packing-current]') : null;
 
   function syncTarget() {
     if (!targetSelect) return;
@@ -167,6 +145,16 @@
         banner.hidden = false;
       } else {
         banner.hidden = true;
+      }
+    }
+    if (summaryCurrent) {
+      if (v) {
+        const opt = targetSelect.options[targetSelect.selectedIndex];
+        summaryCurrent.textContent = '→ ' + (opt ? opt.text.trim() : '');
+        summaryCurrent.hidden = false;
+      } else {
+        summaryCurrent.hidden = true;
+        summaryCurrent.textContent = '';
       }
     }
   }
@@ -182,8 +170,6 @@
   }
 
   // Detection-scope radios → hidden ``scope`` field on each form.
-  // Same single-source-of-truth pattern as the box picker so both
-  // upload buttons carry the chosen scope.
   const scopeMirrors = document.querySelectorAll('[data-scope-mirror]');
   function syncScope() {
     const checked = document.querySelector('[data-scope-input]:checked');
@@ -195,17 +181,13 @@
   });
   syncScope();
 
-  // ── Auto-submit file pickers without nuking the page ─────────────
-  // The forms set hidden=true on inputs and used onchange="this.form.submit()"
-  // before. With the JS poller below we don't need the meta-refresh that
-  // was eating in-progress selections.
+  // Auto-submit file pickers — the JS poller below handles refresh
+  // so no meta-refresh that would interrupt a pending upload.
   let uploading = false;
   document.querySelectorAll('[data-auto-submit]').forEach(input => {
     input.addEventListener('change', () => {
       if (input.files && input.files.length > 0) {
         uploading = true;
-        // Re-sync just before submit in case the picker / radio
-        // changed after the page first loaded.
         syncTarget();
         syncScope();
         input.form.submit();
@@ -213,16 +195,13 @@
     });
   });
 
-  // ── Poll for job-state changes, swap section in place ────────────
-  // Fingerprint comes from the server-rendered initial state; we hit the
-  // lightweight /ingest/state endpoint and only fetch the HTML fragment
-  // when something actually changed. This means an idle page makes ~0
-  // bytes/sec of network noise instead of a full page reload every 3 s.
+  // Poll for job-state changes, swap section in place.  Fingerprint
+  // comes from server-rendered initial state; only fetch the HTML
+  // fragment when something actually changed.
   const jobsEl = document.getElementById('ingest-jobs');
   let fingerprint = {{ fingerprint | tojson }};
-
   async function tick() {
-    if (uploading) return;  // never disturb an in-flight POST
+    if (uploading) return;
     try {
       const r = await fetch('/ingest/state', { cache: 'no-store' });
       if (!r.ok) return;
@@ -234,13 +213,9 @@
           fingerprint = data.fingerprint;
         }
       }
-    } catch (e) {
-      // Network blip — try again next tick.
-    }
+    } catch (e) { /* network blip — retry next tick */ }
   }
-  // Poll every 2.5 s while there's anything in flight; fall back to a slower
-  // 8 s "is anyone home" beat once everything settles.
-  let interval = setInterval(tick, 2500);
+  setInterval(tick, 2500);
 })();
 </script>
 
