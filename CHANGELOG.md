@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.22.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.2...v1.22.0) (2026-05-15)
+
+
+### Features
+
+* **floors:** in-browser floorplan editor with Fabric.js ([595da75](https://github.com/Brennan-VanderLaan/stash/commit/595da7521b4ad42baa1d21964afc46e08a47c51b))
+
+
+### Bug Fixes
+
+* **tours:** kill spotlight flicker + scroll snap-back on tour end ([ae79c44](https://github.com/Brennan-VanderLaan/stash/commit/ae79c443e95d8efb8efe1a4481ac90b193282d35))
+
 ## [1.21.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.1...v1.21.2) (2026-05-15)
 
 
