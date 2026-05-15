@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.18.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.17.0...v1.18.0) (2026-05-15)
+
+
+### Features
+
+* **admin:** group OAuth-issued API tokens by client ([702ff3a](https://github.com/Brennan-VanderLaan/stash/commit/702ff3aa4676ce107b77f03ab100ee48b7b756a2))
+* **feedback:** export endpoint + operator-scoped MCP tools ([0a8d885](https://github.com/Brennan-VanderLaan/stash/commit/0a8d885c9225e6a372c7017e77dbcf76d65253b7))
+
+
+### Bug Fixes
+
+* **usage:** clarify backup vs Download-my-data with decision-tree copy ([f031296](https://github.com/Brennan-VanderLaan/stash/commit/f0312967c6813d4a8fb6889c4ebe53e2526c9a65))
+
 ## [1.17.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.16.0...v1.17.0) (2026-05-15)
 
 
