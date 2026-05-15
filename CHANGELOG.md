@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.21.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.20.0...v1.21.0) (2026-05-15)
+
+
+### Features
+
+* **audit:** Tinder-style swipe UI with resume + per-item endpoints ([742e928](https://github.com/Brennan-VanderLaan/stash/commit/742e928e017139d978b90348209931d9f895963e))
+* **queue:** no-scroll-to-accept layout, prominent AI recommendation ([52d78e7](https://github.com/Brennan-VanderLaan/stash/commit/52d78e7d82033f7288eca905094ac00ebdda5f11))
+* **tours:** first-run onboarding overlay with per-feature versioned flags ([1040a0d](https://github.com/Brennan-VanderLaan/stash/commit/1040a0d3c7889f8f7209d716b6d5553c5217db03))
+
 ## [1.20.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.19.0...v1.20.0) (2026-05-15)
 
 
