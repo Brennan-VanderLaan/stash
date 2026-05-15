@@ -389,7 +389,23 @@
       const dataUrl = canvas.toDataURL({
         format: 'png', quality: 1, multiplier: 2,
       });
-      const blob = await (await fetch(dataUrl)).blob();
+      // Decode the data URL to a Blob *natively* instead of
+      // round-tripping through fetch().  ``fetch('data:...')``
+      // is a connect-src target as far as CSP is concerned, and
+      // our policy is ``connect-src 'self'`` — so the previous
+      // pattern threw "Refused to connect because it violates
+      // the document's Content Security Policy" the moment we
+      // tightened the headers (feedback / bug report this turn).
+      // ``atob`` + ``Uint8Array`` does the same job in one tick
+      // and never touches the network.
+      const blob = (() => {
+        const [meta, b64] = dataUrl.split(',');
+        const mime = (meta.match(/:([^;]+)/) || [, 'image/png'])[1];
+        const bytes = atob(b64);
+        const buf = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+        return new Blob([buf], { type: mime });
+      })();
       const fd = new FormData();
       fd.append('image', blob, 'floorplan-edited.png');
       const r = await fetch(SAVE_URL, {
