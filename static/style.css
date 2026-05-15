@@ -2553,7 +2553,26 @@ body.admin-hero-compact .admin-kpi-foot {
    tap away. */
 .admin-quick-action summary { list-style: none; cursor: pointer; }
 .admin-quick-action summary::-webkit-details-marker { display: none; }
-.admin-quick-action[open] summary { color: var(--muted); }
+/* Previously ``[open] summary { color: var(--muted) }`` —
+   meant to dim the "+ Create tenant" header when the form is
+   showing, but on the ``.btn-primary`` accent-green background
+   that muted colour rendered grey-on-green which read as
+   "this button just stopped working" after first click.  The
+   button stays at its normal primary styling regardless of
+   disclosure state; the form being expanded below is the
+   open-indicator. */
+.admin-quick-action {
+  position: relative;
+  /* Establish a stacking context with ``isolation: isolate``
+     so the absolute-positioned form below isn't out-ranked by
+     sibling stacking contexts created elsewhere on the page
+     (tenant cards with ``opacity < 1`` for soft-delete state,
+     hover transforms with their own contexts, etc.).  Without
+     this, the form's ``z-index: 30`` was painting beneath
+     in-flow tenant cards on the user's screen. */
+  isolation: isolate;
+  z-index: 60;
+}
 .admin-quick-action-form {
   position: absolute;
   top: 100%;
@@ -2564,10 +2583,12 @@ body.admin-hero-compact .admin-kpi-foot {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 0.85rem;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-  z-index: 30;
+  box-shadow: var(--shadow-lg);
+  /* z-index is now scoped to the .admin-quick-action stacking
+     context above; 1 is enough — and the parent's z-60 puts
+     the entire disclosure above sibling cards / sections. */
+  z-index: 1;
 }
-.admin-quick-action { position: relative; }
 
 /* Quotas: per-tenant card grid (one disclosure per tenant). */
 .admin-quotas-grid {
