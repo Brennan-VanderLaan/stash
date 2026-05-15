@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.25.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.24.0...v1.25.0) (2026-05-15)
+
+
+### Features
+
+* **public:** public marketing landing at /, dashboard at /home, theme picker ([032d958](https://github.com/Brennan-VanderLaan/stash/commit/032d9588e242cad3d6458110cbac219c28053093))
+* **security:** defense-in-depth response headers ([daadbcc](https://github.com/Brennan-VanderLaan/stash/commit/daadbcc7bd692a8964ed72f2405e243df76782de))
+
+
+### Bug Fixes
+
+* **about:** drop the "priority support" + business-day SLA promises ([a293a65](https://github.com/Brennan-VanderLaan/stash/commit/a293a65be1a2b3ffb8774114c743a382d19f698d))
+* **security:** plug open redirects, run token-leak guard before path bypass ([feae5e7](https://github.com/Brennan-VanderLaan/stash/commit/feae5e7d73917cfb92b609a602d9b35d24084107))
+
 ## [1.24.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.23.0...v1.24.0) (2026-05-15)
 
 
