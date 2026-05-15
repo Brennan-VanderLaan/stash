@@ -1960,7 +1960,16 @@ body:has(.admin-hero) {
 .admin-hero-head {
   margin-bottom: 0.75rem;
   transition: max-height 0.2s ease, opacity 0.18s ease, margin 0.2s ease;
-  max-height: 6rem;
+  /* Was ``6rem`` — too tight for the description text, which
+     wraps to 4-6 visual lines on a narrow phone viewport.  The
+     dashboard preamble ("Signed in as ... Spec § Operator
+     surface — names, counts, costs only.  Reading tenant data
+     takes a maintainer invite.") was getting clipped mid-line
+     on most phones.  14rem fits the full text on every viewport
+     we ship to and still transitions cleanly to 0 in compact
+     mode (the animation duration is independent of the source
+     value). */
+  max-height: 14rem;
   opacity: 1;
   overflow: hidden;
 }
