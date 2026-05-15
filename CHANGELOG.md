@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.23.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.22.0...v1.23.0) (2026-05-15)
+
+
+### Features
+
+* **admin:** Kanban feedback queue with filter bar ([8ae2d6b](https://github.com/Brennan-VanderLaan/stash/commit/8ae2d6b88e22edd01cd049018525b3837688693b))
+
+
+### Bug Fixes
+
+* **floors:** unstick drag-draw, add eraser, allow blank-canvas editor ([dc916f1](https://github.com/Brennan-VanderLaan/stash/commit/dc916f143f7357f914e951d0a0966647cf91957c))
+* **tours:** mobile-aware target selectors + visibility filter ([1efe0e2](https://github.com/Brennan-VanderLaan/stash/commit/1efe0e233bfa1c54c6f46c32c840036d46f56d8c))
+
 ## [1.22.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.2...v1.22.0) (2026-05-15)
 
 
