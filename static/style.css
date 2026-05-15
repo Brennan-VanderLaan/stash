@@ -1472,7 +1472,19 @@ body.about-public {
   flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
-  padding: 0.85rem 1.5rem;
+  /* Background stretches edge-to-edge as a sticky bar, but the
+     CONTENT sits in the same max-width column as ``.about-main``
+     below so the page reads as one centred axis instead of
+     "wide sticky bar + narrow body floating left of nowhere"
+     (feedback #27, "feels off balance to the left").  The
+     ``max(1.5rem, ...)`` clamp keeps padding sane on viewports
+     narrower than the column.  At 1080px on the inner column +
+     1.5rem floor side padding, the brand / nav / sign-in align
+     with the body's left and right edges on wide desktops. */
+  padding-top: 0.85rem;
+  padding-bottom: 0.85rem;
+  padding-left: max(1.5rem, calc(50% - 540px));
+  padding-right: max(1.5rem, calc(50% - 540px));
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
   background: var(--panel);
@@ -1509,9 +1521,19 @@ body.about-public {
   font-weight: 600;
 }
 .about-main {
+  /* Reading column.  820 → 1080 at wide-desktop breakpoint
+     matches the authenticated ``main`` element's 760 → 1080
+     progression so the public surface doesn't read as
+     dramatically narrower than the rest of the app on the
+     same viewport.  Sticky header above uses the same 1080
+     center column for its content alignment so the page
+     reads as a single centred axis. */
   max-width: 820px;
   margin: 0 auto;
   padding: 2rem 1.5rem 3rem;
+}
+@media (min-width: 1100px) {
+  .about-main { max-width: 1080px; }
 }
 .about-hero h1 {
   font-size: 2rem;
