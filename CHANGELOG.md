@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.28.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.27.0...v1.28.0) (2026-05-15)
+
+
+### Features
+
+* **admin:** operator can comp a tenant to Pro out-of-band (Stripe bypass) ([5a36a06](https://github.com/Brennan-VanderLaan/stash/commit/5a36a063a53836e2a2c5e41a075e7e21177cb718))
+* **deploy:** drop oauth2-proxy emails.txt gate; tenant_members is the sole gate ([d44112b](https://github.com/Brennan-VanderLaan/stash/commit/d44112b56bd0a6212cb158cf8f2bf42de6f90266))
+* **deploy:** sync-env.py helper to merge new .env.example keys into existing .env ([25c9502](https://github.com/Brennan-VanderLaan/stash/commit/25c95020ade0492651bf539af60472f34039ddc3))
+
+
+### Bug Fixes
+
+* **about:** /about content felt left-floating on wide desktops — single centred axis ([9c28d06](https://github.com/Brennan-VanderLaan/stash/commit/9c28d06eeffc011c1ae9d3eb00d07a7f9bdf3bfe))
+* **admin:** create-tenant disclosure unreadable after click + rendered behind cards ([42b21a6](https://github.com/Brennan-VanderLaan/stash/commit/42b21a6bcb509dfdfab9ebab06c64557662c409d))
+* **feedback:** clarify that screenshot capture is automatic, not a file picker ([af9cedb](https://github.com/Brennan-VanderLaan/stash/commit/af9cedb61bc9b0fff15cbb3ccc4b9dc5d874a072))
+
 ## [1.27.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.26.0...v1.27.0) (2026-05-15)
 
 
