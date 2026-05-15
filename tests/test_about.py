@@ -184,6 +184,35 @@ def test_about_transparency_breaks_down_costs(tmp_path, monkeypatch):
         assert role in page
 
 
+def test_about_terms_includes_standard_saas_sections(tmp_path, monkeypatch):
+    """ToS rewritten to standard SaaS boilerplate so a lawyer can
+    skim + bless rather than rewrite from scratch.  Pin the
+    section presence so a future copy refactor can't quietly
+    remove a load-bearing protection or jurisdiction clause."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about/terms").text
+    # Standard structural sections — names not exact-match, just
+    # substring-match the keyword each section pivots on.
+    for keyword in (
+        "Definitions",
+        "Eligibility",
+        "License grant",
+        "Subscriptions",
+        "User Content",
+        "Acceptable use",
+        "Disclaimers",
+        "Limitation of liability",
+        "Indemnification",
+        "Termination",
+        "Governing law",
+        "Massachusetts",        # specific jurisdiction
+        "AS IS",                # AS-IS warranty disclaimer
+        "force majeure",
+    ):
+        assert keyword.lower() in page.lower(), f"terms missing: {keyword}"
+
+
 def test_about_transparency_reflects_configured_price(tmp_path, monkeypatch):
     """The page title + ledger headline both reflect
     STASH_PRO_PRICE_DISPLAY — a deploy that ships a different
