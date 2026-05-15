@@ -168,10 +168,9 @@ TOURS: list[dict] = [
                 "target": "#floor-actions, .floor-actions-summary",
                 "title": "Manage this floor",
                 "body": (
-                    "Rename the floor, swap out the floorplan "
-                    "image, or delete the floor (and every room "
-                    "on it) from this button.  Used to be a quiet "
-                    "muted line — promoted so you can find it."
+                    "Tap this to rename the floor, swap the "
+                    "floorplan image, or delete the floor (along "
+                    "with every room on it)."
                 ),
                 "position": "above",
             },

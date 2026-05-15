@@ -289,7 +289,35 @@
         tooltip.style.transform = 'translate(-50%, -50%)';
         return;
       }
-      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      // Force the target into the middle of the viewport before
+      // measuring — on tall pages (large floorplan, long tenant
+      // list) the target may live off-screen and the tooltip
+      // would land somewhere the user can't see.  ``smooth`` is
+      // intentional: a hard jump on a long page is disorienting.
+      // We delay the measurement to the next animation frame so
+      // the scroll-induced layout has settled before
+      // getBoundingClientRect runs.
+      try {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {
+        el.scrollIntoView();
+      }
+      // Re-call ourselves after layout settles so the spotlight
+      // + tooltip lock onto the post-scroll position.  We only
+      // re-enter once (via the .tour-scrolled flag) so we don't
+      // recurse infinitely.
+      if (!tooltip.dataset.tourScrolled) {
+        tooltip.dataset.tourScrolled = "1";
+        // Wait long enough for a smooth-scroll to land; 240ms is
+        // longer than a single rAF but still fast enough to feel
+        // tight.
+        setTimeout(() => {
+          delete tooltip.dataset.tourScrolled;
+          positionTooltip(step);
+        }, 240);
+        return;
+      }
+      delete tooltip.dataset.tourScrolled;
       const r = el.getBoundingClientRect();
       // Spotlight: a transparent rect drawn over the element, the
       // backdrop's outer box-shadow darkens the surrounding page.
