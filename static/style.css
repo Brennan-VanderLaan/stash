@@ -2971,7 +2971,10 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   gap: 0.5rem;
 }
 @media (min-width: 640px) {
-  .label-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  /* Tile width bumped 320 → 380 so the thumbnail + name + actions
+     have room to breathe — earlier cards felt cramped on a desktop
+     viewport.  Auto-fill keeps the responsive packing behaviour. */
+  .label-grid { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
 }
 
 /* Card: a relative container holding (1) selection checkbox in the corner,
@@ -2996,19 +2999,29 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .label-card:hover { border-color: var(--accent); }
 
-/* Selection checkbox sits in the top-right corner; the rest of the card
-   opens the modal. The native checkbox is visually replaced by a styled
-   round affordance, but stays focusable for keyboard users. */
+/* Selection checkbox: top-LEFT of the card, overlaying the thumb's
+   corner (Instagram-style select).  Was top-right, which collided
+   with the regen-art button in .label-card-actions — the button is
+   ~34px wide at ~7px from the right edge, the checkbox was at
+   8px right, so they sat on top of each other.  The thumb's
+   white background gives the checkbox enough contrast to read,
+   and the checkbox's own white halo (the surrounding card-edge
+   padding) keeps it tappable. */
 .label-card-select {
   position: absolute;
   top: 8px;
-  right: 8px;
+  left: 8px;
   z-index: 3;
   width: 22px;
   height: 22px;
   margin: 0;
   cursor: pointer;
   accent-color: var(--accent);
+  /* Light backdrop so the native checkbox reads cleanly against
+     either a photo thumbnail or the plain panel-2 background. */
+  background: var(--panel);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--border);
 }
 .label-card-checkbox-affordance { display: none; } /* the native checkbox is fine */
 
@@ -3131,7 +3144,8 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
-  padding-right: 1.6rem;  /* keep clear of the corner checkbox */
+  /* Checkbox moved to the top-LEFT, so no need to reserve space
+     on the right anymore — full name width available. */
 }
 .label-card-notes {
   font-size: 0.78rem;
