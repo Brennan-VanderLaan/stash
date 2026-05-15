@@ -20,8 +20,18 @@
       Sheet format
       <select name="format" id="format-select">
         {% for f in all_formats %}
+          {# Surface the printer compat right in the option text
+             so the picker shows it AT the moment of choice — by
+             the time the user has navigated away to print, the
+             SKU number alone doesn't carry the laser-vs-inkjet
+             distinction.  Feedback #23. #}
+          {% set _pc = (
+            ' · LASER only' if f.printer_compat == 'laser'
+            else (' · INKJET only' if f.printer_compat == 'inkjet'
+                  else '')
+          ) %}
           <option value="{{ f.sku }}" {% if f.sku == fmt.sku %}selected{% endif %}>
-            Avery {{ f.sku }} — {{ f.description }}
+            Avery {{ f.sku }} — {{ f.description }}{{ _pc }}
           </option>
         {% endfor %}
       </select>
@@ -30,6 +40,29 @@
       <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
     </noscript>
   </form>
+  {# Printer-compat notice surfaced right next to the picker so
+     the user sees it BEFORE they print, not after they wasted a
+     pack of mismatched labels.  Loud-but-not-alarming styling:
+     a callout box with the right contextual emoji + plain copy
+     about what *will* happen on the wrong printer. #}
+  {% if fmt.printer_compat == 'laser' %}
+  <div class="label-printer-notice label-printer-notice-laser">
+    🖨️ <strong>Laser printer only.</strong>
+    Avery {{ fmt.sku }} uses a coating that's rated for laser
+    fusing.  An inkjet head will jam on the surface (and the ink
+    won't set).  For inkjet, pick one of the
+    <code>8163</code> / <code>8160</code> / <code>8164</code>
+    SKUs above instead.
+  </div>
+  {% elif fmt.printer_compat == 'inkjet' %}
+  <div class="label-printer-notice label-printer-notice-inkjet">
+    🖨️ <strong>Inkjet printer only.</strong>
+    Avery {{ fmt.sku }} uses inkjet-rated paper.  Laser heat will
+    melt the coating + smudge the page.  For laser, pick the
+    matching <code>5xxx</code>-series SKU above (same layout,
+    laser-rated stock).
+  </div>
+  {% endif %}
 </div>
 
 {% if boxes %}

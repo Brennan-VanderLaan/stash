@@ -60,6 +60,15 @@ class AveryFormat:
     margin_left_mm: float
     col_gap_mm: float
     row_gap_mm: float
+    # Avery sheets are coated for the printer they're sold for —
+    # the laser-only adhesives can melt or jam an inkjet head,
+    # and the inkjet papers smudge under laser heat.  Surfacing
+    # this in the picker matters: a user who runs out and grabs
+    # the wrong sheet at Staples can waste a whole pack before
+    # they figure it out (feedback #23 — "5523 doesn't work with
+    # ink jet, only with laser printers").
+    # Values: "laser", "inkjet", or "both".
+    printer_compat: str = "both"
 
     @property
     def labels_per_page(self) -> int:
@@ -82,6 +91,8 @@ AVERY_FORMATS: dict[str, AveryFormat] = {
     # 2" × 4", 10 per sheet, 2 cols × 5 rows.  WaterProof
     # UltraHold — the SKU 5523 the user is targeting today.
     # Same physical layout as 5163 / 5263 / 8163 / 18163.
+    # LASER ONLY — the UltraHold adhesive layer is rated for
+    # laser fusing; inkjet heads jam on the coating.
     "5523": AveryFormat(
         sku="5523",
         description='2" × 4" — 10 per sheet (shipping)',
@@ -92,9 +103,10 @@ AVERY_FORMATS: dict[str, AveryFormat] = {
         margin_left_mm=4.76,                # ~0.1875"
         col_gap_mm=4.76,                    # ~0.1875"
         row_gap_mm=0,                       # rows touch
+        printer_compat="laser",
     ),
     # 1" × 2-5/8", 30 per sheet, 3 cols × 10 rows.  Address
-    # labels — useful for itemising small bins.
+    # labels — useful for itemising small bins.  LASER ONLY.
     "5160": AveryFormat(
         sku="5160",
         description='1" × 2⅝" — 30 per sheet (address)',
@@ -105,9 +117,10 @@ AVERY_FORMATS: dict[str, AveryFormat] = {
         margin_left_mm=4.76,                # ~0.1875"
         col_gap_mm=3.05,                    # ~0.12"
         row_gap_mm=0,
+        printer_compat="laser",
     ),
     # 3-1/3" × 4", 6 per sheet, 2 cols × 3 rows.  Bigger
-    # shipping label — for big tubs and totes.
+    # shipping label — for big tubs and totes.  LASER ONLY.
     "5164": AveryFormat(
         sku="5164",
         description='3⅓" × 4" — 6 per sheet (large shipping)',
@@ -118,6 +131,55 @@ AVERY_FORMATS: dict[str, AveryFormat] = {
         margin_left_mm=4.76,
         col_gap_mm=4.76,
         row_gap_mm=0,
+        printer_compat="laser",
+    ),
+    # ── INKJET variants ────────────────────────────────────────
+    # Same physical layouts as the 5xxx series above but with
+    # inkjet-rated paper + adhesive.  Added so home printers
+    # (which are overwhelmingly inkjet) aren't forced into a
+    # laser-only SKU and a wasted pack of labels — feedback #23.
+    #
+    # 1" × 2-5/8", 30 per sheet — inkjet equivalent of 5160.
+    "8160": AveryFormat(
+        sku="8160",
+        description='1" × 2⅝" — 30 per sheet (address, inkjet)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=66.7, label_h_mm=25.4,
+        cols=3, rows=10,
+        margin_top_mm=12.7,
+        margin_left_mm=4.76,
+        col_gap_mm=3.05,
+        row_gap_mm=0,
+        printer_compat="inkjet",
+    ),
+    # 2" × 4", 10 per sheet — inkjet equivalent of 5163's
+    # physical layout (and the closest analogue to 5523 for
+    # inkjet owners; UltraHold has no inkjet counterpart, this
+    # is the regular paper version).
+    "8163": AveryFormat(
+        sku="8163",
+        description='2" × 4" — 10 per sheet (shipping, inkjet)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=101.6, label_h_mm=50.8,
+        cols=2, rows=5,
+        margin_top_mm=12.7,
+        margin_left_mm=4.76,
+        col_gap_mm=4.76,
+        row_gap_mm=0,
+        printer_compat="inkjet",
+    ),
+    # 3-1/3" × 4", 6 per sheet — inkjet equivalent of 5164.
+    "8164": AveryFormat(
+        sku="8164",
+        description='3⅓" × 4" — 6 per sheet (large shipping, inkjet)',
+        sheet_w_mm=215.9, sheet_h_mm=279.4,
+        label_w_mm=101.6, label_h_mm=84.7,
+        cols=2, rows=3,
+        margin_top_mm=12.7,
+        margin_left_mm=4.76,
+        col_gap_mm=4.76,
+        row_gap_mm=0,
+        printer_compat="inkjet",
     ),
 }
 

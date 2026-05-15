@@ -4177,6 +4177,37 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-size: 0.92rem;
 }
 
+/* Printer-compat callout under the Sheet-format picker.  Loud
+   enough to read at a glance, calm enough not to feel like an
+   error — this is a "before you print" hint, not a "you broke
+   something" toast.  Two variants, laser + inkjet, share the
+   base layout and only differ in the accent stripe colour.
+   Feedback #23. */
+.label-printer-notice {
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.75rem 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: var(--text);
+  max-width: 60ch;
+}
+.label-printer-notice code {
+  font-size: 0.85rem;
+  background: var(--surface-2);
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+}
+.label-printer-notice-laser {
+  border-left-color: var(--warning);
+}
+.label-printer-notice-inkjet {
+  border-left-color: var(--info);
+}
+
 /* Per-card landscape/portrait pill toggle. */
 .label-orient-toggle {
   display: inline-flex;
