@@ -131,8 +131,15 @@ def test_tour_get_404_for_unknown_feature(client):
 def test_usage_renders_tour_catalogue(client):
     page = client.get("/usage").text
     assert "Onboarding tours" in page
-    assert 'data-tour-replay="welcome"' in page
-    assert 'data-tour-replay="box_detail"' in page
+    # Replay buttons navigate to the tour's home page with a
+    # ``?tour=<feature>`` query param; the overlay JS auto-plays
+    # on that page.  Earlier passes had a JS-only data-tour-replay
+    # trigger that fired the tour in-place on /usage, where every
+    # target selector missed because the elements were on other
+    # pages — feedback #7.
+    assert 'href="/?tour=welcome"' in page
+    assert 'href="/boxes/?tour=box_detail"' in page
+    assert 'href="/labels?tour=labels"' in page
 
 
 def test_tour_overlay_renders_for_authed_user(client):

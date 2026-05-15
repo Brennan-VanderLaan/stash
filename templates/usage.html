@@ -51,10 +51,15 @@
           {% endif %}
         </span>
       </div>
-      <button type="button" class="btn btn-secondary btn-sm"
-              data-tour-replay="{{ t.feature }}">
+      {# Replay links to the tour's home page with ``?tour=<feature>``;
+         the overlay JS on that page reads the query param and auto-
+         plays.  Old behaviour was a JS-only trigger that fired the
+         tour in-place on /usage — every target selector missed
+         because the elements live on other pages. #}
+      <a class="btn btn-secondary btn-sm"
+         href="{{ t.page }}{% if '?' in t.page %}&{% else %}?{% endif %}tour={{ t.feature }}">
         {{ _("Replay") }}
-      </button>
+      </a>
     </li>
     {% endfor %}
   </ul>

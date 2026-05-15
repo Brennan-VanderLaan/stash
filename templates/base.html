@@ -398,6 +398,24 @@
     });
 
     // ── Auto-play on load ───────────────────────────────────────
+    // Two paths:
+    //   1. Server-side ``auto_play`` — tours the user hasn't seen
+    //      yet that match the current URL prefix.
+    //   2. Replay query param ``?tour=<feature>`` — sent by the
+    //      Replay button on /usage, which navigates to the tour's
+    //      home page with this param.  We strip it from the URL via
+    //      history.replaceState so a manual refresh doesn't replay
+    //      forever.
+    const replayFeature = new URLSearchParams(window.location.search).get('tour');
+    if (replayFeature) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('tour');
+        window.history.replaceState({}, '', url.toString());
+      } catch (e) { /* no-op */ }
+      window.startTour(replayFeature);
+      return;
+    }
     fetchState().then(state => {
       if (!state || !state.auto_play || !state.auto_play.length) return;
       queue = state.auto_play.slice();
