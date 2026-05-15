@@ -15,7 +15,12 @@
 {% set total_ai_calls = vendor_cost.by_tenant | sum(attribute='ai_calls') if vendor_cost.by_tenant else 0 %}
 {% set token_active = api_tokens | rejectattr('revoked_at') | rejectattr('suspended_at') | list %}
 
-<header class="admin-hero">
+{# Sentinel above the sticky hero — when this 1px placeholder leaves
+   the viewport, body.admin-hero-compact is toggled on so the hero
+   shrinks to a thin floating KPI bar.  See the IntersectionObserver
+   block at the bottom of this template. #}
+<div class="admin-hero-sentinel" data-admin-hero-sentinel aria-hidden="true"></div>
+<header class="admin-hero" data-admin-hero>
   <div class="admin-hero-head">
     <div>
       <h1 class="admin-hero-title">Operator dashboard</h1>
@@ -744,6 +749,23 @@
       if (form) form.hidden = false;
     });
   });
+
+  // Hero compress-on-scroll.  IntersectionObserver on the 1 px
+  // sentinel above the hero: when it leaves the viewport, the
+  // user has scrolled past the hero's natural position, and we
+  // collapse the hero into a thin sticky KPI bar at the top of
+  // the viewport.  Cheap, no scroll-event listener, naturally
+  // robust to layout changes.
+  const sentinel = document.querySelector('[data-admin-hero-sentinel]');
+  if (sentinel && 'IntersectionObserver' in window) {
+    new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        document.body.classList.toggle(
+          'admin-hero-compact', !e.isIntersecting,
+        );
+      }
+    }, { threshold: 0 }).observe(sentinel);
+  }
 })();
 </script>
 

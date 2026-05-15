@@ -1240,16 +1240,43 @@ body.tour-active { overflow: hidden; }
    Operators are heavy users of this page — density on the things
    they act on (feedback, tokens) and decompression on the things
    they read (tenant roster) is the trade we're making. */
+/* Hero is sticky below the page header (top: ~3.25rem accounts
+   for the global <header>'s height + safe spacing).  When the
+   user scrolls past the sentinel placed before the hero, body
+   gets ``.admin-hero-compact`` and the hero collapses to a thin
+   floating bar with KPI tiles only — title + description + tile
+   footers fade so the dashboard becomes a peripheral indicator
+   rather than a wall.
+
+   Z-index 30 stays below the page-level <header> (z 100) so the
+   header always sits on top.  The hero's background is opaque so
+   content scrolling underneath doesn't bleed through. */
+.admin-hero-sentinel {
+  height: 1px;
+  margin: 0 0 -1px;
+  pointer-events: none;
+}
 .admin-hero {
+  position: sticky;
+  top: 3.25rem;
+  z-index: 30;
   margin-bottom: 1rem;
-  padding: 1.1rem 1.25rem;
-  background: linear-gradient(140deg, var(--panel) 0%, var(--panel-2) 100%);
+  padding: 1rem 1.15rem 0.9rem;
+  background: var(--panel);
+  background-image: linear-gradient(140deg, var(--panel) 0%, var(--panel-2) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  transition: padding 0.18s ease;
 }
-.admin-hero-head { margin-bottom: 0.9rem; }
+.admin-hero-head {
+  margin-bottom: 0.75rem;
+  transition: max-height 0.2s ease, opacity 0.18s ease, margin 0.2s ease;
+  max-height: 6rem;
+  opacity: 1;
+  overflow: hidden;
+}
 .admin-hero-title {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   margin: 0 0 0.25rem;
   color: var(--accent);
 }
@@ -1260,44 +1287,74 @@ body.tour-active { overflow: hidden; }
 }
 .admin-kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.5rem;
 }
 .admin-kpi {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.65rem 0.8rem 0.7rem;
+  padding: 0.55rem 0.7rem 0.6rem;
   text-decoration: none;
   color: inherit;
   display: block;
-  transition: transform 0.12s, border-color 0.12s;
+  transition: transform 0.12s, border-color 0.12s, padding 0.18s ease;
 }
 .admin-kpi:hover {
   transform: translateY(-1px);
   border-color: var(--accent);
 }
 .admin-kpi-label {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
+  transition: font-size 0.18s ease;
 }
 .admin-kpi-value {
-  font-size: 1.85rem;
+  font-size: 1.6rem;
   font-weight: 700;
   color: var(--accent);
   line-height: 1.1;
-  margin: 0.15rem 0;
+  margin: 0.1rem 0;
   font-variant-numeric: tabular-nums;
+  transition: font-size 0.18s ease;
 }
 .admin-kpi-foot {
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--muted);
+  transition: max-height 0.2s ease, opacity 0.18s ease;
+  max-height: 2rem;
+  opacity: 1;
+  overflow: hidden;
 }
 .admin-kpi-attention {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-dim) inset;
+}
+
+/* Compact mode — body.admin-hero-compact is toggled by the
+   IntersectionObserver in admin.html when the sentinel scrolls
+   off the top of the viewport.  Hero shrinks to ~1/3 the height;
+   the KPI grid stays readable but tile copy collapses to label +
+   value only. */
+body.admin-hero-compact .admin-hero {
+  padding: 0.4rem 0.85rem 0.45rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+body.admin-hero-compact .admin-hero-head {
+  max-height: 0;
+  opacity: 0;
+  margin-bottom: 0;
+}
+body.admin-hero-compact .admin-kpi {
+  padding: 0.3rem 0.55rem 0.35rem;
+}
+body.admin-hero-compact .admin-kpi-label { font-size: 0.65rem; }
+body.admin-hero-compact .admin-kpi-value { font-size: 1.1rem; margin: 0; }
+body.admin-hero-compact .admin-kpi-foot {
+  max-height: 0;
+  opacity: 0;
 }
 /* In-page anchor strip — NOT sticky.  Earlier passes had
    ``position: sticky; top: 0`` here, which collided with the
