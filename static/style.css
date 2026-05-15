@@ -1114,18 +1114,45 @@ main.main-wide {
    spotlight gets positioned off-screen so the shadow covers the
    whole viewport with no visible cutout.  Two layers was causing
    the spotlight to flash on/off as one was hidden during step
-   transitions; one layer is always visible. */
+   transitions; one layer is always visible.
+
+   Feedback #22: the previous treatment used a 3 px accent border
+   + 18 px glow — too subtle to read as "look here" on the new
+   forest palette, where the sage-green accent sits much closer
+   to the page surface than the original neon green.  Boosted
+   the ring (4 px) and the glow (40 px), and gave it a slow pulse
+   so the eye actually catches the highlight even when the user
+   is reading the tooltip text first. */
 .tour-spotlight {
   position: absolute;
   border-radius: 8px;
   pointer-events: none;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72),
-              0 0 0 3px var(--accent),
-              0 0 18px var(--accent);
+              0 0 0 4px var(--accent),
+              0 0 40px var(--accent),
+              0 0 0 2px var(--bg) inset;
   /* Smooth slide between targets so consecutive steps feel
      continuous rather than blinking from one rect to the next. */
   transition: left 0.22s ease, top 0.22s ease,
               width 0.22s ease, height 0.22s ease;
+  animation: tour-spotlight-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tour-spotlight-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72),
+                0 0 0 4px var(--accent),
+                0 0 32px var(--accent),
+                0 0 0 2px var(--bg) inset;
+  }
+  50% {
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72),
+                0 0 0 5px var(--accent-strong),
+                0 0 60px var(--accent),
+                0 0 0 2px var(--bg) inset;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-spotlight { animation: none; }
 }
 .tour-tooltip {
   position: absolute;

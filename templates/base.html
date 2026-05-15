@@ -527,10 +527,23 @@
       else if (e.key === 'ArrowRight') nextBtn.click();
       else if (e.key === 'ArrowLeft') prevBtn.click();
     });
-    window.addEventListener('resize', () => {
+    function reposition() {
       if (!activeTour) return;
       const step = (activeTour.steps || [])[stepIdx];
       if (step) positionTooltip(step);
+    }
+    window.addEventListener('resize', reposition);
+    // Re-position on scroll so the spotlight follows the
+    // highlighted element if the user scrolls during the tour.
+    // Without this, the spotlight stays nailed to viewport pixels
+    // while the element it's pointing at drifts away — the user
+    // can quickly end up reading a tooltip about a button that's
+    // no longer under the highlight rect (feedback #22).
+    // ``passive: true`` so we don't fight the browser's scroll
+    // performance; ``capture: true`` so we catch scrolls on
+    // inner containers (audit deck, floorplan viewport, etc.).
+    window.addEventListener('scroll', reposition, {
+      passive: true, capture: true,
     });
 
     // ── Replay trigger ──────────────────────────────────────────
