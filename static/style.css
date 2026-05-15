@@ -1299,10 +1299,16 @@ body.tour-active { overflow: hidden; }
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-dim) inset;
 }
+/* In-page anchor strip — NOT sticky.  Earlier passes had
+   ``position: sticky; top: 0`` here, which collided with the
+   page-level ``<header>`` (also sticky, top 0, z-index 100) —
+   the TOC slid under the header on scroll, the section cards
+   rode over it via their own z-index, and the result was the
+   "cut off at the top, elements on top of it" failure mode the
+   operator saw at /admin.  The TOC is a launch pad to jump to
+   a section once, not a navbar that needs to follow the user
+   down the page.  Keep it in the document flow. */
 .admin-toc {
-  position: sticky;
-  top: 0;
-  z-index: 20;
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
@@ -1312,7 +1318,6 @@ body.tour-active { overflow: hidden; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 0.85rem;
-  backdrop-filter: blur(6px);
 }
 .admin-toc a {
   color: var(--accent);
