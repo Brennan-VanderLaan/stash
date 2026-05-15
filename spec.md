@@ -1711,8 +1711,13 @@ here so we don't repeat it.
   the ethos; metered is more legible but harder to operate. Decide
   after the cost-transparency block exists and we know what real
   per-tenant cost curves look like.
-- **Stripe integration.** Out of scope for this round — quotas exist
-  so the billing boundary is wired when payment lands.
+- **Stripe integration.** Resolved — Stripe Checkout + webhook-driven
+  entitlement landed.  Pro tier = bigger quotas only (see
+  ``_PLAN_DEFAULTS``); future iteration may add feature gates.  See
+  ``dao/billing.py`` + ``/usage`` upgrade card + ``/webhooks/stripe``.
+  Configurable via ``STRIPE_SECRET_KEY`` + ``STRIPE_WEBHOOK_SECRET`` +
+  ``STRIPE_PRICE_ID_PRO`` env vars; stash hides the upgrade CTA when
+  any are unset.
 - **AI quota grace.** When a free tenant blows through their AI cap
   mid-ingest, do we (a) hard-fail the rest of the batch, (b) finish
   the current photo and 429 the next one, or (c) burn into a
