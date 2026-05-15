@@ -2,189 +2,327 @@
 {% block title %}Admin · Stash{% endblock %}
 {% block content %}
 
-<div class="card maintenance-card">
-  <div class="card-title">Operator dashboard</div>
-  <p class="text-sm text-muted">
-    Signed in as <code>{{ current_email }}</code>.  This page lists
-    every tenant on the deployment by counts + metadata only — by
-    design, operators never see box / item / photo content here.
-    Reading tenant data requires an explicit maintainer invite from
-    the tenant.
-  </p>
-  {% if backup_status %}
-  <div class="notice notice-success">
-    <strong>Backup:</strong> {{ backup_status }}
+{# ──────────────────────────────────────────────────────────────────
+   Operator dashboard.  Spec § "Operator surface" — names, counts,
+   costs only, never per-tenant content.  The page is built as a
+   dashboard rather than a stack of tables: hero KPIs at the top,
+   navigation strip, then the actionable sections (feedback queue,
+   tenants, tokens) ordered by "things you act on" first.
+   ────────────────────────────────────────────────────────────── #}
+
+{% set active_tenants = tenants | rejectattr('deleted_at') | list %}
+{% set suspended_tenants = tenants | selectattr('deleted_at') | list %}
+{% set total_ai_calls = vendor_cost.by_tenant | sum(attribute='ai_calls') if vendor_cost.by_tenant else 0 %}
+{% set token_active = api_tokens | rejectattr('revoked_at') | rejectattr('suspended_at') | list %}
+
+<header class="admin-hero">
+  <div class="admin-hero-head">
+    <div>
+      <h1 class="admin-hero-title">Operator dashboard</h1>
+      <p class="admin-hero-sub">
+        Signed in as <code>{{ current_email }}</code>.
+        Spec § "Operator surface" — names, counts, costs only.
+        Reading tenant data takes a maintainer invite.
+      </p>
+    </div>
   </div>
-  {% endif %}
-</div>
-
-{# ── Bootstrap a fresh tenant + first-maintainer invite ─────── #}
-<div class="card maintenance-card">
-  <div class="card-title">Create tenant + invite owner</div>
-  <p class="text-sm text-muted">
-    Spins up an empty tenant and mints a single-use invite for the
-    intended owner.  You stay an operator (no membership) — the
-    invitee becomes the sole maintainer when they accept.
-  </p>
-
-  {% if invite_url %}
-  <div class="notice notice-success">
-    <strong>Tenant created + invite minted.</strong>
-    Copy and send:
-    <input type="text" readonly value="{{ invite_url }}"
-           class="invite-url-input"
-           onclick="this.select()"
-           style="width:100%;margin-top:0.5rem;font-family:monospace;">
+  <div class="admin-kpis">
+    <a href="#tenants" class="admin-kpi">
+      <div class="admin-kpi-label">Tenants</div>
+      <div class="admin-kpi-value">{{ active_tenants | length }}</div>
+      <div class="admin-kpi-foot">
+        {% if suspended_tenants %}
+          <span class="pill pill-suspended">
+            {{ suspended_tenants | length }} soft-deleted
+          </span>
+        {% else %}
+          all active
+        {% endif %}
+      </div>
+    </a>
+    <a href="#feedback" class="admin-kpi admin-kpi-{{ 'attention' if feedback_counts.get('open', 0) else '' }}">
+      <div class="admin-kpi-label">Open feedback</div>
+      <div class="admin-kpi-value">{{ feedback_counts.get('open', 0) }}</div>
+      <div class="admin-kpi-foot">
+        {% set total_fb = feedback_counts.values() | sum %}
+        {{ total_fb }} total
+      </div>
+    </a>
+    <a href="#cost" class="admin-kpi">
+      <div class="admin-kpi-label">AI cost (MTD)</div>
+      <div class="admin-kpi-value">
+        ${{ "%.2f" | format(vendor_cost.total_cost_micros / 1_000_000) }}
+      </div>
+      <div class="admin-kpi-foot">
+        {{ total_ai_calls }} calls
+      </div>
+    </a>
+    <a href="#tokens" class="admin-kpi">
+      <div class="admin-kpi-label">Active tokens</div>
+      <div class="admin-kpi-value">{{ token_active | length }}</div>
+      <div class="admin-kpi-foot">
+        {% if oauth_client_groups %}
+          {{ oauth_client_groups | length }} OAuth client{{ '' if oauth_client_groups|length == 1 else 's' }}
+        {% else %}
+          no OAuth clients
+        {% endif %}
+      </div>
+    </a>
   </div>
-  {% endif %}
+</header>
 
-  <form method="post" action="/admin/tenants">
-    <label>
-      Tenant name
-      <input type="text" name="name" required placeholder="Sister"
-             autocomplete="off">
-    </label>
-    <label>
-      Invitee email
-      <input type="email" name="invitee_email" required
-             placeholder="them@example.com" autocomplete="off">
-    </label>
-    <label>
-      Role
-      <select name="role">
-        <option value="maintainer" selected>Maintainer (full owner)</option>
-        <option value="readonly">Read-only</option>
-      </select>
-    </label>
-    <label>
-      Plan
-      <select name="plan">
-        <option value="free" selected>Free</option>
-        <option value="pro">Pro</option>
-      </select>
-    </label>
-    <button type="submit" class="btn btn-primary btn-block">
-      Create + invite
-    </button>
-  </form>
+<nav class="admin-toc" aria-label="Admin sections">
+  <a href="#feedback">Feedback</a>
+  <a href="#activity">Activity</a>
+  <a href="#tenants">Tenants</a>
+  <a href="#tokens">API tokens</a>
+  <a href="#quotas">Quotas</a>
+  <a href="#cost">Vendor cost</a>
+  <a href="#oauth">OAuth clients</a>
+</nav>
+
+{% if backup_status %}
+<div class="notice notice-success">
+  <strong>Backup:</strong> {{ backup_status }}
 </div>
+{% endif %}
 
-{# ── Tenant roster ──────────────────────────────────────────── #}
-<div class="card maintenance-card">
-  <div class="card-title">Tenants ({{ tenants | length }})</div>
-  {% if tenants %}
-  <div class="admin-table-scroll">
-  <table class="admin-tenant-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Plan</th>
-        <th>Members</th>
-        <th>Open invites</th>
-        <th>Boxes</th>
-        <th>Items</th>
-        <th>State</th>
-        <th>Created</th>
-        <th>Last activity</th>
-        <th>Lifecycle</th>
-        <th>Backup</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for t in tenants %}
-      <tr>
-        <td>
-          <details class="tenant-roster">
-            <summary>{{ t.name }}</summary>
-            {% if t.members %}
-            <table class="admin-member-table">
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Joined</th>
-                  <th>Last active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for m in t.members %}
-                <tr>
-                  <td><code>{{ m.email }}</code></td>
-                  <td>{{ m.role }}</td>
-                  <td>
-                    {% if m.joined_at %}
-                      {{ m.joined_at[:10] }}
-                    {% else %}
-                      <span class="text-muted">invited {{ m.invited_at[:10] if m.invited_at else '' }}</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% if m.last_active_at %}
-                      <span title="{{ m.last_active_at }}">{{ m.last_active_at[:10] }}</span>
-                    {% else %}
-                      <span class="text-muted">never</span>
-                    {% endif %}
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-            {% else %}
-            <p class="text-muted text-sm">No members yet.</p>
+{# ── Feedback queue ─────────────────────────────────────────── #}
+<section class="admin-section" id="feedback">
+  <header class="admin-section-head">
+    <h2>Feedback queue</h2>
+    <div class="admin-section-actions">
+      <span class="text-sm text-muted">Export queue:</span>
+      <a href="/admin/feedback/export?format=json"
+         class="btn btn-secondary btn-sm" download>JSON</a>
+      <a href="/admin/feedback/export?format=csv"
+         class="btn btn-secondary btn-sm" download>CSV</a>
+      <a href="/admin/feedback/export?format=json&status=open"
+         class="btn btn-secondary btn-sm" download>Open only</a>
+    </div>
+  </header>
+  <p class="text-sm text-muted">
+    In-app feedback from the floating widget on every page.  Triage
+    by setting each row's status — Accepted = "we'll fix it",
+    Rejected = "won't fix", Done = "shipped".
+  </p>
+  {% if feedback_queue %}
+  <div class="admin-feedback-list">
+    {% for fb in feedback_queue %}
+    <article class="admin-feedback-row admin-feedback-{{ fb.status }}">
+      <header class="admin-feedback-row-head">
+        <span class="pill pill-{{ fb.status }}">{{ fb.status }}</span>
+        <span class="admin-feedback-row-meta">
+          #{{ fb.id }} ·
+          {{ fb.actor_email or '(anon)' }} ·
+          {{ fb.tenant_name or 'no tenant' }} ·
+          {{ fb.created_at }}
+        </span>
+      </header>
+      <div class="admin-feedback-row-body">{{ fb.body }}</div>
+      <footer class="admin-feedback-row-foot">
+        <div class="admin-feedback-row-context">
+          {% if fb.source_url %}
+          <a href="{{ fb.source_url }}" class="text-sm">{{ fb.source_url }}</a>
+          {% endif %}
+          {% if fb.viewport_w %}
+          <span class="text-sm text-muted">{{ fb.viewport_w }}×{{ fb.viewport_h }}</span>
+          {% endif %}
+          {% if fb.screenshot %}
+          <a href="/admin/feedback/{{ fb.id }}/screenshot"
+             target="_blank" class="text-sm">📸 screenshot</a>
+          {% endif %}
+          {% if fb.resolved_by %}
+          <span class="text-sm text-muted">
+            resolved by {{ fb.resolved_by }} · {{ fb.resolved_at[:16] }}
+          </span>
+          {% endif %}
+        </div>
+        <div class="admin-feedback-row-actions">
+          {% for s in ('accepted', 'rejected', 'done', 'open') %}
+            {% if fb.status != s %}
+            <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">
+              <input type="hidden" name="status" value="{{ s }}">
+              <button type="submit" class="btn btn-secondary btn-sm">{{ s }}</button>
+            </form>
             {% endif %}
-          </details>
-        </td>
-        <td>{{ t.plan }}</td>
-        <td>{{ t.member_count }}</td>
-        <td>{{ t.open_invites }}</td>
-        <td>{{ t.box_count }}</td>
-        <td>{{ t.item_count }}</td>
-        <td>
+          {% endfor %}
+        </div>
+      </footer>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="admin-empty">
+    <p>Nothing in the feedback queue yet.</p>
+    <p class="text-sm text-muted">
+      Users submit via the floating widget on every authenticated page.
+    </p>
+  </div>
+  {% endif %}
+</section>
+
+{# ── Recent activity ────────────────────────────────────────── #}
+<section class="admin-section" id="activity">
+  <header class="admin-section-head">
+    <h2>Recent activity</h2>
+    <span class="text-sm text-muted">
+      Last {{ recent_activity | length }} audit events
+    </span>
+  </header>
+  <p class="text-sm text-muted">
+    Cross-tenant tail of the audit log.  Same stream that powers
+    per-tenant /usage; surfaces here so a burst pattern across
+    tenants is obvious at a glance.
+  </p>
+  {% if recent_activity %}
+  <div class="admin-activity">
+    {% for a in recent_activity %}
+    <div class="admin-activity-row">
+      <span class="admin-activity-when">{{ a.created_at[:16] }}</span>
+      <code class="admin-activity-action">{{ a.action }}</code>
+      <span class="admin-activity-actor">{{ a.actor_email or '<system>' }}</span>
+      <span class="admin-activity-tenant text-muted text-sm">
+        {{ a.tenant_name or '<cross-tenant>' }}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="admin-empty">No activity yet.</div>
+  {% endif %}
+</section>
+
+{# ── Tenants ────────────────────────────────────────────────── #}
+<section class="admin-section" id="tenants">
+  <header class="admin-section-head">
+    <h2>Tenants ({{ active_tenants | length }})</h2>
+    <details class="admin-quick-action">
+      <summary class="btn btn-primary btn-sm">+ Create tenant</summary>
+      <form method="post" action="/admin/tenants" class="admin-quick-action-form">
+        <p class="text-sm text-muted">
+          Spins up an empty tenant + mints a one-time invite.  You stay
+          an operator (no membership); the invitee becomes the sole
+          maintainer when they accept.
+        </p>
+        {% if invite_url %}
+        <div class="notice notice-success">
+          <strong>Invite minted.</strong>
+          <input type="text" readonly value="{{ invite_url }}"
+                 class="invite-url-input"
+                 onclick="this.select()"
+                 style="width:100%;margin-top:0.5rem;font-family:monospace;">
+        </div>
+        {% endif %}
+        <label>
+          Tenant name
+          <input type="text" name="name" required placeholder="Sister"
+                 autocomplete="off">
+        </label>
+        <label>
+          Invitee email
+          <input type="email" name="invitee_email" required
+                 placeholder="them@example.com" autocomplete="off">
+        </label>
+        <label>
+          Role
+          <select name="role">
+            <option value="maintainer" selected>Maintainer</option>
+            <option value="readonly">Read-only</option>
+          </select>
+        </label>
+        <label>
+          Plan
+          <select name="plan">
+            <option value="free" selected>Free</option>
+            <option value="pro">Pro</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary btn-block">
+          Create + invite
+        </button>
+      </form>
+    </details>
+  </header>
+  {% if tenants %}
+  <div class="admin-tenant-grid">
+    {% for t in tenants %}
+    <article class="admin-tenant-card {% if t.deleted_at %}admin-tenant-card-soft{% endif %}">
+      <header class="admin-tenant-card-head">
+        <h3>{{ t.name }}</h3>
+        <div class="admin-tenant-card-badges">
+          <span class="pill pill-plan-{{ t.plan }}">{{ t.plan }}</span>
           {% if t.deleted_at %}
-            <span class="text-muted">
-              soft-deleted
-              {% if t.hard_delete_after %}
-                <small>(purges {{ t.hard_delete_after[:10] }})</small>
+            <span class="pill pill-suspended">soft-deleted</span>
+          {% elif t.last_activity_at %}
+            <span class="pill pill-active">active</span>
+          {% else %}
+            <span class="pill">idle</span>
+          {% endif %}
+        </div>
+      </header>
+      <dl class="admin-tenant-card-stats">
+        <div><dt>Members</dt><dd>{{ t.member_count }}</dd></div>
+        <div><dt>Invites</dt><dd>{{ t.open_invites }}</dd></div>
+        <div><dt>Boxes</dt><dd>{{ t.box_count }}</dd></div>
+        <div><dt>Items</dt><dd>{{ t.item_count }}</dd></div>
+      </dl>
+      <div class="admin-tenant-card-timestamps text-sm text-muted">
+        Created {{ t.created_at[:10] if t.created_at else '—' }}
+        · Last activity
+        {% if t.last_activity_at %}
+          {{ t.last_activity_at[:10] }}
+        {% else %}
+          <span class="text-muted">never</span>
+        {% endif %}
+        {% if t.deleted_at and t.hard_delete_after %}
+          · purges {{ t.hard_delete_after[:10] }}
+        {% endif %}
+      </div>
+      {% if t.members %}
+      <details class="admin-tenant-card-members">
+        <summary>{{ t.members | length }} member{{ '' if t.members|length == 1 else 's' }}</summary>
+        <ul>
+          {% for m in t.members %}
+          <li>
+            <code>{{ m.email }}</code>
+            <span class="text-sm text-muted">
+              · {{ m.role }}
+              {% if m.joined_at %}
+                · joined {{ m.joined_at[:10] }}
+              {% else %}
+                · invited
+              {% endif %}
+              {% if m.last_active_at %}
+                · active {{ m.last_active_at[:10] }}
               {% endif %}
             </span>
-          {% else %}
-            <span>active</span>
-          {% endif %}
-        </td>
-        <td>{{ t.created_at[:10] if t.created_at else '' }}</td>
-        <td>
-          {% if t.last_activity_at %}
-            <span title="{{ t.last_activity_at }}">{{ t.last_activity_at[:10] }}</span>
-          {% else %}
-            <span class="text-muted">never</span>
-          {% endif %}
-        </td>
-        <td>
-          {# Soft-delete on active rows.  Reactivate + hard-delete
-             on soft-deleted rows.  Hard-delete requires a typed
-             confirm form so an accidental click can't nuke a
-             tenant — see /admin/tenants/{id}/hard-delete. #}
-          {% if not t.deleted_at %}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      <footer class="admin-tenant-card-actions">
+        {% if not t.deleted_at %}
           <form method="post"
                 action="/admin/tenants/{{ t.id }}/soft-delete"
                 style="display:inline;">
-            <button type="submit" class="btn btn-link btn-sm"
-                    onclick="return confirm('Soft-delete {{ t.name }}? Members keep access during the 30-day grace window; outbound shares pause until reactivated.');">
+            <button type="submit" class="btn btn-secondary btn-sm"
+                    onclick="return confirm('Soft-delete {{ t.name }}? Members keep access during the 30-day grace; shares pause until reactivated.');">
               Soft-delete
             </button>
           </form>
-          {% else %}
+        {% else %}
           <form method="post"
                 action="/admin/tenants/{{ t.id }}/reactivate"
                 style="display:inline;">
-            <button type="submit" class="btn btn-link btn-sm">
+            <button type="submit" class="btn btn-secondary btn-sm">
               Reactivate
             </button>
           </form>
-          <button type="button" class="btn btn-link btn-sm"
-                  onclick="document.getElementById('hard-delete-{{ t.id }}').hidden = false;"
-                  style="color: var(--danger, #ef4444);">
-            Hard-delete
+          <button type="button" class="btn btn-secondary btn-sm admin-hard-delete-toggle"
+                  data-target="hard-delete-{{ t.id }}">
+            Hard-delete…
           </button>
           <form method="post"
                 action="/admin/tenants/{{ t.id }}/hard-delete"
@@ -194,14 +332,12 @@
                    placeholder="Type {{ t.name }} to confirm"
                    autocomplete="off">
             <button type="submit" class="btn btn-danger btn-sm"
-                    onclick="return confirm('FINAL: permanently delete {{ t.name }} and all its rows? This cannot be undone.');">
+                    onclick="return confirm('FINAL: permanently delete {{ t.name }} and every row it owns? Cannot be undone.');">
               Permanently delete
             </button>
           </form>
-          {% endif %}
-        </td>
-        <td>
-          {% if b2_configured %}
+        {% endif %}
+        {% if b2_configured %}
           <form method="post" action="/admin/tenants/{{ t.id }}/backup"
                 style="display:inline;">
             <button type="submit" class="btn btn-link btn-sm"
@@ -209,89 +345,32 @@
               Upload to B2
             </button>
           </form>
-          {% else %}
+        {% else %}
           <span class="text-muted text-sm">B2 not configured</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        {% endif %}
+      </footer>
+    </article>
+    {% endfor %}
   </div>
   {% else %}
-  <p class="text-muted">No tenants yet.</p>
+  <div class="admin-empty">No tenants yet.</div>
   {% endif %}
-</div>
+</section>
 
-{# ── Per-tenant quota editor ──────────────────────────────────── #}
-<div class="card maintenance-card">
-  <div class="card-title">Quotas</div>
-  <p class="text-sm text-muted">
-    Per-tenant caps override the plan defaults.  Leave a field
-    blank to keep the current setting; enter <code>-1</code> to
-    clear the override (revert to plan default).  Resets land
-    on the 1st of next UTC month for monthly caps; daily AI
-    cost resets at UTC midnight.
-  </p>
-  {% for t in tenants %}
-  <details>
-    <summary class="disclosure">
-      {{ t.name }}
-      <span class="text-muted text-sm">
-        — AI {{ t.usage.monthly_ai_calls }}/{{ t.caps.monthly_ai_calls or '∞' }},
-        upload {{ "%.0f" | format(t.usage.monthly_upload_bytes / 1048576) }}MB/{{ (t.caps.monthly_upload_bytes / 1048576) | round | int if t.caps.monthly_upload_bytes else '∞' }}MB,
-        AI cost today ${{ "%.2f" | format(t.usage.daily_ai_cost_micros / 1000000) }}/${{ "%.2f" | format(t.caps.daily_ai_cost_micros / 1000000) if t.caps.daily_ai_cost_micros else '∞' }}
-      </span>
-    </summary>
-    <form method="post" action="/admin/tenants/{{ t.id }}/quotas">
-      <label>
-        Monthly AI calls
-        <input type="text" name="monthly_ai_calls"
-               placeholder="{{ t.caps.monthly_ai_calls }}"
-               autocomplete="off">
-      </label>
-      <label>
-        Monthly upload bytes
-        <input type="text" name="monthly_upload_bytes"
-               placeholder="{{ t.caps.monthly_upload_bytes }}"
-               autocomplete="off">
-      </label>
-      <label>
-        Daily AI cost (micro-dollars)
-        <input type="text" name="daily_ai_cost_micros"
-               placeholder="{{ t.caps.daily_ai_cost_micros }}"
-               autocomplete="off">
-      </label>
-      <button type="submit" class="btn btn-primary btn-sm">
-        Save overrides
-      </button>
-    </form>
-  </details>
-  {% endfor %}
-</div>
-
-{# ── Cross-tenant API token panel ────────────────────────────── #}
-{# Filter selects are populated from the table rows below at render
-   time — distinct tenant / role values come from a Python set so
-   the dropdown options track whatever is actually present.  The
-   filter is JS-driven so the operator can sift live without server
-   round-trips; the unfiltered baseline still works without JS. #}
+{# ── API tokens ─────────────────────────────────────────────── #}
 {% set token_tenants = api_tokens | map(attribute="tenant_name") | reject("none") | unique | sort | list %}
 {% set token_roles = api_tokens | map(attribute="role") | reject("none") | unique | sort | list %}
-<div class="card maintenance-card" id="tokens">
-  <div class="card-title">API tokens ({{ api_tokens | length }})</div>
+<section class="admin-section" id="tokens">
+  <header class="admin-section-head">
+    <h2>API tokens ({{ api_tokens | length }})</h2>
+  </header>
   <p class="text-sm text-muted">
-    Cross-tenant view of every API token on the deployment.
-    Operator-side revoke kills a token regardless of which tenant
-    minted it; suspend pauses auth without losing the mint
-    metadata so you can resume after investigating.  Revoke reason
-    surfaces auto-revokes (HTTPS gate, URL-leak scanner) so you
-    can spot misconfigured clients.
+    Cross-tenant view.  Operator-side revoke kills a token regardless
+    of which tenant minted it; suspend pauses without losing metadata.
+    OAuth-issued tokens roll up by client so a chatty connector
+    doesn't drown the panel.
   </p>
   {% if oauth_client_groups %}
-  {# OAuth clients spawn one access token per reach-out (claude.ai's
-     MCP connector is the typical offender).  Group those by client
-     so the panel doesn't grow by one row per call. #}
   <div class="oauth-client-groups">
     <div class="oauth-client-groups-title">
       Grouped by OAuth client
@@ -320,7 +399,7 @@
         {% if g.active %}
         <form method="post" action="/admin/oauth-clients/revoke-tokens"
               style="display:inline;"
-              onsubmit="return confirm('Revoke all {{ g.active }} active tokens for {{ g.oauth_client_name }} on {{ g.tenant_name }}?  The client will have to re-authorize via /oauth/authorize.');">
+              onsubmit="return confirm('Revoke all {{ g.active }} active tokens for {{ g.oauth_client_name }} on {{ g.tenant_name }}? The client will have to re-authorize via /oauth/authorize.');">
           <input type="hidden" name="oauth_client_id" value="{{ g.oauth_client_id }}">
           <input type="hidden" name="tenant_id" value="{{ g.tenant_id }}">
           <button type="submit" class="btn btn-secondary btn-sm">
@@ -332,521 +411,340 @@
     </div>
     {% endfor %}
   </div>
-  <details class="oauth-client-groups-details">
-    <summary class="text-sm text-muted">Show full token table</summary>
   {% endif %}
   {% if api_tokens %}
-  <div class="admin-filter-bar" data-filter-target="#api-tokens-tbody">
-    <label>
-      Tenant
-      <select data-filter-key="tenant">
-        <option value="">All</option>
-        {% for name in token_tenants %}
-        <option value="{{ name }}">{{ name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      State
-      <select data-filter-key="state">
-        <option value="">All</option>
-        <option value="active">Active</option>
-        <option value="suspended">Suspended</option>
-        <option value="revoked">Revoked</option>
-      </select>
-    </label>
-    <label>
-      Role
-      <select data-filter-key="role">
-        <option value="">All</option>
-        {% for r in token_roles %}
-        <option value="{{ r }}">{{ r }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label class="admin-filter-search">
-      Name
-      <input type="search" data-filter-key="name" placeholder="substring…"
-             autocomplete="off">
-    </label>
-    <span class="admin-filter-count" data-filter-count
-          data-total="{{ api_tokens | length }}">
-      {{ api_tokens | length }} of {{ api_tokens | length }}
-    </span>
-  </div>
-  <div class="admin-table-scroll">
-  <table class="admin-tenant-table" id="api-tokens-table">
-    <thead>
-      <tr>
-        <th>Tenant</th>
-        <th>Name</th>
-        <th>Role</th>
-        <th>Last used</th>
-        <th>State</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody id="api-tokens-tbody">
-      {% for t in api_tokens %}
-      {% set state = "revoked" if t.revoked_at else ("suspended" if t.suspended_at else "active") %}
-      <tr data-tenant="{{ t.tenant_name or '' }}"
-          data-role="{{ t.role or '' }}"
-          data-state="{{ state }}"
-          data-name="{{ t.name or '' }}">
-        <td>{{ t.tenant_name }}</td>
-        <td><code>{{ t.name }}</code></td>
-        <td>{{ t.role }}</td>
-        <td>
-          {% if t.last_used_at %}
-            {{ t.last_used_at[:10] }}
-          {% else %}
-            <span class="text-muted">never</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if t.revoked_at %}
-            <span class="text-muted">
-              revoked
-              {% if t.revoked_reason %}
-                <small>({{ t.revoked_reason }})</small>
-              {% endif %}
-            </span>
-          {% elif t.suspended_at %}
-            <span>suspended</span>
-          {% else %}
-            <span>active</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if not t.revoked_at %}
-            {% if t.suspended_at %}
-              <form method="post" action="/admin/api-tokens/{{ t.id }}/resume" style="display:inline;">
-                <button type="submit" class="btn btn-link btn-sm">Resume</button>
-              </form>
-            {% else %}
-              <form method="post" action="/admin/api-tokens/{{ t.id }}/suspend" style="display:inline;">
-                <button type="submit" class="btn btn-link btn-sm"
-                        onclick="return confirm('Suspend {{ t.name }}? Token auth will fail until resumed.');">
-                  Suspend
-                </button>
-              </form>
-            {% endif %}
-            <form method="post" action="/admin/api-tokens/{{ t.id }}/revoke" style="display:inline;">
-              <button type="submit" class="btn btn-link btn-sm"
-                      onclick="return confirm('Permanently revoke {{ t.name }}? Cannot be undone.');">
-                Revoke
-              </button>
-            </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-  <p class="text-muted">No API tokens have been minted on this deployment yet.</p>
-  {% endif %}
-  {% if oauth_client_groups %}
-  </details>
-  {% endif %}
-</div>
-
-{# ── Feedback queue ──────────────────────────────────────────── #}
-<div class="card maintenance-card" id="feedback">
-  <div class="card-title">
-    Feedback queue
-    {% if feedback_counts.get('open', 0) %}
-      <span class="feedback-queue-status feedback-queue-status-open">
-        {{ feedback_counts['open'] }} open
+  <details class="admin-disclosure">
+    <summary class="text-sm">Show full token table ({{ api_tokens | length }} row{{ '' if api_tokens|length == 1 else 's' }})</summary>
+    <div class="admin-filter-bar" data-filter-target="#api-tokens-tbody">
+      <label>
+        Tenant
+        <select data-filter-key="tenant">
+          <option value="">All</option>
+          {% for name in token_tenants %}
+          <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        State
+        <select data-filter-key="state">
+          <option value="">All</option>
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+          <option value="revoked">Revoked</option>
+        </select>
+      </label>
+      <label>
+        Role
+        <select data-filter-key="role">
+          <option value="">All</option>
+          {% for r in token_roles %}
+          <option value="{{ r }}">{{ r }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="admin-filter-search">
+        Name
+        <input type="search" data-filter-key="name" placeholder="substring…"
+               autocomplete="off">
+      </label>
+      <span class="admin-filter-count" data-filter-count
+            data-total="{{ api_tokens | length }}">
+        {{ api_tokens | length }} of {{ api_tokens | length }}
       </span>
-    {% endif %}
-  </div>
+    </div>
+    <div class="admin-table-scroll">
+      <table class="admin-tenant-table" id="api-tokens-table">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Last used</th>
+            <th>State</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="api-tokens-tbody">
+          {% for t in api_tokens %}
+          {% set state = "revoked" if t.revoked_at else ("suspended" if t.suspended_at else "active") %}
+          <tr data-tenant="{{ t.tenant_name or '' }}"
+              data-role="{{ t.role or '' }}"
+              data-state="{{ state }}"
+              data-name="{{ t.name or '' }}">
+            <td>{{ t.tenant_name }}</td>
+            <td><code>{{ t.name }}</code></td>
+            <td>{{ t.role }}</td>
+            <td>
+              {% if t.last_used_at %}{{ t.last_used_at[:10] }}{% else %}<span class="text-muted">never</span>{% endif %}
+            </td>
+            <td>
+              {% if t.revoked_at %}
+                <span class="pill pill-revoked">revoked</span>
+                {% if t.revoked_reason %}
+                  <small class="text-muted">({{ t.revoked_reason }})</small>
+                {% endif %}
+              {% elif t.suspended_at %}
+                <span class="pill pill-suspended">suspended</span>
+              {% else %}
+                <span class="pill pill-active">active</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if not t.revoked_at %}
+                {% if t.suspended_at %}
+                <form method="post" action="/admin/api-tokens/{{ t.id }}/resume" style="display:inline;">
+                  <button type="submit" class="btn btn-link btn-sm">Resume</button>
+                </form>
+                {% else %}
+                <form method="post" action="/admin/api-tokens/{{ t.id }}/suspend" style="display:inline;">
+                  <button type="submit" class="btn btn-link btn-sm"
+                          onclick="return confirm('Suspend {{ t.name }}? Token auth will fail until resumed.');">
+                    Suspend
+                  </button>
+                </form>
+                {% endif %}
+                <form method="post" action="/admin/api-tokens/{{ t.id }}/revoke" style="display:inline;">
+                  <button type="submit" class="btn btn-link btn-sm"
+                          onclick="return confirm('Permanently revoke {{ t.name }}? Cannot be undone.');">
+                    Revoke
+                  </button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <div class="admin-empty">No tokens minted yet.</div>
+  {% endif %}
+</section>
+
+{# ── Quotas ─────────────────────────────────────────────────── #}
+<section class="admin-section" id="quotas">
+  <header class="admin-section-head">
+    <h2>Quotas</h2>
+  </header>
   <p class="text-sm text-muted">
-    In-app feedback from the floating widget on every page.  Triage
-    by setting each row's status — Accepted = "we'll fix it",
-    Rejected = "won't fix", Done = "shipped".
+    Per-tenant caps override plan defaults.  Leave a field blank to
+    keep the current setting; enter <code>-1</code> to clear the
+    override (revert to plan default).  Monthly caps reset on the
+    1st UTC; daily AI cost resets at UTC midnight.
   </p>
-  <div class="feedback-export-row">
-    <span class="text-sm text-muted">Export queue:</span>
-    <a href="/admin/feedback/export?format=json"
-       class="btn btn-secondary btn-sm" download>JSON</a>
-    <a href="/admin/feedback/export?format=csv"
-       class="btn btn-secondary btn-sm" download>CSV</a>
-    <a href="/admin/feedback/export?format=json&status=open"
-       class="btn btn-secondary btn-sm" download>Open only (JSON)</a>
+  <div class="admin-quotas-grid">
+    {% for t in tenants %}
+    <details class="admin-quota-card">
+      <summary class="admin-quota-summary">
+        <strong>{{ t.name }}</strong>
+        <span class="text-muted text-sm">
+          AI {{ t.usage.monthly_ai_calls }}/{{ t.caps.monthly_ai_calls or '∞' }}
+          · upload {{ "%.0f" | format(t.usage.monthly_upload_bytes / 1048576) }}MB / {{ (t.caps.monthly_upload_bytes / 1048576) | round | int if t.caps.monthly_upload_bytes else '∞' }}MB
+          · today ${{ "%.2f" | format(t.usage.daily_ai_cost_micros / 1000000) }} / ${{ "%.2f" | format(t.caps.daily_ai_cost_micros / 1000000) if t.caps.daily_ai_cost_micros else '∞' }}
+        </span>
+      </summary>
+      <form method="post" action="/admin/tenants/{{ t.id }}/quotas">
+        <label>
+          Monthly AI calls
+          <input type="text" name="monthly_ai_calls"
+                 placeholder="{{ t.caps.monthly_ai_calls }}"
+                 autocomplete="off">
+        </label>
+        <label>
+          Monthly upload bytes
+          <input type="text" name="monthly_upload_bytes"
+                 placeholder="{{ t.caps.monthly_upload_bytes }}"
+                 autocomplete="off">
+        </label>
+        <label>
+          Daily AI cost (µ$)
+          <input type="text" name="daily_ai_cost_micros"
+                 placeholder="{{ t.caps.daily_ai_cost_micros }}"
+                 autocomplete="off">
+        </label>
+        <button type="submit" class="btn btn-primary btn-sm">
+          Save overrides
+        </button>
+      </form>
+    </details>
+    {% endfor %}
   </div>
-  {% if feedback_queue %}
-  {% for fb in feedback_queue %}
-  <div class="feedback-queue-row">
-    <span class="feedback-queue-status feedback-queue-status-{{ fb.status }}">
-      {{ fb.status }}
+</section>
+
+{# ── Vendor cost ────────────────────────────────────────────── #}
+<section class="admin-section" id="cost">
+  <header class="admin-section-head">
+    <h2>Vendor cost (this month)</h2>
+    <span class="text-sm text-muted">
+      Since {{ vendor_cost.since[:10] }} UTC
     </span>
-    <div>
-      <div class="feedback-queue-body">{{ fb.body }}</div>
-      <div class="feedback-queue-meta">
-        #{{ fb.id }} · {{ fb.actor_email or '(anon)' }}
-        · {{ fb.tenant_name or 'no tenant' }}
-        · {{ fb.created_at }}
-        {% if fb.source_url %} · <a href="{{ fb.source_url }}">{{ fb.source_url }}</a>{% endif %}
-        {% if fb.viewport_w %} · {{ fb.viewport_w }}×{{ fb.viewport_h }}{% endif %}
-        {% if fb.screenshot %}
-          · <a href="/admin/feedback/{{ fb.id }}/screenshot" target="_blank">📸 screenshot</a>
-        {% endif %}
-        {% if fb.resolved_by %}
-          · resolved by {{ fb.resolved_by }} at {{ fb.resolved_at }}
-        {% endif %}
+  </header>
+  <p class="text-sm text-muted">
+    Aggregate AI spend across every tenant.  Operator-side estimates
+    from a hard-coded price table — round to the nearest cent.
+  </p>
+  <div class="admin-cost-summary">
+    <div class="admin-cost-total">
+      <div class="admin-kpi-label">Total this month</div>
+      <div class="admin-kpi-value">
+        ${{ "%.2f" | format(vendor_cost.total_cost_micros / 1_000_000) }}
       </div>
     </div>
-    <div class="feedback-queue-actions">
-      {% for s in ('accepted', 'rejected', 'done', 'open') %}
-        {% if fb.status != s %}
-        <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">
-          <input type="hidden" name="status" value="{{ s }}">
-          <button type="submit" class="btn btn-secondary btn-sm">{{ s }}</button>
-        </form>
-        {% endif %}
-      {% endfor %}
-    </div>
-  </div>
-  {% endfor %}
-  {% else %}
-  <p class="text-muted">Nothing in the feedback queue yet.</p>
-  {% endif %}
-</div>
-
-{# ── Recent activity feed ───────────────────────────────────── #}
-<div class="card maintenance-card">
-  <div class="card-title">Recent activity ({{ recent_activity | length }})</div>
-  <p class="text-sm text-muted">
-    Tail of the audit log across every tenant.  This is the same
-    stream that powers per-tenant /usage history; it surfaces here
-    so an operator can spot anomalies (burst of share creates from
-    one email, mass token issues against one client) at a glance
-    without paging through individual tenants.
-  </p>
-  {% if recent_activity %}
-  <div class="admin-table-scroll">
-  <table class="admin-tenant-table">
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>Tenant</th>
-        <th>Actor</th>
-        <th>Action</th>
-        <th>Target</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for a in recent_activity %}
-      <tr>
-        <td><span title="{{ a.created_at }}">{{ a.created_at[:19].replace('T', ' ') if a.created_at else '' }}</span></td>
-        <td>
-          {% if a.tenant_name %}
-            {{ a.tenant_name }}
-          {% else %}
-            <span class="text-muted">—</span>
-          {% endif %}
-        </td>
-        <td><code>{{ a.actor_email }}</code></td>
-        <td><code>{{ a.action }}</code></td>
-        <td>
-          {% if a.target_kind %}
-            {{ a.target_kind }}{% if a.target_id %}:{{ a.target_id }}{% endif %}
-          {% else %}
-            <span class="text-muted">—</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-  <p class="text-muted">No audit-log entries yet.</p>
-  {% endif %}
-</div>
-
-{# ── Vendor cost (this month) ────────────────────────────────── #}
-{# Operator-only aggregate cost across every tenant.  Hard-rule
-   from spec § "Operator surface": names + counts + costs only —
-   never per-tenant content.  The by-tenant table shows where
-   spend is concentrated; the by-kind list shows which AI call
-   is the driver. #}
-<div class="card maintenance-card">
-  <div class="card-title">Vendor cost (this month)</div>
-  <p class="text-sm text-muted">
-    Aggregate AI spend across every tenant since
-    {{ vendor_cost.since[:10] }} UTC.  Costs are operator-side
-    estimates from a hard-coded price table — round to the
-    nearest cent.  Per-tenant rollup shows where the spend is
-    concentrated.
-  </p>
-  <dl class="stat-row">
-    <div>
-      <dt>Total cost</dt>
-      <dd>${{ "%.2f" | format(vendor_cost.total_cost_micros / 1_000_000) }}</dd>
-    </div>
-    {% for kind, row in vendor_cost.by_kind.items() %}
-    <div>
-      <dt><code>{{ kind }}</code></dt>
-      <dd>
-        {{ row.units }} ·
-        <span class="text-muted text-sm">
+    <div class="admin-cost-by-kind">
+      {% for kind, row in vendor_cost.by_kind.items() %}
+      <div class="admin-cost-kind">
+        <code>{{ kind }}</code>
+        <span class="admin-cost-kind-value">
+          {{ row.units }} ·
           ${{ "%.2f" | format(row.cost_micros / 1_000_000) }}
         </span>
-      </dd>
-    </div>
-    {% endfor %}
-  </dl>
-  {% if vendor_cost.by_tenant %}
-  <div class="admin-table-scroll">
-  <table class="admin-tenant-table">
-    <thead>
-      <tr>
-        <th>Tenant</th>
-        <th>AI calls</th>
-        <th>AI cost</th>
-        <th>Upload</th>
-        <th>Download</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for t in vendor_cost.by_tenant %}
-      <tr>
-        <td>{{ t.name }}</td>
-        <td>{{ t.ai_calls }}</td>
-        <td>${{ "%.2f" | format(t.ai_cost_micros / 1_000_000) }}</td>
-        <td>{{ "%.1f" | format(t.upload_bytes / (1024 * 1024)) }} MB</td>
-        <td>{{ "%.1f" | format(t.download_bytes / (1024 * 1024)) }} MB</td>
-      </tr>
+      </div>
       {% endfor %}
-    </tbody>
-  </table>
+    </div>
   </div>
+  {% if vendor_cost.by_tenant %}
+  <details class="admin-disclosure">
+    <summary class="text-sm">By tenant ({{ vendor_cost.by_tenant | length }})</summary>
+    <div class="admin-table-scroll">
+      <table class="admin-tenant-table">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>AI calls</th>
+            <th>AI cost</th>
+            <th>Upload</th>
+            <th>Download</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in vendor_cost.by_tenant %}
+          <tr>
+            <td>{{ t.name }}</td>
+            <td>{{ t.ai_calls }}</td>
+            <td>${{ "%.2f" | format(t.ai_cost_micros / 1_000_000) }}</td>
+            <td>{{ "%.1f" | format(t.upload_bytes / (1024 * 1024)) }} MB</td>
+            <td>{{ "%.1f" | format(t.download_bytes / (1024 * 1024)) }} MB</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
   {% endif %}
-</div>
+</section>
 
-{# ── OAuth clients ────────────────────────────────────────────── #}
-{# Every registered OAuth client (manually pre-registered or
-   self-registered via Dynamic Client Registration).  The DCR
-   audit row is the canonical record but a panel makes it easier
-   to spot a runaway client that's minting too many tokens. #}
-<div class="card maintenance-card">
-  <div class="card-title">OAuth clients ({{ oauth_clients | length }})</div>
+{# ── OAuth clients ──────────────────────────────────────────── #}
+<section class="admin-section" id="oauth">
+  <header class="admin-section-head">
+    <h2>OAuth clients ({{ oauth_clients | length }})</h2>
+  </header>
   <p class="text-sm text-muted">
-    Every client that has registered against the OAuth 2.1
-    authorization server.  Revoking a client kills new auth-code
-    and refresh exchanges; access tokens issued under it stay
-    valid until their natural expiry.
+    Every client registered against the OAuth 2.1 authorization
+    server.  Revoking kills new auth-code + refresh exchanges;
+    existing access tokens stay valid until expiry (use the
+    "Revoke all active" action under API tokens for an instant kill).
   </p>
   {% if oauth_clients %}
   <div class="admin-table-scroll">
-  <table class="admin-tenant-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Client ID</th>
-        <th>Type</th>
-        <th>Registered by</th>
-        <th>Registered</th>
-        <th>State</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in oauth_clients %}
-      <tr>
-        <td>{{ c.name }}</td>
-        <td><code>{{ c.client_id }}</code></td>
-        <td>{{ "public" if c.is_public else "confidential" }}</td>
-        <td><code>{{ c.registered_by_email or '<dcr>' }}</code></td>
-        <td>{{ c.registered_at[:10] if c.registered_at else '' }}</td>
-        <td>
-          {% if c.revoked_at %}
-            <span class="text-muted">revoked</span>
-          {% else %}
-            <span>active</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if not c.revoked_at %}
-          <form method="post"
-                action="/admin/oauth-clients/{{ c.client_id }}/revoke"
-                style="display:inline;">
-            <button type="submit" class="btn btn-link btn-sm"
-                    onclick="return confirm('Revoke {{ c.name }}? Future auth flows will fail; existing access tokens keep working until expiry.');">
-              Revoke
-            </button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <table class="admin-tenant-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Client ID</th>
+          <th>Type</th>
+          <th>Registered by</th>
+          <th>Registered</th>
+          <th>State</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in oauth_clients %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td><code>{{ c.client_id }}</code></td>
+          <td>{{ "public" if c.is_public else "confidential" }}</td>
+          <td><code>{{ c.registered_by_email or '<dcr>' }}</code></td>
+          <td>{{ c.registered_at[:10] if c.registered_at else '' }}</td>
+          <td>
+            {% if c.revoked_at %}
+              <span class="pill pill-revoked">revoked</span>
+            {% else %}
+              <span class="pill pill-active">active</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if not c.revoked_at %}
+            <form method="post"
+                  action="/admin/oauth-clients/{{ c.client_id }}/revoke"
+                  style="display:inline;">
+              <button type="submit" class="btn btn-link btn-sm"
+                      onclick="return confirm('Revoke {{ c.name }}? Future auth flows will fail; existing tokens stay valid until expiry.');">
+                Revoke
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% else %}
-  <p class="text-muted">No OAuth clients registered yet.</p>
+  <div class="admin-empty">No OAuth clients registered yet.</div>
   {% endif %}
-</div>
-
-<style>
-  /* Each admin table can have 5–10 columns of operator data, which
-     never fits a 360px-wide phone.  Wrap in a scroll container so
-     the table keeps its natural column widths and the user can
-     swipe sideways — preferable to crushing every column down to
-     fit, which would make timestamps + emails unreadable. */
-  .admin-table-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-  /* Inline hard-delete form sits hidden inside the lifecycle cell
-     until the operator clicks "Hard-delete".  Stacks the typed-
-     confirm input above the danger button so the eye lands on
-     the warning, not the action. */
-  .admin-hard-delete-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-top: 0.4rem;
-    padding: 0.4rem;
-    background: rgba(239, 68, 68, 0.08);
-    border: 1px solid rgba(239, 68, 68, 0.35);
-    border-radius: 0.3rem;
-  }
-  .admin-hard-delete-form input {
-    padding: 0.25rem 0.4rem;
-    font-size: 0.85rem;
-  }
-  .admin-tenant-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.92rem;
-  }
-  .admin-tenant-table th,
-  .admin-tenant-table td {
-    text-align: left;
-    padding: 0.4rem 0.6rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-    white-space: nowrap;
-  }
-  .admin-tenant-table th {
-    font-weight: 600;
-    color: var(--text-muted, #aaa);
-  }
-  .admin-member-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.85rem;
-    margin-top: 0.5rem;
-    background: rgba(255, 255, 255, 0.02);
-  }
-  .admin-member-table th,
-  .admin-member-table td {
-    text-align: left;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    white-space: nowrap;
-  }
-  /* Member emails can be long; let the email column take what's
-     left and wrap on hyphens / dots so it doesn't push the row
-     out past the scroll container.  Other columns stay nowrap so
-     the date/role don't break mid-word. */
-  .admin-member-table td:first-child code {
-    word-break: break-all;
-    white-space: normal;
-  }
-  .tenant-roster summary {
-    cursor: pointer;
-    font-weight: 600;
-  }
-  .admin-filter-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: end;
-    margin-bottom: 0.75rem;
-  }
-  .admin-filter-bar label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    font-size: 0.85rem;
-    color: var(--text-muted, #aaa);
-    flex: 1 1 10rem;
-    min-width: 0;
-  }
-  .admin-filter-bar select,
-  .admin-filter-bar input[type="search"] {
-    min-width: 0;
-    width: 100%;
-  }
-  .admin-filter-count {
-    font-size: 0.85rem;
-    color: var(--text-muted, #aaa);
-    margin-left: auto;
-  }
-  /* On phone-width screens the filter labels stack 1-per-row
-     instead of stretching the row past the viewport.  The count
-     drops below the inputs and aligns left so it's still visible
-     without sideways scrolling. */
-  @media (max-width: 640px) {
-    .admin-filter-bar label {
-      flex: 1 1 100%;
-    }
-    .admin-filter-count {
-      margin-left: 0;
-    }
-  }
-</style>
+</section>
 
 <script>
-  // Client-side filter for the API tokens table.  Each <tr data-*=>
-  // attribute is matched against its corresponding [data-filter-key]
-  // input; matching is exact for selects, case-insensitive substring
-  // for free-text search.  No server round-trip — the operator can
-  // sift through hundreds of tokens without hammering /admin.
-  (function () {
-    document.querySelectorAll(".admin-filter-bar").forEach((bar) => {
-      const tbody = document.querySelector(bar.dataset.filterTarget);
-      if (!tbody) return;
-      const counter = bar.querySelector("[data-filter-count]");
-      const total = counter ? parseInt(counter.dataset.total, 10) : 0;
-      const inputs = bar.querySelectorAll("[data-filter-key]");
-
-      function applyFilter() {
-        const filters = {};
-        inputs.forEach((el) => {
-          const v = (el.value || "").trim();
-          if (v) filters[el.dataset.filterKey] = v;
-        });
-        let visible = 0;
-        tbody.querySelectorAll("tr").forEach((row) => {
-          let show = true;
-          for (const [k, v] of Object.entries(filters)) {
-            const rowVal = (row.dataset[k] || "").toLowerCase();
-            const filterVal = v.toLowerCase();
-            // Free-text "name" is substring; everything else exact
-            // so "active" doesn't accidentally match "inactive".
-            if (k === "name") {
-              if (!rowVal.includes(filterVal)) { show = false; break; }
-            } else {
-              if (rowVal !== filterVal) { show = false; break; }
-            }
-          }
-          row.style.display = show ? "" : "none";
-          if (show) visible++;
-        });
-        if (counter) counter.textContent = `${visible} of ${total}`;
-      }
-
-      inputs.forEach((el) => {
-        el.addEventListener("input", applyFilter);
-        el.addEventListener("change", applyFilter);
+// Existing token-filter JS — same hook as before so the live filter
+// still works inside the disclosure.
+(function() {
+  document.querySelectorAll('.admin-filter-bar').forEach(bar => {
+    const targetSel = bar.dataset.filterTarget;
+    const tbody = document.querySelector(targetSel);
+    if (!tbody) return;
+    const fields = bar.querySelectorAll('[data-filter-key]');
+    const count = bar.querySelector('[data-filter-count]');
+    const total = count ? parseInt(count.dataset.total, 10) : 0;
+    function apply() {
+      const filters = {};
+      fields.forEach(f => {
+        const k = f.dataset.filterKey;
+        const v = f.value.trim().toLowerCase();
+        if (v) filters[k] = v;
       });
+      let shown = 0;
+      tbody.querySelectorAll('tr').forEach(tr => {
+        let match = true;
+        Object.entries(filters).forEach(([k, v]) => {
+          const cell = (tr.dataset[k] || '').toLowerCase();
+          if (k === 'name') {
+            if (!cell.includes(v)) match = false;
+          } else if (cell !== v) {
+            match = false;
+          }
+        });
+        tr.style.display = match ? '' : 'none';
+        if (match) shown++;
+      });
+      if (count) count.textContent = shown + ' of ' + total;
+    }
+    fields.forEach(f => {
+      f.addEventListener('input', apply);
+      f.addEventListener('change', apply);
     });
-  })();
+  });
+  // Hard-delete reveal: clicking the toggle button shows the form.
+  document.querySelectorAll('.admin-hard-delete-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.target;
+      const form = document.getElementById(id);
+      if (form) form.hidden = false;
+    });
+  });
+})();
 </script>
 
 {% endblock %}

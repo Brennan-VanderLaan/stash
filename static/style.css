@@ -745,6 +745,378 @@ main.main-wide {
   margin-bottom: 0.75rem;
 }
 
+/* === /admin dashboard facelift ===
+   Modern dashboard pattern: hero KPI strip, sticky anchor TOC,
+   section cards in priority order (feedback first because it's
+   the most actionable), per-tenant cards instead of a wide table.
+   Operators are heavy users of this page — density on the things
+   they act on (feedback, tokens) and decompression on the things
+   they read (tenant roster) is the trade we're making. */
+.admin-hero {
+  margin-bottom: 1rem;
+  padding: 1.1rem 1.25rem;
+  background: linear-gradient(140deg, var(--panel) 0%, var(--panel-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.admin-hero-head { margin-bottom: 0.9rem; }
+.admin-hero-title {
+  font-size: 1.25rem;
+  margin: 0 0 0.25rem;
+  color: var(--accent);
+}
+.admin-hero-sub {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.admin-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 0.6rem;
+}
+.admin-kpi {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem 0.7rem;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.admin-kpi:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+.admin-kpi-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.admin-kpi-value {
+  font-size: 1.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  margin: 0.15rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.admin-kpi-foot {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.admin-kpi-attention {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim) inset;
+}
+.admin-toc {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.4rem 0.6rem;
+  margin: 0 0 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  backdrop-filter: blur(6px);
+}
+.admin-toc a {
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-sm);
+}
+.admin-toc a:hover { background: var(--accent-dim); }
+
+.admin-section {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.1rem 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  scroll-margin-top: 4rem;
+}
+.admin-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.admin-section-head h2 {
+  font-size: 1rem;
+  margin: 0;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.admin-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.admin-empty {
+  padding: 1rem 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.admin-disclosure { margin-top: 0.7rem; }
+.admin-disclosure > summary { cursor: pointer; }
+
+/* Tenant cards — replaces the 11-column table.  Each card is a
+   self-contained roster entry with key counts, member roll,
+   and lifecycle actions. */
+.admin-tenant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.7rem;
+}
+.admin-tenant-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.85rem;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.admin-tenant-card-soft {
+  opacity: 0.7;
+  background: var(--panel);
+}
+.admin-tenant-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.admin-tenant-card-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+.admin-tenant-card-badges {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.admin-tenant-card-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem 0.8rem;
+  margin: 0;
+}
+.admin-tenant-card-stats div { min-width: 0; }
+.admin-tenant-card-stats dt {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.admin-tenant-card-stats dd {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.admin-tenant-card-members ul {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.admin-tenant-card-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+.admin-hard-delete-form {
+  width: 100%;
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+.admin-hard-delete-form input { flex: 1; min-width: 0; }
+
+/* Plan pills + status pills */
+.pill-plan-free {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.pill-plan-pro {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* Feedback queue rows — replaces the old simple-grid layout with
+   a "card per row" look so each entry has visible structure
+   (status + meta + body + actions). */
+.admin-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.admin-feedback-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  background: var(--panel-2);
+}
+.admin-feedback-open { border-left: 3px solid var(--accent); }
+.admin-feedback-accepted { border-left: 3px solid #3b82f6; }
+.admin-feedback-rejected { border-left: 3px solid #ef4444; }
+.admin-feedback-done { border-left: 3px solid #22c55e; }
+.admin-feedback-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.admin-feedback-row-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.admin-feedback-row-body {
+  white-space: pre-wrap;
+  font-size: 0.92rem;
+  margin-bottom: 0.45rem;
+}
+.admin-feedback-row-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.admin-feedback-row-context {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.admin-feedback-row-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+/* Activity feed — compact rows aligned to a grid. */
+.admin-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+}
+.admin-activity-row {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr 1fr auto;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+.admin-activity-row:hover { background: var(--panel-2); }
+.admin-activity-when { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; }
+.admin-activity-action { color: var(--accent); font-size: 0.82rem; }
+.admin-activity-actor { color: var(--text); }
+@media (max-width: 720px) {
+  .admin-activity-row {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.4rem 0;
+  }
+}
+
+/* Quick action: inline disclosure that opens a compact create-tenant
+   form right inside the section header so it's never more than one
+   tap away. */
+.admin-quick-action summary { list-style: none; cursor: pointer; }
+.admin-quick-action summary::-webkit-details-marker { display: none; }
+.admin-quick-action[open] summary { color: var(--muted); }
+.admin-quick-action-form {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.4rem;
+  width: min(360px, 95vw);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 30;
+}
+.admin-quick-action { position: relative; }
+
+/* Quotas: per-tenant card grid (one disclosure per tenant). */
+.admin-quotas-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.4rem;
+}
+.admin-quota-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+  background: var(--panel-2);
+}
+.admin-quota-summary { cursor: pointer; }
+
+/* Vendor cost: prominent total + breakdown row. */
+.admin-cost-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) 1fr;
+  gap: 0.8rem;
+  margin: 0.55rem 0;
+  align-items: stretch;
+}
+@media (max-width: 720px) {
+  .admin-cost-summary { grid-template-columns: 1fr; }
+}
+.admin-cost-total {
+  background: linear-gradient(140deg, var(--accent-dim), var(--panel-2));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.admin-cost-by-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+}
+.admin-cost-kind {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+.admin-cost-kind-value { color: var(--muted); }
+
 /* OAuth client groups on /admin's API tokens card.  Each group is
    one card showing the (client + tenant) pair, status pill counts,
    and a "Revoke all active" action so the operator can collapse
