@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.24.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.23.0...v1.24.0) (2026-05-15)
+
+
+### Features
+
+* **billing:** /about/transparency + Stripe automatic_tax on checkout ([9d0541d](https://github.com/Brennan-VanderLaan/stash/commit/9d0541d8eebf4af911911673d2f5d24aba7c6d90))
+* **billing:** re-price to $4/mo + slash quotas + AI-art sub-budget ([ec68210](https://github.com/Brennan-VanderLaan/stash/commit/ec682109d48b0473618c3e57b5cb65415e88694a))
+* **public:** static /about pages for Stripe KYC compliance ([69f38d6](https://github.com/Brennan-VanderLaan/stash/commit/69f38d6906bae8565b3413d1a35f0f0ebb747ebd))
+
+
+### Bug Fixes
+
+* **about:** cost ledger had wrong provider for bandwidth ([d21e405](https://github.com/Brennan-VanderLaan/stash/commit/d21e405a2dd917655eb48898c7bb69888dc08e73))
+* **about:** rewrite terms to standard SaaS boilerplate ([419fcb5](https://github.com/Brennan-VanderLaan/stash/commit/419fcb58c87697a22de14a5d1ac74cc53816b97b))
+* **admin:** compact hero moves to a right rail, hides on mobile ([01d04b4](https://github.com/Brennan-VanderLaan/stash/commit/01d04b478889a8c3118c57fe78f20283616cf14f))
+* **floors:** make drawing tools sticky so you can rect-rect-rect ([6d721c8](https://github.com/Brennan-VanderLaan/stash/commit/6d721c8d488e1f6b575c94c7eb249cb4f0169bd8))
+* **public:** bypass auth on /static so public /about pages render styled ([53559fc](https://github.com/Brennan-VanderLaan/stash/commit/53559fcb6899c4cf60a5204ec6f5b298f8a4cb6b))
+
 ## [1.23.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.22.0...v1.23.0) (2026-05-15)
 
 
