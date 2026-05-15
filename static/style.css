@@ -1372,14 +1372,20 @@ main.main-wide {
 .admin-hero {
   position: sticky;
   top: 3.25rem;
-  z-index: 30;
+  /* Bumped 30 → 50: the create-tenant quick-action disclosure
+     inside the tenants section also sits at z-30, and DOM order
+     was putting it on top of the hero during scroll.  Hero needs
+     to dominate everything between it and the page-level header
+     (z-100) so the floating compact bar is never obscured. */
+  z-index: 50;
   margin-bottom: 1rem;
   padding: 1rem 1.15rem 0.9rem;
   background: var(--panel);
   background-image: linear-gradient(140deg, var(--panel) 0%, var(--panel-2) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  transition: padding 0.18s ease;
+  transition: padding 0.18s ease, max-width 0.2s ease,
+              margin 0.2s ease;
 }
 .admin-hero-head {
   margin-bottom: 0.75rem;
@@ -1448,26 +1454,46 @@ main.main-wide {
 
 /* Compact mode — body.admin-hero-compact is toggled by the
    IntersectionObserver in admin.html when the sentinel scrolls
-   off the top of the viewport.  Hero shrinks to ~1/3 the height;
-   the KPI grid stays readable but tile copy collapses to label +
-   value only. */
+   off the top of the viewport.  Hero collapses copy + shrinks
+   the KPI tiles AND moves to a narrow right-side rail so the
+   page content has full width to itself.  On phones the hero
+   disappears entirely (a dashboard pinned at top eats half the
+   tiny viewport — the operator can scroll back up to see it). */
 body.admin-hero-compact .admin-hero {
-  padding: 0.4rem 0.85rem 0.45rem;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  padding: 0.4rem 0.65rem 0.45rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  /* Slide to the right rail: max-width caps the tile cluster,
+     margin-left auto pushes it to the right.  The page content
+     below flows full-width as if the hero weren't there. */
+  max-width: 32rem;
+  margin-left: auto;
 }
 body.admin-hero-compact .admin-hero-head {
   max-height: 0;
   opacity: 0;
   margin-bottom: 0;
 }
-body.admin-hero-compact .admin-kpi {
-  padding: 0.3rem 0.55rem 0.35rem;
+body.admin-hero-compact .admin-kpis {
+  /* Single row when compact — auto-fit pulls every tile inline. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(110px, 1fr);
+  grid-template-columns: none;
 }
-body.admin-hero-compact .admin-kpi-label { font-size: 0.65rem; }
-body.admin-hero-compact .admin-kpi-value { font-size: 1.1rem; margin: 0; }
+body.admin-hero-compact .admin-kpi {
+  padding: 0.25rem 0.5rem 0.3rem;
+}
+body.admin-hero-compact .admin-kpi-label { font-size: 0.62rem; }
+body.admin-hero-compact .admin-kpi-value { font-size: 1rem; margin: 0; }
 body.admin-hero-compact .admin-kpi-foot {
   max-height: 0;
   opacity: 0;
+}
+@media (max-width: 720px) {
+  /* Compact-on-mobile = vanish.  The hero is too big to be useful
+     as a pinned bar on a phone viewport, and we don't have the
+     horizontal room to push it to the side either.  Scroll back
+     up to see it again. */
+  body.admin-hero-compact .admin-hero { display: none; }
 }
 /* In-page anchor strip — NOT sticky.  Earlier passes had
    ``position: sticky; top: 0`` here, which collided with the
