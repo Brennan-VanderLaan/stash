@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.25.0...v1.25.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **theme:** visited-link rule outranked class colours; CTA text went invisible ([74cc163](https://github.com/Brennan-VanderLaan/stash/commit/74cc1633744bdc32e14c8c70c93953e2a9da2fb8))
+
 ## [1.25.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.24.0...v1.25.0) (2026-05-15)
 
 
