@@ -4,7 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#16331f">
+  {# Theme bootstrap — read the user's saved palette and apply it
+     to <html data-theme="…"> BEFORE the stylesheet loads so we
+     don't flash the default theme.  ``stash-theme`` is one of
+     the keys defined in static/style.css (forest, matrix, slate,
+     parchment).  Any other value is ignored. #}
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('stash-theme');
+        if (t && /^[a-z]{1,16}$/.test(t)) {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) { /* private mode / storage blocked */ }
+    })();
+  </script>
+  <meta name="theme-color" content="#232c25" id="meta-theme-color">
   <title>{% block title %}Stash{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
   {% block head_extra %}{% endblock %}
@@ -15,7 +30,7 @@
     <h1>{% include "_brand.html" %}</h1>
     {% endblock %}
     <nav class="header-nav">
-      <a href="/">{{ _("Boxes") }}</a>
+      <a href="/home">{{ _("Boxes") }}</a>
       <a href="/locations">{{ _("Where") }}</a>
       <a href="/ingest">{{ _("Ingest") }}</a>
       <a href="/queue">{{ _("Sort") }}</a>
@@ -85,7 +100,7 @@
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
   <nav class="tab-bar">
-    <a href="/"><span class="tab-icon">📦</span>{{ _("Boxes") }}</a>
+    <a href="/home"><span class="tab-icon">📦</span>{{ _("Boxes") }}</a>
     <a href="/locations"><span class="tab-icon">🗺️</span>{{ _("Where") }}</a>
     <a href="/ingest"><span class="tab-icon">📷</span>{{ _("Ingest") }}</a>
     <a href="/search"><span class="tab-icon">🔍</span>{{ _("Search") }}</a>

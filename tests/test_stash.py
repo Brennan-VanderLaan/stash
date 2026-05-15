@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_index_empty(client):
-    r = client.get("/")
+    r = client.get("/home")
     assert r.status_code == 200
     assert "No boxes yet" in r.text
 
@@ -15,9 +15,9 @@ def test_create_box_appears_on_index(client):
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    assert r.headers["location"] == "/home"
 
-    r = client.get("/")
+    r = client.get("/home")
     assert "Kitchen #1" in r.text
     assert "Garage B" in r.text
     assert "0 items" in r.text
@@ -55,7 +55,7 @@ def test_index_groups_boxes_by_room_and_location(client):
     client.post("/boxes", data={"name": "Old paint", "location": "Shed"})
     client.post("/boxes", data={"name": "Mystery box"})
 
-    page = client.get("/").text
+    page = client.get("/home").text
 
     # Each bucket type renders at least once.  Two-box rooms show "2
     # boxes", single-box rooms "1 box", and the unassigned bucket has
@@ -155,7 +155,7 @@ def test_item_count_on_index(client):
     client.post("/boxes", data={"name": "Box A"})
     client.post("/boxes/1/items", data={"name": "x"})
     client.post("/boxes/1/items", data={"name": "y"})
-    assert "2 items" in client.get("/").text
+    assert "2 items" in client.get("/home").text
 
 
 def test_delete_item_removes_row_and_photo(client):
@@ -187,7 +187,7 @@ def test_delete_box_cascades_items_and_photos(client):
 
     r = client.post("/boxes/1/delete", data={"confirm": "Box A"}, follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    assert r.headers["location"] == "/home"
     assert not photo.exists()
     assert client.get("/boxes/1").status_code == 404
 

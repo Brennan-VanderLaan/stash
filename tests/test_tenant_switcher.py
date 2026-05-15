@@ -62,7 +62,7 @@ def test_switcher_dropdown_renders_for_multi_tenant_user(tmp_path, monkeypatch):
     ``test_switcher_hidden_for_single_membership`` test below."""
     app_mod, email, tid_a, tid_b = _bootstrap_two_tenant_app(tmp_path, monkeypatch)
     with TestClient(app_mod.app, headers={"X-Forwarded-Email": email}) as c:
-        r = c.get("/")
+        r = c.get("/home")
         assert r.status_code == 200
         assert 'id="tenant-switcher"' in r.text
         assert "TenantA" in r.text
@@ -72,7 +72,7 @@ def test_switcher_dropdown_renders_for_multi_tenant_user(tmp_path, monkeypatch):
 def test_switcher_hidden_for_single_membership(client):
     """Default ``client`` fixture has exactly one tenant + no
     shares → switcher absent."""
-    r = client.get("/")
+    r = client.get("/home")
     assert r.status_code == 200
     assert 'id="tenant-switcher"' not in r.text
 
@@ -167,4 +167,4 @@ def test_switch_post_open_redirect_guard(tmp_path, monkeypatch):
             follow_redirects=False,
         )
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    assert r.headers["location"] == "/home"

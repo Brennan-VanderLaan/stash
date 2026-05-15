@@ -113,7 +113,9 @@ def _bootstrap(tmp_path, monkeypatch):
 # params + verify the actual auth wall fires before the route logic.
 # Format: (method, path, body-or-None).
 _PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
-    ("GET", "/", None),
+    # ``/`` is the public marketing landing — NOT in this list.
+    # ``/home`` is the authenticated dashboard; pin THAT instead.
+    ("GET", "/home", None),
     ("POST", "/boxes", {"name": "x"}),
     ("GET", "/boxes/1", None),
     ("POST", "/boxes/1/edit", {"name": "x"}),
@@ -203,11 +205,15 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
     # Pin the exact bypass set — split into exact + prefix forms
     # to support RFC 9728 path-suffixed protected-resource
     # metadata (``/.well-known/oauth-protected-resource/mcp``).
+    # ``/`` joined the list when the public marketing landing was
+    # split off from the authenticated dashboard (now at /home);
+    # unauthenticated visitors need a page to land on.
     assert app_mod._AUTH_BYPASS_EXACT == frozenset((
         "/healthz",
         "/.well-known/oauth-authorization-server",
         "/oauth/token",
         "/oauth/register",
+        "/",
     ))
     # /about/ added: Stripe + similar KYC partners require the
     # business name, refund policy, sub-processor list, etc. to be

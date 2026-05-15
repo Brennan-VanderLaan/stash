@@ -54,7 +54,7 @@ def test_template_renders_wrapped_strings(client):
     """The base layout's nav now flows through `_()`. The home page
     uses base.html; rendering it should still produce the
     English-source strings."""
-    r = client.get("/")
+    r = client.get("/home")
     assert r.status_code == 200
     text = r.text
     # Header nav.

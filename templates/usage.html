@@ -9,6 +9,7 @@
    plain anchors so no scripting required. #}
 <nav class="usage-toc" aria-label="{{ _('Usage page sections') }}">
   <a href="#plan">{{ _("Plan & role") }}</a>
+  <a href="#appearance">{{ _("Appearance") }}</a>
   {% if tour_catalogue %}<a href="#tours">{{ _("Tours") }}</a>{% endif %}
   <a href="#cost">{{ _("Cost transparency") }}</a>
   <a href="#quotas">{{ _("Quotas") }}</a>
@@ -30,6 +31,98 @@
     <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
   </dl>
 </div>
+
+<h2 class="usage-section" id="appearance">{{ _("Appearance") }}</h2>
+
+{# ── Theme picker ─────────────────────────────────────────────
+   Persists the chosen palette in localStorage as ``stash-theme``.
+   The early-paint script in base.html / about/_layout.html reads
+   the same key, so the choice is honoured before the first paint
+   on every page load — no FOUC.  All palette colours live in CSS
+   custom properties on ``[data-theme="<name>"]`` blocks in
+   static/style.css; adding a new theme is a single CSS block plus
+   an entry in the ``data-theme`` list below. #}
+<div class="card maintenance-card theme-picker-card">
+  <div class="card-title">{{ _("Theme") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Pick a colour palette.  Saved locally per device — sign-in is not required to remember it.  Default is Forest, but if you miss the punchy terminal look pick Matrix.") }}
+  </p>
+  <div class="theme-picker" role="radiogroup" aria-label="{{ _('Choose a theme') }}">
+    {% set themes = [
+      ('forest',    _('Forest'),    _('Sage greens, soft contrast.  Default.')),
+      ('matrix',    _('Matrix'),    _('Original neon-on-near-black terminal look.')),
+      ('slate',     _('Slate'),     _('Neutral dark, blue accent — no green.')),
+      ('parchment', _('Parchment'), _('Light cream paper, deep forest accent.')),
+    ] %}
+    {% for slug, label, blurb in themes %}
+    <button type="button" class="theme-swatch" data-theme-pick="{{ slug }}"
+            role="radio" aria-checked="false">
+      <span class="theme-swatch-preview" data-theme="{{ slug }}" aria-hidden="true">
+        <span class="theme-swatch-bar theme-swatch-bg"></span>
+        <span class="theme-swatch-bar theme-swatch-surface"></span>
+        <span class="theme-swatch-dot theme-swatch-accent"></span>
+        <span class="theme-swatch-text">Aa</span>
+      </span>
+      <span class="theme-swatch-meta">
+        <strong>{{ label }}</strong>
+        <span class="text-sm text-muted">{{ blurb }}</span>
+      </span>
+      <span class="theme-swatch-check" aria-hidden="true">✓</span>
+    </button>
+    {% endfor %}
+  </div>
+  <p class="text-sm text-muted theme-picker-note" id="theme-picker-note" hidden></p>
+</div>
+<script>
+(function () {
+  var KEY = 'stash-theme';
+  var DEFAULT = 'forest';
+  var picker = document.querySelector('.theme-picker');
+  if (!picker) return;
+  var note = document.getElementById('theme-picker-note');
+
+  function current() {
+    try { return localStorage.getItem(KEY) || DEFAULT; }
+    catch (e) { return DEFAULT; }
+  }
+  function apply(slug) {
+    document.documentElement.setAttribute('data-theme', slug);
+    try { localStorage.setItem(KEY, slug); } catch (e) {}
+    // Update the iOS browser-chrome colour to match the surface.
+    var meta = document.getElementById('meta-theme-color');
+    if (meta) {
+      var probe = getComputedStyle(document.documentElement)
+                  .getPropertyValue('--surface').trim();
+      if (probe) meta.setAttribute('content', probe);
+    }
+    paintActive(slug);
+    if (note) {
+      note.hidden = false;
+      note.textContent = '{{ _("Saved.  This device will remember your pick.") }}';
+    }
+  }
+  function paintActive(slug) {
+    picker.querySelectorAll('[data-theme-pick]').forEach(function (b) {
+      var on = b.getAttribute('data-theme-pick') === slug;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('theme-swatch-active', on);
+    });
+  }
+  picker.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-theme-pick]');
+    if (!btn) return;
+    apply(btn.getAttribute('data-theme-pick'));
+  });
+  picker.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var btn = e.target.closest('[data-theme-pick]');
+    if (!btn) return;
+    e.preventDefault();
+    apply(btn.getAttribute('data-theme-pick'));
+  });
+  paintActive(current());
+})();
+</script>
 
 {% if tour_catalogue %}
 <h2 class="usage-section" id="tours">{{ _("Onboarding tours") }}</h2>

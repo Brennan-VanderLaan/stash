@@ -25,10 +25,10 @@ def test_request_id_round_trips_via_response_header(client):
     """Every response carries an X-Request-Id; respect an inbound
     one when present so an upstream proxy can correlate access logs
     with our records."""
-    r = client.get("/")
+    r = client.get("/home")
     assert r.headers.get("X-Request-Id"), "missing X-Request-Id"
     inbound = "test-id-1234"
-    r2 = client.get("/", headers={"X-Request-Id": inbound})
+    r2 = client.get("/home", headers={"X-Request-Id": inbound})
     # Server echoes the supplied id rather than generating a fresh one.
     assert r2.headers["X-Request-Id"] == inbound
 
@@ -79,7 +79,7 @@ def test_context_resets_after_request(client):
     """Context tokens reset after the response so a re-used worker
     thread doesn't carry one request's identity into the next."""
     import obs
-    client.get("/")
+    client.get("/home")
     # After the request returns the contextvars should be back to
     # their None defaults.
     ctx = obs.current_context()

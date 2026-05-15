@@ -509,6 +509,10 @@ _AUTH_BYPASS_EXACT = frozenset((
     "/.well-known/oauth-authorization-server",
     "/oauth/token",
     "/oauth/register",
+    # ``/`` renders a public marketing landing for unauthenticated
+    # visitors.  The authenticated dashboard moved to ``/home``.
+    # See public_landing() + index() in this file.
+    "/",
 ))
 
 # Prefix-based bypass: RFC 9728 protected-resource metadata can
@@ -2264,7 +2268,35 @@ def serve_thumb(request: Request, name: str):
 
 
 @app.get("/", response_class=HTMLResponse)
+def public_landing(request: Request):
+    """Public marketing landing — what an unauthenticated visitor
+    sees at the bare site.  No tenant data, no app chrome.  The
+    "Sign in" button points at ``/home`` which is the authenticated
+    dashboard; oauth2-proxy redirects through Google when the user
+    clicks through.
+
+    This route is in the auth bypass list so unauth visitors can
+    reach it.  Authenticated users hitting ``/`` also see the
+    landing (oauth2-proxy strips session headers on bypass routes);
+    they click the prominent "Open your stash →" button to land at
+    /home where their tenant data lives."""
+    return templates.TemplateResponse(
+        request, "landing.html",
+        {
+            "business_name": _public_business_name(),
+            "contact_email": _public_contact_email(),
+            "pro_price_display": _pro_price_display(),
+            "hide_feedback_widget": True,
+        },
+    )
+
+
+@app.get("/home", response_class=HTMLResponse)
 def index(request: Request):
+    """The authenticated user's home — list of every box in the
+    tenant, grouped by location/room.  Was at ``/`` historically;
+    moved to ``/home`` so the bare site can show a public landing
+    page for new visitors."""
     actor: Actor = request.state.actor
     boxes = dao_boxes.list_with_counts(actor)
     thumbs = dao_items.list_recent_photos_per_box(actor, limit_per_box=5)
@@ -2369,7 +2401,7 @@ def create_box(
         dao_boxes.create(actor, name, location, notes, room_id=rid)
     except ForbiddenError:
         raise HTTPException(403)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/home", status_code=303)
 
 
 def _known_locations(actor: Actor) -> list[str]:
@@ -4192,7 +4224,7 @@ def delete_box(request: Request, box_id: int, confirm: str = Form(...)):
             _tenant_thumb(tenant_id, p).unlink()
         except FileNotFoundError:
             pass
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/home", status_code=303)
 
 
 # ── Locations + rooms (where stuff actually lives) ─────────────────────────
@@ -5413,8 +5445,8 @@ def invite_accept(request: Request, token: str):
     except ForbiddenError as exc:
         raise HTTPException(403, str(exc))
     # Newly-joined member needs a fresh request so the middleware
-    # picks up the membership; redirect home.
-    return RedirectResponse("/", status_code=303)
+    # picks up the membership; redirect to the authenticated home.
+    return RedirectResponse("/home", status_code=303)
 
 
 # ── /mcp — Model Context Protocol endpoint (phase 18) ────────────

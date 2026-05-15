@@ -33,15 +33,32 @@
     <h2>Pro</h2>
     <p class="about-plan-price">{{ pro_price_display }} / month</p>
     <ul>
-      <li>{{ "{:,}".format(pro_ai) }} AI calls per month ({{ (pro_ai // free_ai) }}× Free)</li>
-      <li>{{ pro_gb }} GB photo uploads per month</li>
-      <li>30 AI label-art generations per month (Free tier: 0)</li>
-      <li>Multi-tenant (run several households side-by-side)</li>
+      <li>
+        <strong>{{ (pro_ai // free_ai) }}× the AI assistance.</strong>
+        {{ "{:,}".format(pro_ai) }} calls/month — ingest big piles,
+        get smart tag suggestions on the photos you took today,
+        let the AI match items to boxes without watching the meter.
+      </li>
+      <li>
+        <strong>{{ pro_gb }} GB of photo storage.</strong>  Covers
+        a full household inventoried in detail — every item, every
+        side, every serial number you actually want a picture of.
+      </li>
+      <li>
+        <strong>30 AI label-art generations per month.</strong>
+        Custom illustrated labels for moving-day boxes; the kind
+        of polish that makes the binder feel like the project you
+        actually wanted to do instead of the one you grudgingly
+        did.  Free tier: 0.
+      </li>
+      <li>
+        <strong>Higher daily ceilings.</strong>  Your moving-day
+        session doesn't bump caps mid-flow.
+      </li>
     </ul>
     <p class="text-sm text-muted">
-      Right for households cataloguing a real volume of stuff or
-      running multiple separate inventories (main house +
-      cabin + storage unit).
+      Right for households that want to inventory the whole place,
+      not just the closet that's making you anxious today.
     </p>
   </article>
 </section>

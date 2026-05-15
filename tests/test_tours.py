@@ -26,7 +26,7 @@ def test_tour_state_unseen_returns_every_tour_as_false(client):
 def test_tour_state_auto_play_matches_current_path(client):
     """``auto_play`` carries the tours that should fire on this
     page load — filtered by URL prefix + the user's seen state."""
-    r = client.get("/api/v1/tour/state?path=/",
+    r = client.get("/api/v1/tour/state?path=/home",
                    headers={"Accept": "application/json"})
     auto = {t["feature"] for t in r.json()["auto_play"]}
     assert "welcome" in auto
@@ -48,7 +48,7 @@ def test_tour_mark_seen_dropping_from_auto_play(client):
     ``auto_play`` for the same user."""
     client.post("/tour/welcome/seen",
                 headers={"Accept": "application/json"})
-    r = client.get("/api/v1/tour/state?path=/",
+    r = client.get("/api/v1/tour/state?path=/home",
                    headers={"Accept": "application/json"})
     auto = {t["feature"] for t in r.json()["auto_play"]}
     assert "welcome" not in auto
@@ -61,7 +61,7 @@ def test_tour_reset_brings_back_auto_play(client):
                 headers={"Accept": "application/json"})
     r = client.post("/tour/welcome/reset", follow_redirects=False)
     assert r.status_code == 303
-    follow = client.get("/api/v1/tour/state?path=/",
+    follow = client.get("/api/v1/tour/state?path=/home",
                         headers={"Accept": "application/json"})
     auto = {t["feature"] for t in follow.json()["auto_play"]}
     assert "welcome" in auto
@@ -101,7 +101,7 @@ def test_tour_version_bump_forces_re_show(client, monkeypatch):
         dao_tours, "_TOURS_BY_FEATURE",
         {t["feature"]: t for t in bumped},
     )
-    state = client.get("/api/v1/tour/state?path=/",
+    state = client.get("/api/v1/tour/state?path=/home",
                        headers={"Accept": "application/json"}).json()
     # The user's seen-row (v1) is below the now-current version (v2),
     # so the tour treats them as unseen.
@@ -137,14 +137,14 @@ def test_usage_renders_tour_catalogue(client):
     # trigger that fired the tour in-place on /usage, where every
     # target selector missed because the elements were on other
     # pages — feedback #7.
-    assert 'href="/?tour=welcome"' in page
+    assert 'href="/home?tour=welcome"' in page
     assert 'href="/boxes/?tour=box_detail"' in page
     assert 'href="/labels?tour=labels"' in page
 
 
 def test_tour_overlay_renders_for_authed_user(client):
     """The overlay div + JS land on every authed page via base.html."""
-    page = client.get("/").text
+    page = client.get("/home").text
     assert 'id="tour-overlay"' in page
     assert 'startTour' in page  # the replay-from-/usage hook
 

@@ -9,8 +9,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Theme bootstrap — see base.html for the rationale.  We
+     duplicate the script here because the public /about pages
+     intentionally don't extend base.html (no actor state). #}
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('stash-theme');
+        if (t && /^[a-z]{1,16}$/.test(t)) {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) { /* private mode / storage blocked */ }
+    })();
+  </script>
   <title>{{ page_title }} · {{ business_name }}</title>
-  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
   <meta name="description" content="{{ page_title }} — {{ business_name }} household inventory">
 </head>
 <body class="about-public">
@@ -25,7 +38,7 @@
       <a href="/about/sub-processors">Sub-processors</a>
       <a href="/about/contact">Contact</a>
     </nav>
-    <a href="/" class="about-signin">Sign in →</a>
+    <a href="/home" class="about-signin">Sign in →</a>
   </header>
   <main class="about-main">
     {% block content %}{% endblock %}

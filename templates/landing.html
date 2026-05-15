@@ -1,0 +1,126 @@
+{# Public marketing landing.  Rendered for unauthenticated visitors
+   at ``/``.  Reuses the about/_layout shell so the page chrome is
+   identical to the rest of the public surface (Stripe reviewers
+   click through smoothly).  Authenticated users hitting ``/`` also
+   see this — they click "Open your stash" to land at /home. #}
+{% extends "about/_layout.html" %}
+{% set page_title = business_name %}
+{% block content %}
+
+<section class="landing-hero">
+  <p class="landing-eyebrow">Household inventory that doesn't hate you.</p>
+  <h1 class="landing-headline">
+    Snap a pile, get a sorted&nbsp;catalogue.
+  </h1>
+  <p class="landing-sub">
+    {{ business_name }} turns a photo into named, tagged,
+    QR-labeled boxes.  Find anything six months later when
+    you're standing in the garage at 2&nbsp;am.
+  </p>
+  <div class="landing-cta-row">
+    <a href="/home" class="landing-cta-primary">
+      Open your stash →
+    </a>
+    <a href="/about" class="landing-cta-secondary">
+      How it works
+    </a>
+  </div>
+  <p class="landing-cta-note text-sm text-muted">
+    Free plan available · Pro is {{ pro_price_display }}/mo ·
+    <a href="/about/pricing">See pricing</a>
+  </p>
+</section>
+
+<section class="landing-features">
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">📷</span> Photo ingest</h2>
+    <p>
+      Drop a photo into the app.  Vision AI picks out every
+      distinct item with bounding boxes, you review and accept,
+      they land in your sort queue.  No typing names, no
+      describing things you're staring at.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">📦</span> Boxes, rooms, floors</h2>
+    <p>
+      Items live in boxes.  Boxes live in rooms on a floor of a
+      location.  Sketch the floor in the in-browser editor (rect,
+      line, label tools) or upload a real plan — either way you
+      drag rooms onto it to mark where things live.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">🏷️</span> QR labels</h2>
+    <p>
+      Print Avery shipping-label sheets straight from the app.
+      Scan a label with your phone to jump to that box's contents.
+      Optional AI-generated label art for moving-day boxes
+      (Pro tier).
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">✓</span> Audit & rediscover</h2>
+    <p>
+      Walk a box twice a year — swipe right for "still there",
+      left for "missing".  Missing items move to a sort queue
+      with their last known box recorded so you can track them
+      down or accept the loss.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">🔎</span> Find anything</h2>
+    <p>
+      Full-text + tag search across every item in your tenant.
+      Returns the box and room so you walk to it, not search
+      the house top-to-bottom.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">⬇️</span> Your data, your copy</h2>
+    <p>
+      Export everything as a readable SQLite + decrypted JPEGs
+      any time (GDPR Article&nbsp;20 portability).  Backup
+      separately as an encrypted zip.  No lock-in.
+    </p>
+  </article>
+</section>
+
+<section class="landing-transparency">
+  <h2>What we believe</h2>
+  <ul>
+    <li>
+      <strong>Software that doesn't hate you.</strong>  No dark
+      patterns, no upsell carpet bombing, no quiet price hikes.
+    </li>
+    <li>
+      <strong>Cost ledger in public.</strong>  Where every $ of
+      your subscription goes — vendor bills, taxes, the human
+      time — is on
+      <a href="/about/transparency">/about/transparency</a>.
+    </li>
+    <li>
+      <strong>One operator, by design.</strong>  Solo team for
+      now.  Critical paths self-service so no one waits on a
+      support ticket to get unblocked.
+    </li>
+    <li>
+      <strong>Your inventory is yours.</strong>  Per-tenant
+      encryption at rest, exportable, deletable.  No advertising,
+      no analytics sharing.
+    </li>
+  </ul>
+</section>
+
+<section class="landing-final-cta">
+  <h2>Ready to stop losing things?</h2>
+  <p>
+    Sign in with Google.  You start on the free plan; upgrade
+    later from <code>/usage</code> if you want the bigger
+    quotas.
+  </p>
+  <a href="/home" class="landing-cta-primary">
+    Open your stash →
+  </a>
+</section>
+{% endblock %}

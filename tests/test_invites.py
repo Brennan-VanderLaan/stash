@@ -216,15 +216,17 @@ def test_http_invite_flow_end_to_end(tmp_path, monkeypatch):
         assert "Movers" in r.text
         # Confirm she's still 403'd on a normal page (proves it's the
         # bypass that let her through, not a stale membership).
-        r = wife_client.get("/", follow_redirects=False)
+        # ``/`` is the public marketing landing now (200 for anyone)
+        # so probe ``/home`` — the authenticated dashboard — instead.
+        r = wife_client.get("/home", follow_redirects=False)
         assert r.status_code == 403
 
         # 4. Accept. Redirects home, and the next page load works.
         r = wife_client.post(f"/invite/{token}/accept",
                              follow_redirects=False)
         assert r.status_code == 303
-        assert r.headers["location"] == "/"
-        r = wife_client.get("/")
+        assert r.headers["location"] == "/home"
+        r = wife_client.get("/home")
         assert r.status_code == 200
 
         # 5. /usage shows wife as a member now.

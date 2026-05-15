@@ -1,20 +1,202 @@
-/* === Reset & Variables === */
-:root {
-  --bg: #0f1f14;
-  --panel: #16331f;
-  --panel-2: #1d4029;
-  --accent: #4ade80;
-  --accent-hover: #22c55e;
-  --accent-dim: rgba(74, 222, 128, 0.15);
-  --text: #e6f4ea;
-  --muted: #9bbfa6;
-  --border: #2a5a3a;
-  --danger: #b94343;
-  --danger-dim: rgba(185, 67, 67, 0.15);
-  --radius: 12px;
-  --radius-sm: 8px;
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
+/* === Theme tokens ============================================
+   Tokens are layered so a single ``[data-theme="..."]`` flip on
+   ``<html>`` reskins the whole app.  Defaults below are the
+   "forest" palette — desaturated greens, low contrast, easier on
+   the eye than the original matrix-terminal look.  Alternate
+   palettes live further down (search for ``[data-theme=``).
+
+   Naming conventions:
+     --bg               page background
+     --surface          card/panel background (one step above bg)
+     --surface-2        elevated surface (hover, header, sticky)
+     --surface-3        deepest elevation (modal, dropdown)
+     --text             primary readable text
+     --text-muted       secondary text (labels, captions)
+     --text-subtle      faintest text (helper, placeholder)
+     --on-accent        text colour to use ON --accent backgrounds
+     --accent           primary brand colour
+     --accent-hover     hover/active state of accent
+     --accent-strong    saturated emphasis (links, highlights)
+     --accent-dim       translucent tint of accent (chips, fills)
+     --accent-ring      focus ring colour (translucent)
+     --border           default border
+     --border-strong    emphasised border (focus, selected)
+     --success / --warning / --danger / --info  status colours
+       (each has a ``-dim`` translucent variant for fill chips)
+     --shadow-sm/md/lg  layered drop shadows
+     --radius / --radius-sm / --radius-lg  corner radii
+     --safe-bottom      iOS safe-area inset
+   The historical names ``--panel``, ``--panel-2``, and ``--muted``
+   are kept as aliases so older selectors continue to resolve. */
+:root,
+:root[data-theme="forest"],
+[data-theme="forest"] {
+  /* Surfaces — warm desaturated greens, no pure black */
+  --bg:           #1b231d;
+  --surface:      #232c25;
+  --surface-2:    #2b362e;
+  --surface-3:    #344037;
+  /* Text — warm off-white, never neon */
+  --text:         #dee5db;
+  --text-muted:   #a0aea2;
+  --text-subtle:  #788a7c;
+  --on-accent:    #15201a;
+  /* Accent — sage / leaf, friendlier than Tailwind green-400 */
+  --accent:       #88b884;
+  --accent-hover: #9fcd9b;
+  --accent-strong:#b1d8ad;
+  --accent-dim:   rgba(136, 184, 132, 0.16);
+  --accent-ring:  rgba(136, 184, 132, 0.38);
+  /* Structural */
+  --border:       #3a4a3e;
+  --border-strong:#52685a;
+  /* Status — desaturated so they read as informational, not alarming */
+  --success:      #8ec089;
+  --success-dim:  rgba(142, 192, 137, 0.18);
+  --warning:      #d4b86a;
+  --warning-dim:  rgba(212, 184, 106, 0.18);
+  --danger:       #d28080;
+  --danger-dim:   rgba(210, 128, 128, 0.18);
+  --info:         #8aa9c4;
+  --info-dim:     rgba(138, 169, 196, 0.18);
+  /* Hover tints — subtle "press a layer" on interactive surfaces.
+     White-on-dark for dark themes, black-on-light for parchment. */
+  --hover:        rgba(255, 255, 255, 0.05);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  /* Depth */
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-lg:    0 12px 32px rgba(0, 0, 0, 0.42);
+  /* Geometry */
+  --radius:       12px;
+  --radius-sm:    8px;
+  --radius-lg:    18px;
+  --safe-bottom:  env(safe-area-inset-bottom, 0px);
+  /* Legacy aliases — keep existing rules working */
+  --panel:        var(--surface);
+  --panel-2:      var(--surface-2);
+  --muted:        var(--text-muted);
+  --text-muted-legacy: var(--text-muted);
+  color-scheme:   dark;
 }
+
+/* ── Matrix terminal — the original look, kept for those who like
+   neon-green-on-near-black.  Same token names, different values.
+   The non-:root selector lets the theme picker's preview swatches
+   render in their target palette regardless of the page theme. */
+:root[data-theme="matrix"],
+[data-theme="matrix"] {
+  --bg:           #0f1f14;
+  --surface:      #16331f;
+  --surface-2:    #1d4029;
+  --surface-3:    #245034;
+  --text:         #e6f4ea;
+  --text-muted:   #9bbfa6;
+  --text-subtle:  #6a8a76;
+  --on-accent:    #0a1810;
+  --accent:       #4ade80;
+  --accent-hover: #22c55e;
+  --accent-strong:#86efac;
+  --accent-dim:   rgba(74, 222, 128, 0.15);
+  --accent-ring:  rgba(74, 222, 128, 0.40);
+  --border:       #2a5a3a;
+  --border-strong:#3d7c54;
+  --success:      #4ade80;
+  --success-dim:  rgba(74, 222, 128, 0.18);
+  --warning:      #facc15;
+  --warning-dim:  rgba(250, 204, 21, 0.18);
+  --danger:       #ef4444;
+  --danger-dim:   rgba(239, 68, 68, 0.18);
+  --info:         #93c5fd;
+  --info-dim:     rgba(147, 197, 253, 0.18);
+  --hover:        rgba(255, 255, 255, 0.06);
+  --hover-strong: rgba(255, 255, 255, 0.10);
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.55);
+  --shadow-lg:    0 12px 32px rgba(0, 0, 0, 0.70);
+  --panel:        var(--surface);
+  --panel-2:      var(--surface-2);
+  --muted:        var(--text-muted);
+  color-scheme:   dark;
+}
+
+/* ── Slate — neutral dark theme, no green.  For users who want
+   "just a dark UI" without a colour personality. */
+:root[data-theme="slate"],
+[data-theme="slate"] {
+  --bg:           #15181c;
+  --surface:      #1d2128;
+  --surface-2:    #262b34;
+  --surface-3:    #303744;
+  --text:         #e2e6ec;
+  --text-muted:   #98a1ad;
+  --text-subtle:  #6b7280;
+  --on-accent:    #0f1115;
+  --accent:       #7aa2d6;
+  --accent-hover: #93b6e3;
+  --accent-strong:#b0caec;
+  --accent-dim:   rgba(122, 162, 214, 0.16);
+  --accent-ring:  rgba(122, 162, 214, 0.40);
+  --border:       #343b47;
+  --border-strong:#4a5566;
+  --success:      #7fbf9c;
+  --success-dim:  rgba(127, 191, 156, 0.18);
+  --warning:      #d4b86a;
+  --warning-dim:  rgba(212, 184, 106, 0.18);
+  --danger:       #d28080;
+  --danger-dim:   rgba(210, 128, 128, 0.18);
+  --info:         #8aa9c4;
+  --info-dim:     rgba(138, 169, 196, 0.18);
+  --hover:        rgba(255, 255, 255, 0.05);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg:    0 12px 32px rgba(0, 0, 0, 0.60);
+  --panel:        var(--surface);
+  --panel-2:      var(--surface-2);
+  --muted:        var(--text-muted);
+  color-scheme:   dark;
+}
+
+/* ── Parchment — light theme on a cream page.  Same forest accent
+   family, inverted for daytime reading. */
+:root[data-theme="parchment"],
+[data-theme="parchment"] {
+  --bg:           #f4efe2;
+  --surface:      #ece5d2;
+  --surface-2:    #e0d8c0;
+  --surface-3:    #d4caaa;
+  --text:         #2a3327;
+  --text-muted:   #5c6a58;
+  --text-subtle:  #8a9683;
+  --on-accent:    #f7f3e8;
+  --accent:       #3d6c3a;
+  --accent-hover: #2c5429;
+  --accent-strong:#1f3f1c;
+  --accent-dim:   rgba(61, 108, 58, 0.14);
+  --accent-ring:  rgba(61, 108, 58, 0.32);
+  --border:       #c4baa0;
+  --border-strong:#a5997c;
+  --success:      #3d8a4a;
+  --success-dim:  rgba(61, 138, 74, 0.16);
+  --warning:      #a07c1e;
+  --warning-dim:  rgba(160, 124, 30, 0.16);
+  --danger:       #a84444;
+  --danger-dim:   rgba(168, 68, 68, 0.16);
+  --info:         #2c5b86;
+  --info-dim:     rgba(44, 91, 134, 0.14);
+  --hover:        rgba(40, 30, 10, 0.05);
+  --hover-strong: rgba(40, 30, 10, 0.09);
+  --shadow-sm:    0 1px 2px rgba(40, 30, 10, 0.10);
+  --shadow-md:    0 4px 12px rgba(40, 30, 10, 0.16);
+  --shadow-lg:    0 12px 32px rgba(40, 30, 10, 0.22);
+  --panel:        var(--surface);
+  --panel-2:      var(--surface-2);
+  --muted:        var(--text-muted);
+  color-scheme:   light;
+}
+
+/* === Reset ================================================== */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; }
 
@@ -46,11 +228,23 @@ body {
   padding-bottom: calc(64px + var(--safe-bottom));
 }
 
+/* Make text feel slightly lighter than the old hard-contrast dark
+   theme.  ``font-weight: 400`` is the default but some browsers
+   bump it via user-agent on dark backgrounds; lock it. */
+body, input, textarea, select, button {
+  font-weight: 400;
+}
+
 /* === Top Header === */
 header {
   background: var(--panel);
   padding: 0.75rem 1rem;
-  border-bottom: 2px solid var(--accent);
+  /* Was ``2px solid var(--accent)`` — the heavy neon strip under
+     the header was the loudest single element in the matrix look.
+     Drop to 1px of border + a subtle shadow so the header still
+     reads as a sticky surface without yelling. */
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -78,14 +272,14 @@ header h1 a { color: var(--accent); text-decoration: none; }
   gap: 0.45rem;
   padding: 0.3rem 0.6rem;
   border-radius: 0.4rem;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
   border: 1px solid var(--border);
   font-size: 0.85rem;
   user-select: none;
 }
 .tenant-switcher > summary::-webkit-details-marker { display: none; }
 .tenant-switcher > summary:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-strong);
 }
 .tenant-switcher-avatar {
   width: 1.5rem;
@@ -137,14 +331,14 @@ header h1 a { color: var(--accent); text-decoration: none; }
   font: inherit;
 }
 .tenant-switcher-item button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 .tenant-switcher-item button:disabled {
   cursor: default;
   opacity: 0.95;
 }
 .tenant-switcher-item[data-active="1"] button {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover);
 }
 .tenant-switcher-item-avatar {
   width: 1.25rem;
@@ -187,7 +381,7 @@ header h1 a { color: var(--accent); text-decoration: none; }
   font-size: 0.85rem;
 }
 .tenant-switcher-shared:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 
 .brand {
@@ -584,8 +778,8 @@ main.main-wide {
   background: var(--accent-dim);
 }
 .feedback-result-err {
-  color: #fca5a5;
-  background: rgba(220, 38, 38, 0.15);
+  color: var(--danger);
+  background: var(--danger-dim);
 }
 
 /* === /usage facelift ===
@@ -720,9 +914,9 @@ main.main-wide {
   color: var(--muted);
 }
 .feedback-queue-status-open { background: var(--accent-dim); color: var(--accent); }
-.feedback-queue-status-accepted { background: rgba(59,130,246,0.18); color: #93c5fd; }
-.feedback-queue-status-rejected { background: rgba(220,38,38,0.18); color: #fca5a5; }
-.feedback-queue-status-done { background: rgba(34,197,94,0.18); color: #86efac; }
+.feedback-queue-status-accepted { background: var(--info-dim); color: var(--info); }
+.feedback-queue-status-rejected { background: var(--danger-dim); color: var(--danger); }
+.feedback-queue-status-done { background: var(--success-dim); color: var(--success); }
 .feedback-queue-body {
   white-space: pre-wrap;
   font-size: 0.88rem;
@@ -806,7 +1000,7 @@ main.main-wide {
 }
 .floor-edit-tool-primary:hover { filter: brightness(1.05); }
 .floor-edit-tool-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-.floor-edit-tool-danger { color: #fca5a5; }
+.floor-edit-tool-danger { color: var(--danger); }
 
 .floor-edit-swatch {
   width: 28px;
@@ -1128,12 +1322,12 @@ main.main-wide {
 }
 .audit-stamp-found {
   right: 1rem;
-  color: #22c55e;
+  color: var(--success);
   transform: rotate(-15deg);
 }
 .audit-stamp-missing {
   left: 1rem;
-  color: #ef4444;
+  color: var(--danger);
   transform: rotate(15deg);
 }
 .audit-card.intent-right .audit-stamp-found { opacity: 1; }
@@ -1201,8 +1395,9 @@ body.about-public {
   align-items: center;
   gap: 1rem;
   padding: 0.85rem 1.5rem;
-  border-bottom: 2px solid var(--accent, #4ade80);
-  background: var(--panel, #16331f);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  background: var(--panel);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -1226,7 +1421,7 @@ body.about-public {
   padding: 0.25rem 0.4rem;
   border-radius: 4px;
 }
-.about-nav a:hover { color: var(--accent, #4ade80); background: rgba(255,255,255,0.04); }
+.about-nav a:hover { color: var(--accent); background: var(--hover); }
 .about-signin {
   padding: 0.45rem 0.85rem;
   background: var(--accent, #4ade80);
@@ -1304,10 +1499,10 @@ body.about-public {
   margin: 0.5rem 0 0.8rem;
 }
 .about-plan-pro {
-  border-color: var(--accent, #4ade80);
+  border-color: var(--accent);
   background: linear-gradient(140deg,
-              var(--panel, #16331f),
-              rgba(74, 222, 128, 0.1));
+              var(--panel),
+              var(--accent-dim));
 }
 
 .about-table {
@@ -1331,9 +1526,9 @@ body.about-public {
   font-family: ui-monospace, Menlo, monospace;
   white-space: nowrap;
 }
-.about-cost-row-tax    td { background: rgba(234, 179, 8, 0.08); }
-.about-cost-row-labor  td { background: rgba(59, 130, 246, 0.08); }
-.about-cost-row-remainder td { background: rgba(74, 222, 128, 0.12); }
+.about-cost-row-tax    td { background: var(--warning-dim); }
+.about-cost-row-labor  td { background: var(--info-dim); }
+.about-cost-row-remainder td { background: var(--accent-dim); }
 
 .about-contact-card {
   background: var(--panel, #16331f);
@@ -1359,7 +1554,167 @@ body.about-public {
   border-top: 1px solid var(--border, #2a5a3a);
   margin-top: 2rem;
 }
-.about-footer a { color: var(--accent, #4ade80); text-decoration: none; }
+.about-footer a { color: var(--accent); text-decoration: none; }
+
+/* === Public landing (/) =====================================
+   The marketing-side home page that unauthenticated visitors
+   land on.  Extends about/_layout.html so it inherits the
+   public header + footer; these classes style the inner content
+   (hero, feature grid, transparency callout, final CTA). */
+.landing-hero {
+  text-align: center;
+  padding: 2.5rem 0 2rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.landing-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin: 0 0 0.6rem;
+  font-weight: 600;
+}
+.landing-headline {
+  font-size: clamp(1.8rem, 5vw, 2.7rem);
+  line-height: 1.15;
+  margin: 0 0 0.9rem;
+  color: var(--text);
+  border: 0;
+}
+.landing-sub {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 56ch;
+  margin: 0 auto 1.5rem;
+}
+.landing-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  justify-content: center;
+  margin-bottom: 0.75rem;
+}
+.landing-cta-primary,
+.landing-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 1.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.15s, transform 0.1s, border-color 0.15s;
+}
+.landing-cta-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.landing-cta-primary:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.landing-cta-secondary {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--border-strong);
+}
+.landing-cta-secondary:hover {
+  background: var(--hover);
+  border-color: var(--accent);
+}
+.landing-cta-note {
+  margin: 0;
+}
+.landing-features {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin: 1.75rem 0 2.25rem;
+}
+@media (min-width: 720px) {
+  .landing-features {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 1024px) {
+  .landing-features {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.landing-feature {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.15rem 1.25rem;
+  transition: border-color 0.15s, transform 0.12s;
+}
+.landing-feature:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.landing-feature h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+  color: var(--accent);
+  border: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.landing-feature p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+.landing-transparency {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.4rem 1.4rem;
+  margin: 2rem 0 2.25rem;
+}
+.landing-transparency h2 {
+  margin: 0 0 0.7rem;
+  font-size: 1.2rem;
+  color: var(--accent);
+  border: 0;
+  padding: 0;
+}
+.landing-transparency ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.landing-transparency li {
+  margin: 0.5rem 0;
+  color: var(--text);
+}
+.landing-transparency li strong { color: var(--accent); }
+.landing-final-cta {
+  text-align: center;
+  padding: 2rem 1rem;
+  margin-top: 1.5rem;
+  background: linear-gradient(140deg,
+              var(--surface),
+              var(--accent-dim));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.landing-final-cta h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.5rem;
+  color: var(--text);
+  border: 0;
+  padding: 0;
+}
+.landing-final-cta p {
+  margin: 0 auto 1.1rem;
+  color: var(--text-muted);
+  max-width: 50ch;
+}
 
 /* === /ingest facelift ===
    Lead with the primary action (Take photo / From gallery as big
@@ -1849,9 +2204,9 @@ body.admin-hero-compact .admin-kpi-foot {
   background: var(--panel-2);
 }
 .admin-feedback-open { border-left: 3px solid var(--accent); }
-.admin-feedback-accepted { border-left: 3px solid #3b82f6; }
-.admin-feedback-rejected { border-left: 3px solid #ef4444; }
-.admin-feedback-done { border-left: 3px solid #22c55e; }
+.admin-feedback-accepted { border-left: 3px solid var(--info); }
+.admin-feedback-rejected { border-left: 3px solid var(--danger); }
+.admin-feedback-done { border-left: 3px solid var(--success); }
 .admin-feedback-row-head {
   display: flex;
   align-items: center;
@@ -1944,9 +2299,9 @@ body.admin-hero-compact .admin-kpi-foot {
   max-height: 32rem;
 }
 .kanban-column-open    { border-top: 3px solid var(--accent); }
-.kanban-column-accepted{ border-top: 3px solid #3b82f6; }
-.kanban-column-rejected{ border-top: 3px solid #ef4444; }
-.kanban-column-done    { border-top: 3px solid #22c55e; }
+.kanban-column-accepted{ border-top: 3px solid var(--info); }
+.kanban-column-rejected{ border-top: 3px solid var(--danger); }
+.kanban-column-done    { border-top: 3px solid var(--success); }
 .kanban-column-head {
   display: flex;
   justify-content: space-between;
@@ -2037,9 +2392,9 @@ body.admin-hero-compact .admin-kpi-foot {
   padding: 0.2rem 0.55rem;
   font-size: 0.75rem;
 }
-.kanban-card-action-done { color: #86efac; }
-.kanban-card-action-rejected { color: #fca5a5; }
-.kanban-card-action-accepted { color: #93c5fd; }
+.kanban-card-action-done { color: var(--success); }
+.kanban-card-action-rejected { color: var(--danger); }
+.kanban-card-action-accepted { color: var(--info); }
 
 /* Activity feed — compact rows aligned to a grid. */
 .admin-activity {
@@ -2194,8 +2549,8 @@ body.admin-hero-compact .admin-kpi-foot {
   letter-spacing: 0.05em;
 }
 .pill-active { background: var(--accent-dim); color: var(--accent); }
-.pill-suspended { background: rgba(234,179,8,0.18); color: #facc15; }
-.pill-revoked { background: rgba(220,38,38,0.18); color: #fca5a5; }
+.pill-suspended { background: var(--warning-dim); color: var(--warning); }
+.pill-revoked { background: var(--danger-dim); color: var(--danger); }
 .oauth-client-groups-details {
   margin-top: 0.5rem;
 }
@@ -2405,7 +2760,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   pointer-events: none;
 }
 
-.btn-primary { background: var(--accent); color: #0a1810; }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 
 .btn-secondary { background: var(--panel-2); color: var(--accent); border: 1px solid var(--border); }
@@ -2529,7 +2884,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   background: var(--panel-2);
   border-color: color-mix(in srgb, var(--tile-color, var(--room-color, var(--accent))) 50%, var(--border));
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25),
+  box-shadow: var(--shadow-md),
               0 0 0 1px color-mix(in srgb, var(--tile-color, var(--room-color, var(--accent))) 25%, transparent);
 }
 .box-card:hover::before { width: 6px; opacity: 1; }
@@ -2871,10 +3226,10 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.badge-pending { background: #3a3a1f; color: #d4cf6f; }
-.badge-processing { background: #1f3a3a; color: #6fd4d4; }
-.badge-done { background: var(--accent); color: #0a1810; }
-.badge-failed { background: #3a1f1f; color: #d46f6f; }
+.badge-pending { background: var(--warning-dim); color: var(--warning); }
+.badge-processing { background: var(--info-dim); color: var(--info); }
+.badge-done { background: var(--success-dim); color: var(--success); }
+.badge-failed { background: var(--danger-dim); color: var(--danger); }
 
 /* === Error pages ===
    404, 401, 403, 413, 429, 500 — every error route renders templates/
@@ -2921,7 +3276,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   word-break: break-word;
 }
 .error-detail code {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
   padding: 0.15rem 0.45rem;
   border-radius: 0.25rem;
 }
@@ -3352,7 +3707,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   cursor: pointer;
   font-family: inherit;
 }
-.search-chip:hover { background: var(--accent); color: #0a1810; }
+.search-chip:hover { background: var(--accent); color: var(--on-accent); }
 .search-chip-clear-all {
   margin-left: 0.3rem;
   font-size: 0.78rem;
@@ -3776,7 +4131,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   color: var(--accent);
   border: 1px solid transparent;
 }
-.label-action-generate:hover { background: var(--accent); color: #0a1810; }
+.label-action-generate:hover { background: var(--accent); color: var(--on-accent); }
 .label-action-regen {
   background: var(--panel);
   color: var(--accent);
@@ -3875,7 +4230,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   flex-direction: column;
 }
 .label-preview-image-wrap {
-  background: #1a3322;
+  background: var(--surface-2);
   padding: 1.25rem;
   display: flex;
   align-items: center;
@@ -4027,7 +4382,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   max-height: 75vh;
   overflow: auto;
   border-radius: var(--radius);
-  background: #0c1810;
+  background: var(--bg);
   display: flex;
   justify-content: safe center;
   align-items: flex-start;
@@ -4041,7 +4396,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .floorplan-viewport::-webkit-scrollbar-thumb {
   background: var(--panel-2);
   border-radius: 100px;
-  border: 2px solid #0c1810;
+  border: 2px solid var(--bg);
 }
 .floorplan-viewport::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
 
@@ -4145,7 +4500,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.68rem;
   font-weight: 700;
-  color: #0a1810;
+  color: var(--on-accent);
   background: var(--room-color, var(--accent));
   padding: 0.05rem 0.4rem;
   border-radius: 100px;
@@ -4155,7 +4510,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 }
 .room-rect-draft {
   border-style: dashed;
-  background: rgba(74, 222, 128, 0.15);
+  background: var(--accent-dim);
   pointer-events: none;
 }
 
@@ -4179,7 +4534,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   /* Tile color falls back through: explicit box override → room color
      → global accent. The CSS variables stack so any level can win. */
   background: var(--tile-color, var(--room-color, var(--accent)));
-  color: #0a1810;
+  color: var(--on-accent);
   border: none;
   border-radius: 4px;
   padding: 0.25rem 0.45rem;
@@ -4246,8 +4601,8 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   object-fit: cover;
   border-radius: 6px;
   pointer-events: none;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6),
-              0 0 0 2px rgba(74, 222, 128, 0.85);
+  box-shadow: var(--shadow-lg),
+              0 0 0 2px var(--accent);
   opacity: 0.9;
   transform: rotate(-2deg);
 }
@@ -4543,7 +4898,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   width: 12px;
   height: 12px;
   background: var(--room-color, var(--accent));
-  border: 2px solid #0a1810;
+  border: 2px solid var(--bg);
   border-radius: 50%;
   pointer-events: auto;
   z-index: 2;
@@ -4935,7 +5290,7 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   border-radius: 100px;
   letter-spacing: 0.02em;
 }
-.changelog h2 a:hover { background: var(--accent); color: #0a1810; }
+.changelog h2 a:hover { background: var(--accent); color: var(--on-accent); }
 
 .changelog h3 {
   font-size: 0.65rem;
@@ -5018,4 +5373,136 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   margin-left: auto;
+}
+
+/* === Theme picker (on /usage) ================================
+   Four-up row of swatches.  Each swatch's preview block has its
+   own ``data-theme="..."`` attribute so its inner bars render in
+   THAT palette regardless of the page's active theme — the user
+   sees what they're switching to before they click. */
+.theme-picker-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.theme-picker {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  margin: 0.25rem 0 0.25rem;
+}
+@media (min-width: 720px) {
+  .theme-picker {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 1100px) {
+  .theme-picker {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+.theme-swatch {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.theme-swatch:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.theme-swatch:active { transform: scale(0.99); }
+.theme-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-swatch-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.theme-swatch-preview {
+  position: relative;
+  width: 64px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: block;
+  box-shadow: var(--shadow-sm);
+}
+.theme-swatch-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+}
+.theme-swatch-bg {
+  top: 0;
+  height: 100%;
+  background: var(--bg);
+}
+.theme-swatch-surface {
+  top: 8px;
+  bottom: 8px;
+  left: 8px;
+  right: 22px;
+  background: var(--surface);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.theme-swatch-dot {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.theme-swatch-text {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  transform: translateY(-50%);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  z-index: 1;
+}
+.theme-swatch-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.theme-swatch-meta strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.theme-swatch-check {
+  font-size: 1.1rem;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.theme-swatch-active .theme-swatch-check {
+  opacity: 1;
+}
+.theme-picker-note {
+  margin-top: 0.25rem;
+  color: var(--success);
 }

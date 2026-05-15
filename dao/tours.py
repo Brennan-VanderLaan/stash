@@ -43,7 +43,7 @@ _log = obs.get_logger("dao.tours")
 TOURS: list[dict] = [
     {
         "feature": "welcome",
-        "page": "/",
+        "page": "/home",
         "version": 1,
         "title": "Welcome to Stash",
         "steps": [

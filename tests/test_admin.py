@@ -152,7 +152,7 @@ def test_admin_create_tenant_and_invite_end_to_end(tmp_path, monkeypatch):
         # 4. Accept → membership granted → next request works.
         r = sis.post(f"/invite/{token}/accept", follow_redirects=False)
         assert r.status_code == 303
-        r = sis.get("/")
+        r = sis.get("/home")
         assert r.status_code == 200
 
     # 5. Operator's view confirms the membership landed.

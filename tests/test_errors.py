@@ -65,9 +65,11 @@ def test_401_renders_cat_for_unauthenticated_html(tmp_path, monkeypatch):
         del sys.modules["app"]
     import app as app_module
     importlib.reload(app_module)
-    # No X-Forwarded-Email → middleware should 401.
+    # No X-Forwarded-Email → middleware should 401.  ``/`` is the
+    # public landing now (200 for anyone); probe ``/home`` to hit
+    # an authenticated route.
     with TestClient(app_module.app) as c:
-        r = c.get("/", headers={"Accept": "text/html"})
+        r = c.get("/home", headers={"Accept": "text/html"})
     # Some routes return 401 directly; others may redirect to a
     # login flow.  We accept any 4xx that isn't 404 so this test
     # stays useful as the auth surface evolves; the assertion that

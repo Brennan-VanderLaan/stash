@@ -92,7 +92,10 @@ services:
       # /static/style.css without bouncing through Google login.
       # These assets carry no tenant data — just stash's own
       # CSS/JS/vendor bundles — so a public bypass is safe.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
+      # ``^/$`` is the public marketing landing — unauthenticated
+      # visitors land here.  Authenticated dashboard moved to
+      # ``/home`` so the bypass is targeted, not blanket.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

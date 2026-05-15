@@ -360,11 +360,12 @@ def test_http_recipient_can_view_shared_box(tmp_path, monkeypatch):
         assert r.status_code == 200
         assert "Kitchen" in r.text
         assert "Whisk" in r.text
-        # / renders for a share-only actor (no membership → tenant_id
+        # /home renders for a share-only actor (no membership → tenant_id
         # is None → list_with_counts returns []) but doesn't 403 them
         # out of the app entirely.  The Shared tab appears in the nav
-        # so they can find /shared.
-        r = rc.get("/")
+        # so they can find /shared.  (``/`` is the public landing now;
+        # use ``/home`` to probe the authenticated dashboard.)
+        r = rc.get("/home")
         assert r.status_code == 200
         assert "/shared" in r.text  # Shared tab is in the nav.
 

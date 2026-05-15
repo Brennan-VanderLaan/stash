@@ -113,7 +113,7 @@ def test_submit_feedback_ignores_oversize_screenshot(client):
 def test_feedback_widget_renders_for_tenant_member(client):
     """The floating button should be present in the rendered HTML
     when the actor has an active tenant."""
-    page = client.get("/").text
+    page = client.get("/home").text
     assert 'id="feedback-launcher"' in page
     assert 'id="feedback-dialog"' in page
 

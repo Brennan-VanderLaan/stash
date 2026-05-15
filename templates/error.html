@@ -12,8 +12,8 @@
   <p class="error-detail"><code>{{ detail }}</code></p>
   {% endif %}
   <div class="error-actions">
-    <a href="/" class="btn btn-primary">Back to safety</a>
-    {% if back_url and back_url != '/' %}
+    <a href="/home" class="btn btn-primary">Back to safety</a>
+    {% if back_url and back_url != '/home' %}
     <a href="{{ back_url }}" class="btn btn-secondary">Try again</a>
     {% endif %}
   </div>
