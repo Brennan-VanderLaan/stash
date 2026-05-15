@@ -82,6 +82,33 @@ def test_theme_picker_renders_on_usage(client):
     assert 'id="appearance"' in body
 
 
+def test_visited_link_rule_has_zero_specificity():
+    """Anchor-as-button surfaces (``.landing-cta-primary``,
+    ``.about-signin``, etc.) set their own ``color`` via a single
+    class.  A bare ``a:visited { color: ... }`` selector has
+    specificity 0,0,1,1 — higher than a class selector (0,0,1,0) —
+    so once the user has clicked the button, the visited rule
+    *wins* over the button's own colour and the text disappears
+    (green on green).  Wrapping the rule in ``:where()`` drops it
+    to zero specificity so any class wins.  Pinned because the
+    bug is invisible until you actually visit the page twice."""
+    css = STYLE.read_text(encoding="utf-8")
+    # The fix: the visited rule must be inside :where().
+    assert ":where(a:visited)" in css, (
+        "a:visited rule must be wrapped in :where() so classes can "
+        "override its colour — see bug where the landing CTA's text "
+        "went invisible after first visit."
+    )
+    # And we must NOT have a bare ``a:visited { ... }`` rule that
+    # would re-introduce the higher-specificity selector.
+    import re
+    bare = re.search(r"^a:visited\s*\{", css, re.MULTILINE)
+    assert bare is None, (
+        "A bare ``a:visited { ... }`` selector was reintroduced; "
+        "use ``:where(a:visited)`` instead to keep specificity zero."
+    )
+
+
 def test_legacy_var_aliases_still_resolve():
     """Older selectors reference ``--panel`` / ``--panel-2`` /
     ``--muted``.  Forest theme aliases them to the new semantic

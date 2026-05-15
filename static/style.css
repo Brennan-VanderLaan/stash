@@ -201,12 +201,19 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; }
 
 /* Default link color — explicit so browsers don't fall back to blue/purple
-   on visited state, which is unreadable on the dark green theme. Specific
-   surfaces (.box-card, .header-back, room-chip, etc.) still override their
+   on visited state, which is unreadable on the dark green theme.
+   Wrapped in ``:where()`` so the rule has zero specificity: any
+   class on an anchor (``.landing-cta-primary``, ``.about-signin``,
+   ``.btn-primary`` used as ``<a>``, etc.) wins without needing its
+   own ``:visited`` override.  Without this, a bare ``a:visited``
+   selector outranks single-class colour rules (1 type + 1 pseudo-
+   class = 11, vs 1 class = 10) and after first visit a green-on-
+   green CTA button has its text disappear.  Specific surfaces
+   (.box-card, .header-back, room-chip, etc.) still override their
    color independently. */
-a { color: var(--accent); }
-a:visited { color: var(--accent); }
-a:hover { color: var(--accent-hover); }
+:where(a) { color: var(--accent); }
+:where(a:visited) { color: var(--accent); }
+:where(a:hover) { color: var(--accent-hover); }
 
 /* All <dialog> elements opened via showModal() — explicitly center.
    Browser defaults vary (Safari and some Chromium configs render them
