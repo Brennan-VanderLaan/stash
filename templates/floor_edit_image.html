@@ -252,8 +252,11 @@
       t.enterEditing();
       t.selectAll();
       history.push(t);
-      setTool('select');
       drawing = null;
+      // skipTargetFind stays *off* for the text path so the user
+      // can click out of an editing IText to commit.  Active tool
+      // stays as 'text' — sticky, like rect/line — so the user can
+      // place several labels in a row.
       canvas.skipTargetFind = false;
     }
   });
@@ -287,11 +290,16 @@
       if (tiny) {
         canvas.remove(drawing);
       } else {
-        // Flip the shape back to interactive now that it's committed.
+        // Flip the shape back to interactive now that it's
+        // committed, so the user can click-select + move/resize
+        // it later.  ``activeTool`` is *not* reset to 'select'
+        // — drawing tools are sticky so the user can rapid-fire
+        // multiple rects/lines without re-tapping the toolbar
+        // between each one (standard pattern in Figma / Sketch
+        // / drawio).  Switch back via the Select button or the
+        // ``V`` shortcut when done.
         drawing.set({ selectable: true, evented: true });
         history.push(drawing);
-        setTool('select');
-        canvas.setActiveObject(drawing);
       }
     }
     drawing = null;
