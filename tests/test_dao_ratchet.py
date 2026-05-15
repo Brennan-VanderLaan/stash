@@ -30,7 +30,11 @@ from pathlib import Path
 # Ceiling at the moment the ratchet was installed.  Going UP requires
 # a deliberate change here + a justification in the commit; going
 # DOWN is welcome — drop the ceiling alongside the migration.
-APP_CONN_EXECUTE_CEILING = 66
+# Bumped from 66 → 67 on 2026-05-15 for the ``tour_seen`` table
+# DDL + index in init_db (onboarding-tour persistence).  Schema
+# migrations are explicitly called out in the ratchet docstring as
+# a legit reason to lift the ceiling.
+APP_CONN_EXECUTE_CEILING = 67
 
 
 def test_app_py_conn_execute_ratchet():

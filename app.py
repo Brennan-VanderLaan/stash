@@ -33,6 +33,7 @@ from dao import rooms as dao_rooms
 from dao import shares as dao_shares
 from dao import tags as dao_tags
 from dao import tenants as dao_tenants
+from dao import tours as dao_tours
 from dao import usage as dao_usage
 import obs
 
@@ -1327,6 +1328,25 @@ def migrate_db():
         # "Start audit"; cleared on "Finish".  No separate audit
         # session table needed.
         _add_column_if_missing(conn, "boxes", "last_audit_started_at", "TEXT")
+        # First-run onboarding tour state.  One row per (user, feature)
+        # pair the user has completed.  ``version`` lets the operator
+        # bump a tour and force every user to re-see the updated copy
+        # by raising the registered version in tours.py; rows below the
+        # new version are treated as "not seen".  Per-user (by email)
+        # rather than per-tenant because the tour state is a UX
+        # preference of the human, not the organization.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tour_seen (
+                actor_email TEXT NOT NULL,
+                feature     TEXT NOT NULL,
+                version     INTEGER NOT NULL DEFAULT 1,
+                seen_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (actor_email, feature)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tour_seen_actor ON tour_seen(actor_email)"
+        )
         # Packing-session hint (carried from /ingest's box picker).
         # The session lives entirely in the page form — leave the
         # /ingest page or reload it and there's no session to clean
@@ -4598,6 +4618,9 @@ def _render_usage_page(
         api_tokens = dao_api_tokens.list_for_tenant(actor)
     summary = dao_usage.summary(actor)
     months = dao_usage.monthly_summary(actor.tenant_id, months_back=12)
+    tour_email = _tour_actor_email(actor)
+    tour_catalogue = dao_tours.catalogue()
+    tour_seen = dao_tours.state_for_actor(tour_email)
     billing_enabled = dao_billing.is_configured()
     subscription = (
         dao_billing.subscription_for_tenant(actor.tenant_id)
@@ -4622,6 +4645,8 @@ def _render_usage_page(
             "billing_enabled": billing_enabled,
             "subscription": subscription,
             "billing_status": request.query_params.get("billing", ""),
+            "tour_catalogue": tour_catalogue,
+            "tour_seen": tour_seen,
         },
     )
 
@@ -4831,6 +4856,100 @@ def admin_feedback_status(
     except NotFoundError:
         raise HTTPException(404)
     return RedirectResponse("/admin#feedback", status_code=303)
+
+
+# ── Onboarding tours ───────────────────────────────────────────────
+
+
+def _tour_actor_email(actor: Actor) -> str | None:
+    """Resolve the user identity for tour state.  Bearer-auth
+    actors carry a synthetic ``api_token:N`` email — tours are a
+    UX preference for humans, not robots, so we skip the marker
+    and return None there (no tour fires for an MCP client)."""
+    email = (actor.email or "").strip()
+    if not email or email.startswith("api_token:"):
+        return None
+    return email
+
+
+@app.get("/api/v1/tour/state")
+def tour_state(request: Request):
+    """Return the user's tour state — a feature → seen-bool map +
+    the catalogue of every tour with steps so the JS layer can
+    render an overlay without a second round trip."""
+    actor: Actor = request.state.actor
+    email = _tour_actor_email(actor)
+    path = request.query_params.get("path") or "/"
+    pending = dao_tours.tours_for_page(email, path)
+    return {
+        "ok": True,
+        "actor_email": email,
+        "seen": dao_tours.state_for_actor(email),
+        "auto_play": [
+            {
+                "feature": t["feature"],
+                "title": t["title"],
+                "version": t["version"],
+                "steps": t["steps"],
+            }
+            for t in pending
+        ],
+    }
+
+
+@app.get("/api/v1/tour/{feature}")
+def tour_get(request: Request, feature: str):
+    """Fetch a single tour by feature id — used when the user
+    triggers a replay from /usage."""
+    tour = next((t for t in dao_tours.TOURS if t["feature"] == feature), None)
+    if tour is None:
+        raise HTTPException(404)
+    return {
+        "ok": True,
+        "feature": tour["feature"],
+        "title": tour["title"],
+        "version": tour["version"],
+        "steps": tour["steps"],
+    }
+
+
+@app.post("/tour/{feature}/seen")
+def tour_mark_seen(request: Request, feature: str):
+    """Mark a tour as seen at its current version.  Called by the
+    overlay JS on the user's last 'Next' or 'Skip' tap."""
+    actor: Actor = request.state.actor
+    email = _tour_actor_email(actor)
+    if not email:
+        raise HTTPException(403, "Anonymous actor")
+    dao_tours.mark_seen(email, feature)
+    if _wants_json(request):
+        return {"ok": True, "feature": feature}
+    return RedirectResponse(
+        request.headers.get("referer") or "/", status_code=303,
+    )
+
+
+@app.post("/tour/{feature}/reset")
+def tour_reset_one(request: Request, feature: str):
+    """Clear a single seen-record so the user can replay the tour.
+    Trigger lives on /usage."""
+    actor: Actor = request.state.actor
+    email = _tour_actor_email(actor)
+    if not email:
+        raise HTTPException(403, "Anonymous actor")
+    dao_tours.reset(email, feature)
+    return RedirectResponse("/usage#tours", status_code=303)
+
+
+@app.post("/tour/reset-all")
+def tour_reset_all(request: Request):
+    """Replay every tour for the current user."""
+    actor: Actor = request.state.actor
+    email = _tour_actor_email(actor)
+    if not email:
+        raise HTTPException(403, "Anonymous actor")
+    dao_tours.reset_all(email)
+    return RedirectResponse("/usage#tours", status_code=303)
 
 
 # ── Stripe billing ─────────────────────────────────────────────────

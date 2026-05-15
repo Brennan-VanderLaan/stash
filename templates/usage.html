@@ -9,6 +9,7 @@
    plain anchors so no scripting required. #}
 <nav class="usage-toc" aria-label="{{ _('Usage page sections') }}">
   <a href="#plan">{{ _("Plan & role") }}</a>
+  {% if tour_catalogue %}<a href="#tours">{{ _("Tours") }}</a>{% endif %}
   <a href="#cost">{{ _("Cost transparency") }}</a>
   <a href="#quotas">{{ _("Quotas") }}</a>
   {% if is_maintainer %}<a href="#backups">{{ _("Backups") }}</a>{% endif %}
@@ -29,6 +30,42 @@
     <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
   </dl>
 </div>
+
+{% if tour_catalogue %}
+<h2 class="usage-section" id="tours">{{ _("Onboarding tours") }}</h2>
+<div class="card maintenance-card">
+  <p class="text-sm text-muted">
+    {{ _("First-visit walk-throughs.  Replay any tour to see the latest version of its copy + targets.") }}
+  </p>
+  <ul class="tour-catalogue">
+    {% for t in tour_catalogue %}
+    <li class="tour-catalogue-row">
+      <div class="tour-catalogue-meta">
+        <strong>{{ t.title }}</strong>
+        <span class="text-sm text-muted">
+          · <code>{{ t.page }}</code> · v{{ t.version }}
+          {% if tour_seen[t.feature] %}
+            · {{ _("seen") }}
+          {% else %}
+            · {{ _("not yet seen") }}
+          {% endif %}
+        </span>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm"
+              data-tour-replay="{{ t.feature }}">
+        {{ _("Replay") }}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+  <form method="post" action="/tour/reset-all" style="margin-top:0.6rem;">
+    <button type="submit" class="btn btn-link btn-sm"
+            onclick="return confirm('{{ _('Reset every tour so they auto-play again on next visit?') }}');">
+      {{ _("Reset every tour") }}
+    </button>
+  </form>
+</div>
+{% endif %}
 
 <h2 class="usage-section" id="cost">{{ _("Cost transparency") }}</h2>
 

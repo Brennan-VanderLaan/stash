@@ -745,6 +745,119 @@ main.main-wide {
   margin-bottom: 0.75rem;
 }
 
+/* === Onboarding tour overlay ===
+   First-run walkthrough rendered by a single overlay div in
+   base.html.  Spotlight is an absolutely-positioned hole that lets
+   the highlighted element shine through; the tooltip floats next
+   to it.  When no target element is present (welcome step on the
+   home page, or a target that doesn't exist on this tenant's
+   data), the tooltip centres on the viewport with the spotlight
+   hidden. */
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: auto;
+}
+.tour-overlay::before {
+  /* Backdrop dim — the spotlight cuts a hole into it via the
+     spotlight element's massive outer box-shadow. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+}
+.tour-spotlight {
+  position: absolute;
+  border-radius: 8px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65),
+              0 0 0 3px var(--accent),
+              0 0 18px var(--accent);
+  transition: all 0.18s ease;
+}
+.tour-tooltip {
+  position: absolute;
+  width: min(320px, calc(100vw - 16px));
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 0.95rem 0.7rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  transition: opacity 0.18s ease;
+}
+.tour-tooltip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.tour-tooltip-step {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.tour-tooltip-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+.tour-tooltip-close:hover { color: var(--accent); }
+.tour-tooltip-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  color: var(--accent);
+}
+.tour-tooltip-body {
+  margin: 0 0 0.7rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--text);
+}
+.tour-tooltip-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+body.tour-active { overflow: hidden; }
+
+/* Tour management list on /usage */
+.tour-catalogue {
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.tour-catalogue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.tour-catalogue-meta { min-width: 0; }
+.tour-catalogue-meta code {
+  font-size: 0.78rem;
+  background: var(--panel);
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-sm);
+}
+
 /* === /audit Tinder-style swipe ===
    One card at a time, photo-first, three always-visible action
    buttons so accept/reject is never below the fold.  Cards stack

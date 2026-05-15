@@ -172,6 +172,241 @@
      operator queue on /admin.  Suppressed on the OAuth consent
      page (auth-flow surface — don't put a feedback button on a
      security-critical screen). #}
+  {# ── Onboarding tour overlay ──────────────────────────────────
+     JS-driven walkthrough that auto-fires on first visit to a page
+     with a registered tour the user hasn't seen yet.  State lives
+     server-side (table ``tour_seen``); the JS fetches /api/v1/tour/state
+     with the current path and walks through ``auto_play`` tours.
+     Suppressed for anonymous + bearer actors via the same gate as
+     the feedback widget. #}
+  {% if request.state.actor and request.state.actor.tenant_id and request.state.actor.email and not request.state.actor.email.startswith('api_token:') %}
+  <div id="tour-overlay" class="tour-overlay" hidden aria-hidden="true">
+    <div class="tour-spotlight" id="tour-spotlight" hidden></div>
+    <div class="tour-tooltip" id="tour-tooltip" role="dialog" aria-modal="true">
+      <header class="tour-tooltip-head">
+        <span class="tour-tooltip-step" data-tour-step-count></span>
+        <button type="button" class="tour-tooltip-close" data-tour-action="skip"
+                aria-label="{{ _('Skip tour') }}">×</button>
+      </header>
+      <h3 class="tour-tooltip-title" data-tour-step-title></h3>
+      <p class="tour-tooltip-body" data-tour-step-body></p>
+      <footer class="tour-tooltip-foot">
+        <button type="button" class="btn btn-secondary btn-sm"
+                data-tour-action="prev" data-tour-prev>{{ _('Back') }}</button>
+        <button type="button" class="btn btn-primary btn-sm"
+                data-tour-action="next" data-tour-next>{{ _('Next →') }}</button>
+      </footer>
+    </div>
+  </div>
+  <script>
+  (function () {
+    const overlay = document.getElementById('tour-overlay');
+    if (!overlay) return;
+    const spotlight = document.getElementById('tour-spotlight');
+    const tooltip = document.getElementById('tour-tooltip');
+    const stepCount = tooltip.querySelector('[data-tour-step-count]');
+    const stepTitle = tooltip.querySelector('[data-tour-step-title]');
+    const stepBody = tooltip.querySelector('[data-tour-step-body]');
+    const nextBtn = tooltip.querySelector('[data-tour-next]');
+    const prevBtn = tooltip.querySelector('[data-tour-prev]');
+
+    let queue = [];        // tours to auto-play this page load
+    let activeTour = null; // current tour object
+    let stepIdx = 0;
+
+    async function fetchState() {
+      const url = '/api/v1/tour/state?path=' +
+                  encodeURIComponent(window.location.pathname);
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (e) { return null; }
+    }
+
+    async function startNextInQueue() {
+      if (!queue.length) {
+        hideOverlay();
+        return;
+      }
+      activeTour = queue.shift();
+      stepIdx = 0;
+      showOverlay();
+      paintStep();
+    }
+
+    function showOverlay() {
+      overlay.hidden = false;
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('tour-active');
+    }
+    function hideOverlay() {
+      overlay.hidden = true;
+      overlay.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('tour-active');
+      activeTour = null;
+      stepIdx = 0;
+    }
+
+    function paintStep() {
+      if (!activeTour) return;
+      const steps = activeTour.steps || [];
+      const step = steps[stepIdx];
+      if (!step) {
+        finishTour();
+        return;
+      }
+      stepCount.textContent = (stepIdx + 1) + ' / ' + steps.length;
+      stepTitle.textContent = step.title || '';
+      stepBody.textContent = step.body || '';
+      prevBtn.disabled = stepIdx === 0;
+      nextBtn.textContent = (stepIdx === steps.length - 1) ? 'Done' : 'Next →';
+      positionTooltip(step);
+    }
+
+    function positionTooltip(step) {
+      // Spotlight + tooltip placement.  Target may be null
+      // (centred modal) or a CSS selector that may match nothing
+      // on this particular tenant's data (e.g., the welcome tour
+      // pointing at .box-list when the user has no boxes yet).
+      // In the no-target case the tooltip centres on screen and
+      // the spotlight is hidden.
+      spotlight.hidden = true;
+      tooltip.classList.remove('tour-tooltip-positioned');
+      if (!step.target) {
+        tooltip.style.left = '50%';
+        tooltip.style.top = '50%';
+        tooltip.style.transform = 'translate(-50%, -50%)';
+        return;
+      }
+      let el = null;
+      try { el = document.querySelector(step.target); } catch (e) { el = null; }
+      if (!el) {
+        // Target missing on this page state — fall through to
+        // centred-modal positioning.
+        tooltip.style.left = '50%';
+        tooltip.style.top = '50%';
+        tooltip.style.transform = 'translate(-50%, -50%)';
+        return;
+      }
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const r = el.getBoundingClientRect();
+      // Spotlight: a transparent rect drawn over the element, the
+      // backdrop's outer box-shadow darkens the surrounding page.
+      spotlight.hidden = false;
+      spotlight.style.left = (r.left - 6) + 'px';
+      spotlight.style.top = (r.top - 6) + 'px';
+      spotlight.style.width = (r.width + 12) + 'px';
+      spotlight.style.height = (r.height + 12) + 'px';
+      // Tooltip: pick a side that fits in the viewport.
+      const ttRect = { w: 320, h: 180 };
+      const pos = step.position || 'below';
+      let left, top;
+      const gap = 14;
+      if (pos === 'above' || (r.top > window.innerHeight - r.bottom)) {
+        // Above the element.
+        top = r.top - ttRect.h - gap;
+      } else {
+        // Below the element.
+        top = r.bottom + gap;
+      }
+      if (pos === 'left') left = r.left - ttRect.w - gap;
+      else if (pos === 'right') left = r.right + gap;
+      else left = Math.max(8, Math.min(
+        r.left + r.width / 2 - ttRect.w / 2,
+        window.innerWidth - ttRect.w - 8,
+      ));
+      // Clamp into viewport.
+      top = Math.max(8, Math.min(top, window.innerHeight - ttRect.h - 8));
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+      tooltip.style.transform = '';
+      tooltip.classList.add('tour-tooltip-positioned');
+    }
+
+    async function markSeen(feature) {
+      try {
+        await fetch('/tour/' + encodeURIComponent(feature) + '/seen', {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+        });
+      } catch (e) { /* best-effort — retry on next page load */ }
+    }
+
+    function finishTour() {
+      if (activeTour) markSeen(activeTour.feature);
+      startNextInQueue();
+    }
+
+    nextBtn.addEventListener('click', () => {
+      if (!activeTour) return;
+      stepIdx += 1;
+      if (stepIdx >= (activeTour.steps || []).length) {
+        finishTour();
+      } else {
+        paintStep();
+      }
+    });
+    prevBtn.addEventListener('click', () => {
+      if (!activeTour || stepIdx === 0) return;
+      stepIdx -= 1;
+      paintStep();
+    });
+    tooltip.querySelector('[data-tour-action="skip"]').addEventListener('click', () => {
+      // Skip marks the tour seen so it doesn't re-fire on the
+      // next page load — same effect as walking through every
+      // step.  User can replay from /usage if they change their
+      // mind.
+      finishTour();
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finishTour();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!activeTour) return;
+      if (e.key === 'Escape') finishTour();
+      else if (e.key === 'ArrowRight') nextBtn.click();
+      else if (e.key === 'ArrowLeft') prevBtn.click();
+    });
+    window.addEventListener('resize', () => {
+      if (!activeTour) return;
+      const step = (activeTour.steps || [])[stepIdx];
+      if (step) positionTooltip(step);
+    });
+
+    // ── Replay trigger ──────────────────────────────────────────
+    // The /usage management section uses data-tour-replay buttons
+    // that POST to /tour/{feature}/reset *and* immediately kick
+    // off the replay client-side via this function.
+    window.startTour = async function (feature) {
+      const r = await fetch('/api/v1/tour/' + encodeURIComponent(feature),
+                            { headers: { Accept: 'application/json' } });
+      if (!r.ok) return;
+      const tour = await r.json();
+      if (!tour.ok) return;
+      queue.push({
+        feature: tour.feature, title: tour.title,
+        version: tour.version, steps: tour.steps,
+      });
+      if (!activeTour) startNextInQueue();
+    };
+    document.querySelectorAll('[data-tour-replay]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.startTour(btn.dataset.tourReplay);
+      });
+    });
+
+    // ── Auto-play on load ───────────────────────────────────────
+    fetchState().then(state => {
+      if (!state || !state.auto_play || !state.auto_play.length) return;
+      queue = state.auto_play.slice();
+      startNextInQueue();
+    });
+  })();
+  </script>
+  {% endif %}
+
   {% if not hide_feedback_widget and request.state.actor and request.state.actor.tenant_id %}
   <button type="button" id="feedback-launcher" class="feedback-launcher"
           aria-label="{{ _('Send feedback') }}"
