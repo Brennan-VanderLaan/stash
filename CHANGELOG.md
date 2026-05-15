@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.17.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.16.0...v1.17.0) (2026-05-15)
+
+
+### Features
+
+* **feedback:** in-app feedback widget + operator triage queue ([33acd2d](https://github.com/Brennan-VanderLaan/stash/commit/33acd2d65ce5485a4154e1effed4b2c8a5879915))
+* **tags:** AI-suggested tags per item and per box ([44bf265](https://github.com/Brennan-VanderLaan/stash/commit/44bf2659f8103dcdb4c0829ea2ae49f3eb538958))
+* **tags:** bulk-tag every item in a box ([cea2159](https://github.com/Brennan-VanderLaan/stash/commit/cea215905855b730bd1f54d49f8f880fa9c06c81))
+* **usage:** facelift /usage into named sections + cost-transparency block ([da84a3a](https://github.com/Brennan-VanderLaan/stash/commit/da84a3a8c8474aad0ac7b87e88f1566295117b4f))
+* **usage:** GDPR Article 20 'Download my data' bundle ([4a0a9dc](https://github.com/Brennan-VanderLaan/stash/commit/4a0a9dc18ed40937811b7b92deac4d69067314c3))
+
 ## [1.16.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.15.0...v1.16.0) (2026-05-15)
 
 
