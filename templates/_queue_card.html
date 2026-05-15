@@ -99,11 +99,14 @@
     </select>
   </label>
 
-  {# Customize: collapsed by default so the common-case "accept the
-     suggestion" flow doesn't see this at all.  When the user
-     expands, they can override name / description / tags + adjust
-     the crop on the photo. #}
-  <details class="sort-customize">
+  {# Customize: expanded by default for *fresh* pending items
+     (``previous_box_name`` IS NULL — straight off /ingest, where
+     the AI's name + description are almost always wrong on first
+     pass).  Audit re-queue items have a previous_box_name set and
+     were already named once by a human, so Customize collapses
+     for them — the common-case "this is the same Whisk, accept it"
+     flow stays one tap. #}
+  <details class="sort-customize" {% if not p.previous_box_name %}open{% endif %}>
     <summary class="sort-customize-summary">
       <span>⚙️ Customize</span>
       <span class="text-muted text-sm">edit name, description, tags, crop</span>

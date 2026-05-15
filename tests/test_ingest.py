@@ -186,6 +186,39 @@ def test_ingest_requires_photo(client):
 # ── Packing-session hint (target_box_id) ──────────────────────────
 
 
+def test_queue_card_customize_opens_for_fresh_items(client, monkeypatch):
+    """Fresh-from-/ingest items render the Customize <details>
+    open so the user immediately sees the editable name + description
+    fields — AI's first-pass naming is almost always wrong.  Items
+    that were re-queued by an audit (have ``previous_box_name``)
+    keep Customize collapsed because the name has already been
+    human-vetted."""
+    from vision import DetectedItem
+    from unittest.mock import patch
+    # Fresh ingest: no previous_box_name.
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="mystery thing", description="?"),
+    ]):
+        client.post("/ingest", files={
+            "photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg"),
+        })
+    page = client.get("/queue").text
+    # The <details> tag carries the ``open`` attribute on a fresh
+    # pending row.  Audit-re-queued rows omit it.
+    assert '<details class="sort-customize" open>' in page
+
+    # Audit re-queue: stamp a previous_box_name so the same render
+    # path takes the collapsed branch.
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE pending_items SET previous_box_name = 'Kitchen'"
+        )
+        conn.commit()
+    page2 = client.get("/queue").text
+    assert '<details class="sort-customize" open>' not in page2
+    assert '<details class="sort-customize"' in page2
+
+
 def test_ingest_packing_session_pre_fills_pending_items(client):
     """Hero workflow: user picks "I'm packing Box X" on /ingest,
     uploads a photo, AI detects items.  Each pending_item lands in
