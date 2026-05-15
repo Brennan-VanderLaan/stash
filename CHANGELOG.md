@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.20.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.19.0...v1.20.0) (2026-05-15)
+
+
+### Features
+
+* **admin:** dashboard facelift (KPI hero + tenant cards + section TOC) ([f58f9ef](https://github.com/Brennan-VanderLaan/stash/commit/f58f9effa540aa9e09150ca3ac5f27e2b1afbbc3))
+* **ingest:** hero facelift, fix copy, demote optional packing ([7b03552](https://github.com/Brennan-VanderLaan/stash/commit/7b035524a6b1271331ae7d9ea8e4a5e680ae2195))
+
 ## [1.19.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.18.0...v1.19.0) (2026-05-15)
 
 
