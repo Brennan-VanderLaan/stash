@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.18.0...v1.19.0) (2026-05-15)
+
+
+### Features
+
+* **billing:** Stripe Checkout + webhook entitlement for Pro tier ([905a5a9](https://github.com/Brennan-VanderLaan/stash/commit/905a5a9e662a1a42d7246304b07ff6513e30fc42))
+
 ## [1.18.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.17.0...v1.18.0) (2026-05-15)
 
 
