@@ -2659,6 +2659,26 @@ def audit_box(request: Request, box_id: int):
         key=lambda it: (it["name"] or ""),
     )
     started_at = box.get("last_audit_started_at")
+    # Auto-start the session on first visit so the user doesn't
+    # have to click a second "Start audit" button right after
+    # they clicked Audit on the box page (feedback #24, "Don't
+    # make me hit start audit, just start it, that's why I
+    # clicked the button.  The whole point is progress is saved
+    # regardless of how far you get").  Idempotent if a session
+    # is already in flight — audit_session_start is no-op-on-
+    # already-started.  Only kicks in if there's actually
+    # something to audit; an empty box still falls through to
+    # the "No items to audit" branch.
+    if started_at is None and all_items:
+        try:
+            dao_boxes.audit_session_start(actor, box_id)
+            # Re-fetch to pick up the freshly-stamped timestamp.
+            box = dao_boxes.get_by_id(actor, box_id)
+            started_at = box.get("last_audit_started_at")
+        except (NotFoundError, ForbiddenError):
+            # Readonly member or vanished box — fall through and
+            # let the template render the no-progress state.
+            pass
     return templates.TemplateResponse(
         request, "audit.html",
         {
