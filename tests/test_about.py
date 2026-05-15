@@ -191,9 +191,13 @@ def test_about_transparency_breaks_down_costs(tmp_path, monkeypatch):
     app_mod = _bootstrap_app(tmp_path, monkeypatch)
     with TestClient(app_mod.app) as c:
         page = c.get("/about/transparency").text
-    # Cost lines: each row in the ledger.
+    # Cost lines: each row in the ledger.  Bandwidth + storage
+    # split into separate lines (AWS egress vs B2 backup storage)
+    # because they hit different providers — confusing them was
+    # the bug that triggered this rework.
     for line in ("Stripe processing fee", "AI APIs", "Compute",
-                 "Storage", "Bandwidth", "State business taxes",
+                 "Bandwidth (AWS egress)", "Backblaze B2",
+                 "State business taxes",
                  "Allocated to humans", "Remainder"):
         assert line in page
     # Roles glossary — Maintainer + Read-only + Operator + Admin

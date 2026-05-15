@@ -46,24 +46,31 @@
             can't run away with your budget.</td>
       </tr>
       <tr>
-        <td>Compute (EC2 share)</td>
-        <td>≈ −$0.10 to −$0.25</td>
-        <td>Per-tenant slice of the shared instance.  Drops as
-            user count grows — at 100 Pro users a t3.small at
-            $0.0208/hr is around $0.15/user/mo.</td>
+        <td>Compute (AWS EC2 + EBS)</td>
+        <td>≈ −$0.10 to −$0.30</td>
+        <td>Per-tenant slice of the shared instance + the EBS
+            volume that holds your photos.  Drops as user count
+            grows — a t3.small at $0.0208/hr split across 100
+            users is around $0.15/user/mo before storage.</td>
       </tr>
       <tr>
-        <td>Storage + backup (B2)</td>
-        <td>≈ −$0.05 to −$0.30</td>
-        <td>Backblaze B2 at $6/TB/mo for hot storage; tenant
-            photos + nightly encrypted backups.  Cumulative, so
-            heavy long-time tenants cost more than fresh ones.</td>
+        <td>Bandwidth (AWS egress)</td>
+        <td>≈ −$0.00 to −$0.50</td>
+        <td>Serving thumbs + photos to your browser on every
+            grid view.  AWS gives the first 100 GB/month per
+            account free, then charges $0.09/GB.  At small scale
+            this rounds to zero; for a heavy Pro user it can
+            reach a few tens of cents.</td>
       </tr>
       <tr>
-        <td>Bandwidth (B2 egress)</td>
-        <td>≈ −$0.05 to −$0.20</td>
-        <td>Serving thumbs + photos on every grid view.  B2 egress
-            is ~$10/TB.</td>
+        <td>Off-site backup (Backblaze B2)</td>
+        <td>≈ −$0.02 to −$0.10</td>
+        <td>Nightly encrypted DR uploads of each tenant's
+            database + photos.  B2 storage is $6/TB-month for
+            hot storage; we accumulate, so heavy long-time
+            tenants cost more than fresh ones.  Egress only
+            fires on the rare DR restore so it's not in this
+            line.</td>
       </tr>
       <tr class="about-cost-row-tax">
         <td>State business taxes (MA)</td>
