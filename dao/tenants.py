@@ -183,6 +183,75 @@ def create_tenant(
 SOFT_DELETE_GRACE_DAYS = 30
 
 
+def operator_set_plan(
+    actor: Actor, tenant_id: int, plan: str, *, reason: str = "",
+) -> dict:
+    """Operator-side plan override.  Bypasses Stripe.
+
+    Use case: comping friends + family to Pro out-of-band, beta
+    testers, support credit, etc.  The Stripe webhook still owns
+    plan transitions driven by real subscription events — this
+    sets ``tenants.plan`` directly without touching the Stripe
+    columns (``stripe_customer_id`` / ``stripe_subscription_id``
+    / ``subscription_status``), so a real paid subscription that
+    later cancels still flips back to free via the webhook.
+
+    Effects are immediate.  Quotas come from
+    ``_PLAN_DEFAULTS[plan]`` and apply on the next request.
+
+    Idempotent — setting the same plan returns ``changed=False``
+    without writing an audit row.
+
+    Args:
+        plan: 'free' or 'pro'.
+        reason: Optional free-text note saved in the audit log.
+            Operators are encouraged to leave a paper trail
+            (``"comp: brother — bday gift"``, ``"beta tester"``)
+            so the org understands the historical state.
+    """
+    require_operator(actor)
+    if plan not in ("free", "pro"):
+        raise ValueError(
+            f"plan must be 'free' or 'pro', got {plan!r}",
+        )
+    with db() as conn:
+        row = conn.execute(
+            "SELECT name, plan FROM tenants WHERE id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"tenant {tenant_id}")
+        old_plan = row["plan"]
+        if old_plan == plan:
+            return {
+                "id": tenant_id, "name": row["name"],
+                "plan": plan, "changed": False,
+            }
+        conn.execute(
+            "UPDATE tenants SET plan = ? WHERE id = ?",
+            (plan, tenant_id),
+        )
+        obs.write_audit(
+            conn, tenant_id=tenant_id, actor_email=actor.email,
+            action="tenant.plan_override",
+            target_kind="tenant", target_id=tenant_id,
+            metadata={
+                "old_plan": old_plan,
+                "new_plan": plan,
+                "reason": (reason or "")[:200],
+            },
+        )
+        conn.commit()
+    _log.warning(
+        "tenant.plan_override id=%s name=%r %s->%s by=%s reason=%r",
+        tenant_id, row["name"], old_plan, plan, actor.email, reason,
+    )
+    return {
+        "id": tenant_id, "name": row["name"],
+        "plan": plan, "changed": True,
+    }
+
+
 def soft_delete(actor: Actor, tenant_id: int) -> dict:
     """Operator-only: mark a tenant as soft-deleted.
 

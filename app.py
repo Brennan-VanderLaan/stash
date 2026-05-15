@@ -6481,6 +6481,34 @@ def admin_backup_to_b2(request: Request, tenant_id: int):
 # ── Tenant lifecycle ─────────────────────────────────────────────
 
 
+@app.post("/admin/tenants/{tenant_id}/plan")
+def admin_set_tenant_plan(
+    request: Request,
+    tenant_id: int,
+    plan: str = Form(...),
+    reason: str = Form(""),
+):
+    """Operator-side plan override.  Bypasses Stripe entirely so an
+    operator can comp friends/family/beta-testers to Pro without
+    making them go through checkout.  The Stripe webhook is
+    unaffected — a real subscription that later cancels still
+    flips back to free via the usual billing event flow.
+
+    Logged with the operator's email + the optional reason
+    string for audit-log traceability."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_tenants.operator_set_plan(
+            actor, tenant_id, plan, reason=reason,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return RedirectResponse("/admin#tenants", status_code=303)
+
+
 @app.post("/admin/tenants/{tenant_id}/soft-delete")
 def admin_soft_delete_tenant(request: Request, tenant_id: int):
     """Operator-only: mark a tenant soft-deleted (30-day grace).

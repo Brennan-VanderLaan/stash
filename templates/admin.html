@@ -404,6 +404,50 @@
       {% endif %}
       <footer class="admin-tenant-card-actions">
         {% if not t.deleted_at %}
+          {# Operator-side plan override.  Free → Pro is the
+             "comp a friend / family / beta-tester to Pro
+             without making them go through Stripe checkout"
+             path; Pro → Free is the reversal.  Stripe-driven
+             plan changes still flow through the webhook
+             independently — this just sets ``tenants.plan``
+             with an audit row. #}
+          <details class="admin-tenant-plan-action">
+            <summary class="btn btn-secondary btn-sm">
+              {% if t.plan == 'pro' %}Revert to Free{% else %}Comp Pro{% endif %}
+            </summary>
+            <form method="post"
+                  action="/admin/tenants/{{ t.id }}/plan"
+                  class="admin-tenant-plan-form">
+              <input type="hidden" name="plan"
+                     value="{% if t.plan == 'pro' %}free{% else %}pro{% endif %}">
+              <p class="text-sm text-muted">
+                {% if t.plan == 'pro' %}
+                  Drop {{ t.name }} back to Free quotas.  If this
+                  tenant has an active Stripe subscription, the
+                  next webhook event will flip them back to Pro
+                  automatically.
+                {% else %}
+                  Comp {{ t.name }} to Pro quotas.  No Stripe
+                  charge; the maintainer keeps Pro until you
+                  reverse this (or until a Stripe webhook lands
+                  if they later subscribe + cancel).
+                {% endif %}
+              </p>
+              <label class="text-sm">
+                Reason (optional, kept in the audit log)
+                <input type="text" name="reason" maxlength="200"
+                       placeholder="comp: brother — bday gift"
+                       autocomplete="off">
+              </label>
+              <button type="submit" class="btn btn-primary btn-sm btn-block">
+                {% if t.plan == 'pro' %}
+                  Set {{ t.name }} → Free
+                {% else %}
+                  Set {{ t.name }} → Pro
+                {% endif %}
+              </button>
+            </form>
+          </details>
           <form method="post"
                 action="/admin/tenants/{{ t.id }}/soft-delete"
                 style="display:inline;">

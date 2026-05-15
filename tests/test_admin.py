@@ -444,6 +444,153 @@ def test_reactivate_clears_soft_delete(tmp_path, monkeypatch):
     assert row["hard_delete_after"] is None
 
 
+def test_operator_set_plan_comp_free_to_pro(tmp_path, monkeypatch):
+    """Comp-Pro flow: operator flips a free tenant to Pro out-of-
+    band (friends/family) without going through Stripe.  Plan
+    updates immediately, audit row carries the operator's email
+    + the reason text, Stripe columns left untouched."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Brother', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    result = dao_tenants.operator_set_plan(
+        op, tid, "pro", reason="bday gift",
+    )
+    assert result["changed"] is True
+    assert result["plan"] == "pro"
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT plan, stripe_subscription_id, subscription_status "
+            "FROM tenants WHERE id = ?",
+            (tid,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT actor_email, metadata_json FROM audit_log "
+            "WHERE action = 'tenant.plan_override' "
+            "  AND target_id = ?",
+            (tid,),
+        ).fetchone()
+    assert row["plan"] == "pro"
+    # Stripe columns untouched — no Stripe interaction for comp Pro.
+    assert row["stripe_subscription_id"] is None
+    assert row["subscription_status"] is None
+    assert audit["actor_email"] == "op@example.com"
+    assert "bday gift" in audit["metadata_json"]
+    assert "pro" in audit["metadata_json"]
+    assert "free" in audit["metadata_json"]
+
+
+def test_operator_set_plan_idempotent_same_plan(tmp_path, monkeypatch):
+    """Setting a tenant's plan to its existing value is a no-op:
+    returns ``changed=False`` and writes no audit row.  Lets the
+    UI surface a generic 'Set' button without worrying about
+    duplicate audit noise."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('AlreadyFree', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    result = dao_tenants.operator_set_plan(op, tid, "free")
+    assert result["changed"] is False
+    with app_mod.db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM audit_log "
+            "WHERE action = 'tenant.plan_override' "
+            "  AND target_id = ?",
+            (tid,),
+        ).fetchone()[0]
+    assert n == 0
+
+
+def test_operator_set_plan_rejects_garbage(tmp_path, monkeypatch):
+    """Only 'free' and 'pro' are valid plan strings.  Anything else
+    must raise — we don't want a typo to silently set a tenant to
+    a nonexistent plan."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import Actor, tenants as dao_tenants
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('X', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    op = Actor(
+        email="op@example.com", tenant_id=None, role=None,
+        is_operator=True, memberships=(),
+    )
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        dao_tenants.operator_set_plan(op, tid, "platinum")
+
+
+def test_admin_set_plan_route_requires_operator(tmp_path, monkeypatch):
+    """The /admin/tenants/<id>/plan route is operator-only.  A
+    regular tenant maintainer hitting it gets 404 (opacity rule)
+    — operators are invisible to non-operators."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch, operator_email="op@example.com")
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('T', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO tenant_members (tenant_id, email, role, joined_at) "
+            "VALUES (?, 'member@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (tid,),
+        )
+        conn.commit()
+    with TestClient(app_mod.app,
+                    headers={"X-Forwarded-Email": "member@example.com"}) as c:
+        r = c.post(
+            f"/admin/tenants/{tid}/plan",
+            data={"plan": "pro"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 404
+
+
+def test_admin_set_plan_route_happy_path(tmp_path, monkeypatch):
+    """Operator POST flips the tenant plan + redirects back to
+    the tenants section.  The plan change lands and the next
+    /admin render shows the new state."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch, operator_email="op@example.com")
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('CompMe', 'free')",
+        )
+        tid = cur.lastrowid
+        conn.commit()
+    with TestClient(app_mod.app,
+                    headers={"X-Forwarded-Email": "op@example.com"}) as c:
+        r = c.post(
+            f"/admin/tenants/{tid}/plan",
+            data={"plan": "pro", "reason": "beta tester"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"].endswith("#tenants")
+    with app_mod.db() as conn:
+        plan = conn.execute(
+            "SELECT plan FROM tenants WHERE id = ?", (tid,),
+        ).fetchone()[0]
+    assert plan == "pro"
+
+
 def test_reactivate_on_active_is_noop(tmp_path, monkeypatch):
     """No audit row, no exception — operator clicked reactivate
     on an already-active tenant."""

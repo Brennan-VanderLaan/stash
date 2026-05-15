@@ -2323,6 +2323,43 @@ body.admin-hero-compact .admin-kpi-foot {
 }
 .admin-hard-delete-form input { flex: 1; min-width: 0; }
 
+/* Operator plan-override disclosure (comp-Pro flow).  Inline
+   collapsible form inside the tenant card so the operator can
+   flip plan + leave an audit-log reason in one place without
+   navigating away. */
+.admin-tenant-plan-action {
+  display: inline-block;
+  position: relative;
+  isolation: isolate;
+}
+.admin-tenant-plan-action summary {
+  list-style: none;
+  cursor: pointer;
+}
+.admin-tenant-plan-action summary::-webkit-details-marker { display: none; }
+.admin-tenant-plan-form {
+  width: 100%;
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.admin-tenant-plan-form p { margin: 0; }
+.admin-tenant-plan-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--muted);
+}
+.admin-tenant-plan-form input[type="text"] {
+  font-size: 0.9rem;
+}
+
 /* Plan pills + status pills */
 .pill-plan-free {
   background: var(--panel);
