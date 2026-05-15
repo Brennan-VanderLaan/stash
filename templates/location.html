@@ -173,8 +173,11 @@
     <strong>Drag a rectangle</strong> to move it, or grab a corner handle to resize.
     <strong>Click</strong> a rectangle to rename or delete it.
   </p>
-  <details class="mt-1">
-    <summary class="text-sm text-muted disclosure-soft">Rename or replace this floor</summary>
+  <details class="mt-1 floor-actions-disclosure" id="floor-actions">
+    <summary class="floor-actions-summary">
+      <span>⚙️ Rename / replace / delete this floor</span>
+      <span class="floor-actions-chevron" aria-hidden="true">▾</span>
+    </summary>
     <form method="post" action="/floors/{{ current_floor.id }}" class="mt-1">
       <label>Floor name<input type="text" name="name" value="{{ current_floor.name }}" required></label>
       <button type="submit" class="btn btn-secondary btn-block">Rename floor</button>

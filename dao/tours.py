@@ -148,6 +148,36 @@ TOURS: list[dict] = [
         ],
     },
     {
+        "feature": "floors",
+        "page": "/locations/",
+        "version": 1,
+        "title": "Floors & rooms",
+        "steps": [
+            {
+                "target": None,
+                "title": "This is a floor of one of your locations.",
+                "body": (
+                    "Locations contain floors; floors contain rooms; "
+                    "rooms contain boxes.  This page is where you "
+                    "draw the floor's layout — drag the floorplan "
+                    "to mark out each room, then assign boxes to a "
+                    "room from the box detail page."
+                ),
+            },
+            {
+                "target": "#floor-actions, .floor-actions-summary",
+                "title": "Manage this floor",
+                "body": (
+                    "Rename the floor, swap out the floorplan "
+                    "image, or delete the floor (and every room "
+                    "on it) from this button.  Used to be a quiet "
+                    "muted line — promoted so you can find it."
+                ),
+                "position": "above",
+            },
+        ],
+    },
+    {
         "feature": "labels",
         "page": "/labels",
         "version": 1,
