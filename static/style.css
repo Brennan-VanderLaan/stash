@@ -6026,6 +6026,127 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
 }
 .leaderboard-fineprint p { margin: 0; }
 
+/* "Signed in as <email>" stat-row cell — long Gmail-style
+   addresses overflow the chip on narrow phones if the cell
+   doesn't allow per-character wrap.  Feedback #29 from
+   nashmankas: "my email is cut off and overhanging the
+   display box". */
+.signed-in-email {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* === Handle prompt on /leaderboard ============================
+   Surfaced when the viewer has stars but no handle.  Visual
+   nudge for them to claim a public-facing name. */
+.leaderboard-handle-prompt {
+  margin: 1.25rem 0 0;
+  padding: 1rem 1.15rem 1.1rem;
+  background: linear-gradient(140deg,
+              var(--surface) 0%,
+              var(--accent-dim) 100%);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+.leaderboard-handle-prompt h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+  color: var(--accent);
+}
+.leaderboard-handle-prompt p { margin: 0 0 0.7rem; }
+.leaderboard-handle-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+.leaderboard-handle-form label {
+  flex: 1 1 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.leaderboard-handle-form input[type="text"] {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+}
+.leaderboard-handle-current {
+  margin: 1rem 0 0;
+  padding: 0.55rem 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+}
+.leaderboard-handle-current p { margin: 0; }
+.leaderboard-handle-revoked {
+  border-color: var(--warning);
+  background: linear-gradient(140deg,
+              var(--surface) 0%,
+              var(--warning-dim) 100%);
+}
+.leaderboard-handle-revoked h3 { color: var(--warning); }
+.leaderboard-anon {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* === Handle disclosure on /usage ============================== */
+.contrib-handle-disclosure {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem 0.75rem;
+  margin: 0.5rem 0 0.25rem;
+}
+.contrib-handle-disclosure[open] {
+  border-color: var(--accent);
+}
+.contrib-handle-disclosure summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.9rem;
+  padding: 0.15rem 0;
+}
+.contrib-handle-disclosure summary::-webkit-details-marker { display: none; }
+.contrib-handle-disclosure summary::marker { content: ''; }
+.contrib-handle-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.contrib-handle-form input[type="text"] {
+  flex: 1 1 12rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.contrib-history-disclosure {
+  margin-top: 0.25rem;
+}
+.contrib-history-disclosure summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--accent);
+  padding: 0.35rem 0;
+  list-style: none;
+}
+.contrib-history-disclosure summary::-webkit-details-marker { display: none; }
+.contrib-leaderboard-link { margin-left: auto; }
+
+/* Status notices used by handle-save / handle-error flashes. */
+.notice-error {
+  background: var(--danger-dim);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.notice-warning {
+  background: var(--warning-dim);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
 /* === /usage "Your contributions" =============================
    Mirrors the leaderboard star treatment on the user's own
    /usage page so they don't have to click through to see their

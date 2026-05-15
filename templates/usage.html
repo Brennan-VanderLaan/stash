@@ -28,7 +28,13 @@
   <dl class="stat-row">
     <div><dt>{{ _("Tenant") }}</dt><dd>{{ tenant.name }}</dd></div>
     <div><dt>{{ _("Plan") }}</dt><dd>{{ tenant.plan }}</dd></div>
-    <div><dt>{{ _("Signed in as") }}</dt><dd>{{ current_email }}</dd></div>
+    <div>
+      <dt>{{ _("Signed in as") }}</dt>
+      {# ``signed-in-email`` lets long addresses break on any
+         character so the chip doesn't overflow on narrow
+         phones — feedback #29. #}
+      <dd class="signed-in-email">{{ current_email }}</dd>
+    </div>
     <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
   </dl>
 </div>
@@ -36,14 +42,13 @@
 <h2 class="usage-section" id="contributions">{{ _("Your contributions") }}</h2>
 
 {# Feedback stars + recent submissions.  Star count = shipped
-   feedback rows you've submitted.  The list shows where each
-   piece of feedback stands so the user knows their input wasn't
-   a black hole — see /leaderboard for the global podium. #}
+   feedback rows you've submitted.  The list is collapsed by
+   default (feedback #28 — "the stars and feedback status
+   should start collapsed / show the last couple stars, this
+   is taking up a ton of room") with the two most-recent
+   visible inline.  A disclosure expands to the full history. #}
 <div class="card maintenance-card contrib-card">
   <div class="card-title">{{ _("Stars + feedback status") }}</div>
-  <p class="text-sm text-muted">
-    {{ _("You earn a star for every piece of feedback that ships.  Open + in-progress items show below so you know we saw them.") }}
-  </p>
   <div class="contrib-stars">
     {% if your_stars == 0 %}
     <span class="leaderboard-you-stars-empty">⭐</span>
@@ -55,17 +60,65 @@
       {% if your_stars > 10 %}({{ _("first ten shown") }}){% endif %}
     </span>
     {% endif %}
-    <a href="/leaderboard" class="btn btn-link btn-sm" style="margin-left:auto;">
+    <a href="/leaderboard" class="btn btn-link btn-sm contrib-leaderboard-link">
       {{ _("Leaderboard →") }}
     </a>
   </div>
 
+  {# ── Public-leaderboard handle (opt-in) ──────────────────── #}
+  {% if handle_set %}
+  <div class="notice notice-success">
+    {{ _("Handle saved!  You're now showing on the leaderboard by name.") }}
+  </div>
+  {% endif %}
+  {% if handle_error %}
+  <div class="notice notice-error">
+    {{ handle_error }}
+  </div>
+  {% endif %}
+  {% if your_handle_revoked %}
+  <div class="notice notice-warning">
+    {{ _("An operator revoked your previous handle.  Pick a new acceptable one below; your stars are unaffected.") }}
+  </div>
+  {% endif %}
+  <details class="contrib-handle-disclosure"
+           {% if your_stars > 0 and not your_handle %}open{% endif %}>
+    <summary>
+      🪪
+      {% if your_handle %}
+        {{ _("Handle:") }} <strong>{{ your_handle }}</strong>
+        <span class="text-sm text-muted">— {{ _("change") }}</span>
+      {% else %}
+        {{ _("Pick a handle for the public leaderboard (optional)") }}
+      {% endif %}
+    </summary>
+    <p class="text-sm text-muted">
+      {{ _("Your email is never shown on the leaderboard.  Set a handle and you appear by name; leave it blank and you stay 'Anonymous'.  2-24 chars, letters / digits / hyphen / underscore.  Operators can revoke any handle that's offensive — no ists or isms.") }}
+    </p>
+    <form method="post" action="/usage/handle"
+          class="contrib-handle-form">
+      <input type="text" name="handle" required
+             value="{{ your_handle or '' }}"
+             minlength="2" maxlength="24"
+             pattern="[A-Za-z0-9][A-Za-z0-9_-]{1,23}"
+             placeholder="e.g. cardboard_wrangler"
+             autocomplete="off" autocapitalize="off"
+             spellcheck="false">
+      <button type="submit" class="btn btn-primary btn-sm">
+        {% if your_handle %}{{ _("Update") }}{% else %}{{ _("Claim handle") }}{% endif %}
+      </button>
+    </form>
+  </details>
+
+  {# ── Submissions: 2 visible inline, rest behind a disclosure ── #}
   {% if your_feedback %}
-  <div class="section-label" style="margin-top:0.4rem;">
+  {% set recent = your_feedback[:2] %}
+  {% set rest = your_feedback[2:] %}
+  <div class="section-label">
     {{ _("Recent submissions") }}
   </div>
   <ul class="contrib-list">
-    {% for f in your_feedback %}
+    {% for f in recent %}
     <li class="contrib-row contrib-row-{{ f.status }}">
       <span class="contrib-row-status">
         {% if f.status == 'done' %}🌟 {{ _('shipped') }}
@@ -78,6 +131,27 @@
     </li>
     {% endfor %}
   </ul>
+  {% if rest %}
+  <details class="contrib-history-disclosure">
+    <summary>
+      {{ _("Show all") }} {{ your_feedback | length }} {{ _("submissions") }}
+    </summary>
+    <ul class="contrib-list">
+      {% for f in rest %}
+      <li class="contrib-row contrib-row-{{ f.status }}">
+        <span class="contrib-row-status">
+          {% if f.status == 'done' %}🌟 {{ _('shipped') }}
+          {% elif f.status == 'accepted' %}🛠️ {{ _("we'll fix") }}
+          {% elif f.status == 'rejected' %}— {{ _("declined") }}
+          {% else %}👀 {{ _("seen") }}
+          {% endif %}
+        </span>
+        <span class="contrib-row-body">{{ f.body }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   {% else %}
   <p class="text-sm text-muted">
     {{ _("Nothing in your feedback history yet.  The widget in the lower-right corner is how it gets there.") }}
