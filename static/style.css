@@ -807,6 +807,10 @@ main.main-wide {
   font-size: 0.8rem;
   color: var(--muted);
 }
+.feedback-screenshot-hint {
+  margin: -0.25rem 0 0;
+  font-style: italic;
+}
 .feedback-dialog-foot {
   display: flex;
   justify-content: flex-end;

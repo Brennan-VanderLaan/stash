@@ -619,12 +619,15 @@
       <div class="feedback-screenshot-row">
         <button type="button" id="feedback-screenshot-btn"
                 class="btn btn-secondary btn-sm">
-          📸 {{ _('Attach screenshot') }}
+          📸 {{ _('Capture this page') }}
         </button>
         <span id="feedback-screenshot-status" class="feedback-screenshot-status"
               aria-live="polite"></span>
         <input type="hidden" name="screenshot_data" id="feedback-screenshot-data">
       </div>
+      <p class="feedback-screenshot-hint text-sm text-muted">
+        {{ _("Grabs a snapshot of what you can see right now — no file picker, no upload from your photos.") }}
+      </p>
       <footer class="feedback-dialog-foot">
         <button type="button" class="btn btn-secondary" data-feedback-close>
           {{ _('Cancel') }}
