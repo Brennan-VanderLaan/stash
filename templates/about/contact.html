@@ -3,53 +3,81 @@
 <section class="about-hero">
   <h1>Contact</h1>
   <p class="about-lede">
-    One inbox handles everything — billing questions, bug reports,
-    feature requests, refund claims, security disclosures.
+    {{ business_name }} is run by one person.  No support team, no
+    on-call rotation, no SLA.  The product is built so the critical
+    paths self-service; the inbox is the backup, not the front door.
   </p>
 </section>
 
-<section class="about-section about-contact-card">
-  <h2>Customer service</h2>
+<section class="about-section">
+  <h2>Self-service first</h2>
+  <p>
+    These should never require contacting us — everything is in
+    the app:
+  </p>
+  <ul>
+    <li><strong>Sign up.</strong>  Click "Sign in" on the home page; OAuth provisions your tenant automatically.</li>
+    <li><strong>Upgrade or cancel a subscription.</strong>  <code>/usage</code> → Manage subscription → Stripe Customer Portal.  Update card, download invoices, cancel — all without us.</li>
+    <li><strong>Export your data.</strong>  <code>/usage</code> → "Download my data" (GDPR Article 20 zip with decrypted JPEGs + a SQLite of your tenant).</li>
+    <li><strong>Backup.</strong>  <code>/usage</code> → "Download backup" (same data, encrypted with your STASH_KEK if you're self-hosting).</li>
+    <li><strong>Invite a partner.</strong>  <code>/usage</code> → invite by email.  Maintainer or read-only.</li>
+    <li><strong>Audit a box, print labels, edit a floorplan.</strong>  All in the app.</li>
+  </ul>
+  <p class="text-sm text-muted">
+    If you're stuck on something you think should be self-service
+    but isn't, that's a bug worth telling us about — see "In-app
+    feedback" below.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>In-app feedback (preferred)</h2>
+  <p>
+    Once you're signed in, every page carries a floating
+    <strong>Feedback</strong> button.  It captures the page URL,
+    your viewport size, and an optional screenshot, then drops
+    the submission into our triage queue.  We read everything
+    and respond by shipping fixes, not replies — so when a tour
+    + a polish pass lands a week after you submitted feedback,
+    that's the response.
+  </p>
+  <p class="text-sm text-muted">
+    The feedback queue is operator-visible at
+    <code>/admin#feedback</code>.  Submissions are tagged
+    "open" by default; they move to "accepted" / "rejected" /
+    "done" as the human reviews them.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Email — for things that really do need a human</h2>
   <p class="about-contact-email">
     <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
   </p>
   <p>
-    We aim to reply within one business day.  Include your tenant
-    name or registered email so we can correlate any account-side
-    issue without a back-and-forth.
+    Use email when self-service can't reach it: a refund claim
+    (per the <a href="/about/refunds">refund policy</a>), an
+    account that needs to be permanently deleted, a billing
+    dispute Stripe alone can't resolve, or a legal / compliance
+    request.  Include your tenant name or registered email so
+    we can correlate without back-and-forth.
+  </p>
+  <p>
+    <strong>No SLA.</strong>  This is a solo-operator inbox.
+    Critical issues get triaged faster, but routine email gets
+    when-I-can attention — sometimes hours, sometimes days.  If
+    your need is time-sensitive, say so in the subject line.
   </p>
 </section>
 
 <section class="about-section">
-  <h2>In-app feedback</h2>
+  <h2>Security disclosures</h2>
   <p>
-    Once you're signed in, every page carries a floating
-    <strong>Feedback</strong> button in the corner.  Use it for
-    bug reports + feature requests — submissions land in our
-    triage queue with the source URL + your viewport + an optional
-    screenshot, so we can reproduce what you were looking at
-    without a five-message thread.
-  </p>
-</section>
-
-<section class="about-section">
-  <h2>Security</h2>
-  <p>
-    Report security issues to {{ contact_email }} with
-    <code>[security]</code> in the subject line.  We'll acknowledge
-    within 48 hours.  Coordinated disclosure timelines: 90 days
-    from acknowledgement to public write-up, sooner if a fix ships
-    earlier.
-  </p>
-</section>
-
-<section class="about-section">
-  <h2>Billing</h2>
-  <p>
-    Direct billing questions to {{ contact_email }}, but most
-    self-service actions live in the Stripe Customer Portal that
-    you reach from <code>/usage</code> after signing in — update
-    your card, download invoices, cancel, change plans.
+    Email {{ contact_email }} with <code>[security]</code> in the
+    subject line.  Security reports skip the routine queue; I aim
+    to acknowledge within 48 hours.  Coordinated disclosure
+    timeline: 90 days from acknowledgement to public write-up,
+    sooner if the fix ships earlier.
   </p>
 </section>
 {% endblock %}
