@@ -49,6 +49,7 @@ _ALL_ABOUT_PATHS = (
     "/about/refunds",
     "/about/contact",
     "/about/sub-processors",
+    "/about/transparency",
 )
 
 
@@ -159,8 +160,40 @@ def test_about_index_links_to_every_sibling(tmp_path, monkeypatch):
         page = c.get("/about").text
     for sibling in ("/about/pricing", "/about/refunds",
                     "/about/privacy", "/about/terms",
-                    "/about/sub-processors", "/about/contact"):
+                    "/about/sub-processors", "/about/contact",
+                    "/about/transparency"):
         assert f'href="{sibling}"' in page
+
+
+def test_about_transparency_breaks_down_costs(tmp_path, monkeypatch):
+    """The transparency page surfaces the cost ledger including the
+    MA-tax line and the labor allocation — both load-bearing pieces
+    of the "honest about margins" posture.  Pin the headline rows so
+    a future copy refactor can't quietly drop them."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about/transparency").text
+    # Cost lines: each row in the ledger.
+    for line in ("Stripe processing fee", "AI APIs", "Compute",
+                 "Storage", "Bandwidth", "State business taxes",
+                 "Allocated to humans", "Remainder"):
+        assert line in page
+    # Roles glossary — Maintainer + Read-only + Operator + Admin
+    # all named so the org-structure signal is on the public page.
+    for role in ("Maintainer", "Read-only", "Operator", "Admin"):
+        assert role in page
+
+
+def test_about_transparency_reflects_configured_price(tmp_path, monkeypatch):
+    """The page title + ledger headline both reflect
+    STASH_PRO_PRICE_DISPLAY — a deploy that ships a different
+    Pro price doesn't end up with a stale "$4" in the copy."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, STASH_PRO_PRICE_DISPLAY="$6",
+    )
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about/transparency").text
+    assert "$6" in page
 
 
 def test_about_pages_hide_feedback_widget(tmp_path, monkeypatch):

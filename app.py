@@ -5012,6 +5012,11 @@ def about_sub_processors(request: Request):
     return _render_about(request, "sub_processors", "Sub-processors")
 
 
+@app.get("/about/transparency", response_class=HTMLResponse)
+def about_transparency(request: Request):
+    return _render_about(request, "transparency", "Where your $4 goes")
+
+
 # ── Onboarding tours ───────────────────────────────────────────────
 
 

@@ -1,0 +1,220 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Where your $4 goes</h1>
+  <p class="about-lede">
+    Every Pro subscription pays for a stack of vendor bills, payment
+    fees, taxes, and human time.  This page is the honest version —
+    not "we save you $1,000 a month" marketing copy, an actual
+    cost ledger.  We'd rather be transparent than hand-wavy.
+  </p>
+  <p class="text-sm text-muted">
+    All figures below are illustrative typical-month estimates,
+    not contractual.  Individual months vary based on how much
+    each tenant actually uses the AI surfaces.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>The cost ledger</h2>
+  <table class="about-table about-cost-table">
+    <thead>
+      <tr>
+        <th>Line</th>
+        <th>Typical month</th>
+        <th>Where it goes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Pro subscription</strong></td>
+        <td><strong>{{ pro_price_display }}.00 revenue</strong></td>
+        <td>Collected by Stripe; sales tax handled separately
+            (see below).</td>
+      </tr>
+      <tr>
+        <td>Stripe processing fee</td>
+        <td>≈ −$0.42</td>
+        <td>2.9% + $0.30 per transaction.  Stripe.</td>
+      </tr>
+      <tr>
+        <td>AI APIs (Gemini + Anthropic)</td>
+        <td>≈ −$0.30 to −$1.50</td>
+        <td>Gemini for vision (item detection, tag suggestions,
+            label art); Anthropic for box matching.  Capped per
+            tenant by the daily AI-cost ceiling so a single user
+            can't run away with your budget.</td>
+      </tr>
+      <tr>
+        <td>Compute (EC2 share)</td>
+        <td>≈ −$0.10 to −$0.25</td>
+        <td>Per-tenant slice of the shared instance.  Drops as
+            user count grows — at 100 Pro users a t3.small at
+            $0.0208/hr is around $0.15/user/mo.</td>
+      </tr>
+      <tr>
+        <td>Storage + backup (B2)</td>
+        <td>≈ −$0.05 to −$0.30</td>
+        <td>Backblaze B2 at $6/TB/mo for hot storage; tenant
+            photos + nightly encrypted backups.  Cumulative, so
+            heavy long-time tenants cost more than fresh ones.</td>
+      </tr>
+      <tr>
+        <td>Bandwidth (B2 egress)</td>
+        <td>≈ −$0.05 to −$0.20</td>
+        <td>Serving thumbs + photos on every grid view.  B2 egress
+            is ~$10/TB.</td>
+      </tr>
+      <tr class="about-cost-row-tax">
+        <td>State business taxes (MA)</td>
+        <td>≈ −$0.20 to −$0.40</td>
+        <td>We're a Massachusetts-based business — no Delaware
+            shell.  MA corporate excise + estimated income tax
+            land on net margin, not the user's price.</td>
+      </tr>
+      <tr class="about-cost-row-labor">
+        <td>Allocated to humans</td>
+        <td>≈ −$0.75 to −$1.50</td>
+        <td>Today this is the time spent by the operator/admin
+            (currently one person) reviewing feedback, fixing
+            bugs, shipping updates, doing support.  As we grow
+            this is what hires get paid out of.  Roles glossary
+            below.</td>
+      </tr>
+      <tr class="about-cost-row-remainder">
+        <td><strong>Remainder</strong></td>
+        <td><strong>≈ $0.50 to $1.00</strong></td>
+        <td>Reinvestment: feature work, infrastructure upgrades,
+            a runway buffer.  Not "profit" in the take-home
+            sense — money that keeps the platform going as
+            costs scale.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="text-sm text-muted">
+    Sales tax on your purchase (e.g. 6.25% MA sales tax if
+    applicable to your jurisdiction) is added by Stripe at
+    checkout, collected from you, and remitted directly by Stripe
+    to your state.  It doesn't show up in our cost ledger because
+    we never see the money — pass-through.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Who runs {{ business_name }}</h2>
+  <p>
+    Today the staff is small.  We're transparent about who's behind
+    the rails so when something breaks you know which kind of human
+    to expect on the other end.
+  </p>
+  <table class="about-table">
+    <thead>
+      <tr>
+        <th>Role</th>
+        <th>Scope</th>
+        <th>What they do</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Maintainer</strong></td>
+        <td>One tenant</td>
+        <td>Customer-side role.  Full edit access to one
+            household's inventory: create boxes, accept items,
+            invite read-only members, audit, print labels.
+            That's you (probably).</td>
+      </tr>
+      <tr>
+        <td><strong>Read-only member</strong></td>
+        <td>One tenant</td>
+        <td>Customer-side role.  Browse access, no edits.  Useful
+            for a partner who needs to find things but shouldn't
+            be moving them.</td>
+      </tr>
+      <tr>
+        <td><strong>Operator</strong></td>
+        <td>Platform</td>
+        <td>Day-to-day platform staff: handles support tickets,
+            triages feedback, watches usage meters + cost panels,
+            handles deploys, audits the system, helps customers
+            with billing questions or data exports.  Never reads
+            tenant content unless explicitly invited by a
+            maintainer.</td>
+      </tr>
+      <tr>
+        <td><strong>Admin</strong></td>
+        <td>Platform</td>
+        <td>Business operations: billing setup, vendor contracts,
+            legal, hiring, policy decisions, public communications.
+            Same access constraints as an operator — admin authority
+            is organizational, not data-read.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="text-sm text-muted">
+    Operators + admins are platform-level roles backed by an
+    explicit allow-list ({{ "STASH_OPERATOR_EMAILS" }} env var in
+    deploy).  Today these collapse to a single human; we're
+    documenting the structure now so when we hire the seam is
+    already there.  Spec § "Roles · Operations matrix" describes
+    the access boundaries in code.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Why be this transparent?</h2>
+  <p>
+    Three reasons.
+  </p>
+  <ol>
+    <li>
+      <strong>It's how we'd want a service we paid for to behave.</strong>
+      The SaaS-pricing default is to obscure the cost stack
+      ("starts at $9!" until you blink twice).  We'd rather show
+      our work.
+    </li>
+    <li>
+      <strong>It keeps us honest about scaling.</strong>  When the
+      vendor bills are visible on a public page, raising prices
+      requires a public reason.  When labor allocation is visible,
+      hiring decisions get scrutinized.  Both are accountability
+      mechanisms we want.
+    </li>
+    <li>
+      <strong>It's a moat that doesn't run out.</strong>  A
+      competitor can copy our features, our pricing, our copy.
+      It's harder to copy operating in public.  We think users
+      will choose the company that shows them the cost ledger
+      over the one that hides it.
+    </li>
+  </ol>
+</section>
+
+<section class="about-section">
+  <h2>What this page doesn't promise</h2>
+  <p>
+    These numbers are illustrative.  We're not committing to a
+    specific cost split per dollar of revenue — actual costs vary
+    by individual usage, vendor pricing changes, and growth stage.
+    What we ARE committing to:
+  </p>
+  <ul>
+    <li>
+      We won't quietly raise prices on existing subscribers.  Any
+      price change gets 30 days' notice (per the
+      <a href="/about/terms">Terms of Service</a>).
+    </li>
+    <li>
+      We won't add an undisclosed sub-processor.  Vendor list at
+      <a href="/about/sub-processors">/about/sub-processors</a>
+      is the canonical source.
+    </li>
+    <li>
+      We won't ship a "premium" tier above Pro that holds
+      essential features hostage.  Pro is the top tier; future
+      higher tiers (if any) add capacity, not access to features
+      Pro users already have.
+    </li>
+  </ul>
+</section>
+{% endblock %}

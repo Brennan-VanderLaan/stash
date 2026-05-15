@@ -115,6 +115,22 @@ def create_checkout_session(
         # checkout.session.completed event.
         client_reference_id=str(actor.tenant_id),
         allow_promotion_codes=True,
+        # Stripe Tax does the multi-jurisdiction sales-tax math.
+        # Required setup (on Stripe's side):
+        #   1. Stripe Dashboard → Settings → Tax → enable + register
+        #      your business addresses where you have nexus (e.g.
+        #      MA for us).
+        #   2. Each Price in the dashboard needs a tax category set
+        #      (Stash subscriptions are "Software as a Service /
+        #      digital service").
+        # With those in place this flag flips Stripe Checkout into
+        # tax-aware mode: the customer's address determines the
+        # rate; tax is shown as a line item; Stripe collects it on
+        # our behalf and we don't see the money or owe the remit.
+        automatic_tax={"enabled": True},
+        # Tax-aware checkout needs the customer's address; Stripe
+        # collects it during the flow when this is set to "auto".
+        customer_update={"address": "auto"},
     )
     _log.info(
         "billing.checkout_created tenant_id=%s session_id=%s",

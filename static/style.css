@@ -1323,6 +1323,17 @@ body.about-public {
   vertical-align: top;
 }
 .about-table th { color: var(--accent, #4ade80); font-weight: 600; }
+/* Cost-ledger table on /about/transparency: tinted rows make the
+   labor + tax + remainder lines easy to spot among the vendor
+   bills.  Subtle enough that the table reads as one ledger, not
+   a heatmap. */
+.about-cost-table td:nth-child(2) {
+  font-family: ui-monospace, Menlo, monospace;
+  white-space: nowrap;
+}
+.about-cost-row-tax    td { background: rgba(234, 179, 8, 0.08); }
+.about-cost-row-labor  td { background: rgba(59, 130, 246, 0.08); }
+.about-cost-row-remainder td { background: rgba(74, 222, 128, 0.12); }
 
 .about-contact-card {
   background: var(--panel, #16331f);
