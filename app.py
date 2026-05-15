@@ -4751,10 +4751,22 @@ def _render_usage_page(
     invites = []
     outbound_shares = []
     api_tokens = []
+    manual_tokens: list[dict] = []
+    oauth_client_groups: list[dict] = []
     if actor.role == "maintainer":
         invites = dao_invites.list_for_tenant(actor)
         outbound_shares = dao_shares.list_outbound(actor)
         api_tokens = dao_api_tokens.list_for_tenant(actor)
+        # Split OAuth-minted tokens out of the flat list and roll
+        # them up by client.  Claude.ai's MCP connector mints a
+        # fresh access token on every reach-out, so without
+        # grouping the panel grows by one row per call and the
+        # maintainer can't see the forest for the trees.  Manual
+        # tokens (oauth_client_id IS NULL) stay flat.
+        oauth_client_groups = _group_oauth_tokens(api_tokens)
+        manual_tokens = [
+            t for t in api_tokens if not t.get("oauth_client_id")
+        ]
     summary = dao_usage.summary(actor)
     months = dao_usage.monthly_summary(actor.tenant_id, months_back=12)
     tour_email = _tour_actor_email(actor)
@@ -4776,6 +4788,8 @@ def _render_usage_page(
             "invites": invites,
             "outbound_shares": outbound_shares,
             "api_tokens": api_tokens,
+            "manual_tokens": manual_tokens,
+            "oauth_client_groups": oauth_client_groups,
             "api_token_plaintext": api_token_plaintext,
             "current_email": actor.email,
             "current_role": actor.role,

@@ -117,17 +117,28 @@ def create(actor: Actor, name: str, role: str = "maintainer") -> dict:
 def list_for_tenant(actor: Actor) -> list[dict]:
     """Active tokens (un-revoked) for the actor's tenant.
     Maintainer-only.  Plaintext never appears here — only the
-    metadata + the ``last_used_at`` watermark."""
+    metadata + the ``last_used_at`` watermark.
+
+    Joins ``oauth_clients`` so the /usage template can roll up
+    OAuth-issued bursts (Claude.ai's MCP connector mints a fresh
+    access token on every reach-out — without grouping, a single
+    long-running connector litters the panel with 50+ rows that
+    a maintainer can't visually triage).  Manually-minted tokens
+    leave ``oauth_client_id`` NULL and render as individual rows
+    as before."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         return []
     with db() as conn:
         rows = conn.execute(
-            "SELECT id, name, role, created_at, last_used_at, "
-            "       created_by_email "
-            "FROM api_tokens "
-            "WHERE tenant_id = ? AND revoked_at IS NULL "
-            "ORDER BY created_at DESC",
+            "SELECT t.id, t.name, t.role, t.created_at, t.last_used_at, "
+            "       t.created_by_email, t.oauth_client_id, "
+            "       c.name AS oauth_client_name "
+            "FROM api_tokens t "
+            "LEFT JOIN oauth_clients c "
+            "  ON c.client_id = t.oauth_client_id "
+            "WHERE t.tenant_id = ? AND t.revoked_at IS NULL "
+            "ORDER BY t.created_at DESC",
             (actor.tenant_id,),
         ).fetchall()
     return [dict(r) for r in rows]

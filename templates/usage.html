@@ -597,12 +597,52 @@
     </button>
   </form>
 
-  {% if api_tokens %}
+  {% if oauth_client_groups %}
+  {# Roll up OAuth-issued tokens (claude.ai MCP connector, etc.)
+     into one card per source.  Each connector typically mints a
+     fresh access token on every reach-out — without grouping,
+     the panel grows by one row per call and a long-running
+     connector buries the manually-minted tokens beneath dozens
+     of identical-looking rows.  See feedback #13. #}
   <div class="section-label" style="margin-top:1rem;">
-    {{ _("Active tokens") }}
+    {{ _("OAuth-connected apps") }}
+  </div>
+  <div class="oauth-client-groups">
+    {% for g in oauth_client_groups %}
+    <div class="oauth-client-group{% if g.active == 0 %} oauth-client-group-quiet{% endif %}">
+      <div class="oauth-client-group-head">
+        <div>
+          <strong>{{ g.oauth_client_name }}</strong>
+          <span class="text-muted text-sm">
+            · {{ g.total }} token{{ '' if g.total == 1 else 's' }} minted
+          </span>
+        </div>
+        <div class="oauth-client-group-counts">
+          {% if g.active %}<span class="pill pill-active">{{ g.active }} active</span>{% endif %}
+          {% if g.suspended %}<span class="pill pill-suspended">{{ g.suspended }} suspended</span>{% endif %}
+          {% if g.revoked %}<span class="pill pill-revoked">{{ g.revoked }} revoked</span>{% endif %}
+        </div>
+      </div>
+      <div class="oauth-client-group-meta">
+        <span class="text-muted text-sm">
+          {% if g.latest_used_at %}{{ _("last used") }} {{ g.latest_used_at[:16] }}{% else %}{{ _("never used") }}{% endif %}
+          {% if g.latest_created_at %} · {{ _("latest mint") }} {{ g.latest_created_at[:16] }}{% endif %}
+        </span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="text-sm text-muted">
+    {{ _("To revoke an OAuth-connected app, sign out of it on the connector's side (e.g. claude.ai → Settings → Connectors → Disconnect) — that's the cleanest path.  Individual tokens below can also be revoked one-by-one.") }}
+  </p>
+  {% endif %}
+
+  {% if manual_tokens %}
+  <div class="section-label" style="margin-top:1rem;">
+    {{ _("Manually-minted tokens") }}
   </div>
   <ul class="allowed-emails">
-    {% for tok in api_tokens %}
+    {% for tok in manual_tokens %}
     <li>
       <code>{{ tok.name }}</code>
       <span class="text-muted text-sm">
@@ -624,6 +664,10 @@
     </li>
     {% endfor %}
   </ul>
+  {% elif not oauth_client_groups %}
+  <p class="text-sm text-muted" style="margin-top:1rem;">
+    {{ _("No active tokens.  Mint one above for an MCP server or other API integration.") }}
+  </p>
   {% endif %}
 </div>
 
