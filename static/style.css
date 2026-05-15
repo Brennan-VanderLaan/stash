@@ -2834,12 +2834,26 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   margin-bottom: 0;
 }
 .box-group-header {
+  /* Was: ``border-bottom: 1px solid var(--border)`` over a flex
+     row with 0.1rem horizontal padding.  The hairline underline
+     visually stopped wherever the row's content ended (chip +
+     count) and gave the impression the separator was "cut off"
+     past the count badge — feedback #14, "to the right of the
+     # of boxes there's just nothing, it cuts off with the
+     background with no border or anything".
+
+     New treatment: full filled strip that reads as a deliberate
+     section divider end-to-end.  Background sits one elevation
+     above the page bg so the strip is unmistakable on every
+     theme without depending on the eye to follow a 1px line. */
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.55rem;
-  padding: 0.3rem 0.1rem 0.5rem;
-  margin-bottom: 0.55rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.45rem 0.85rem;
+  margin: 0 0 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .box-group-loc {
   font-size: 0.85rem;
