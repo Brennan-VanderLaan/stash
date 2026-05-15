@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.21.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.21.0...v1.21.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **admin:** drop sticky position from dashboard TOC ([e9696fc](https://github.com/Brennan-VanderLaan/stash/commit/e9696fcdaf81f1cab6b367dc39e2d70623815cc3))
+* **boxes:** add visible "Edit box" CTA on the detail page ([e6a9a91](https://github.com/Brennan-VanderLaan/stash/commit/e6a9a91c8b73ffd5a56c0073515b99aea18b5c43))
+* **labels:** unstack checkbox from regen-art button, bump tile width ([fd499d1](https://github.com/Brennan-VanderLaan/stash/commit/fd499d1a4ae362eb32220621f17984a6ea376b21))
+* **locations:** surface "rename or replace floor" + add floors tour ([6da6b33](https://github.com/Brennan-VanderLaan/stash/commit/6da6b334b4afa2700c32bda37938c1a050ba4c54))
+* **queue:** expand Customize by default for fresh ingest items ([56de28b](https://github.com/Brennan-VanderLaan/stash/commit/56de28bf18169b164720d001c9b4369defeb530f))
+
 ## [1.21.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.20.0...v1.21.0) (2026-05-15)
 
 
