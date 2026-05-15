@@ -23,15 +23,32 @@ def test_edit_image_renders_for_floor_with_floorplan(client):
     assert f'"/floors/{fid}/floorplan"' in page
 
 
-def test_edit_image_redirects_when_no_floorplan(client):
-    """Editor needs an existing image to layer annotations on; the
-    route 303s back to the floor view when the floor has no
-    floorplan yet so the user can upload one first."""
+def test_edit_image_renders_blank_canvas_for_new_floor(client):
+    """The editor doubles as the "create floorplan from scratch"
+    surface: floors with no existing image still render the editor
+    with a blank white canvas + a helper status line.  Save
+    creates the floorplan via the same upload endpoint."""
     client.post("/locations", data={"name": "House"})
     client.post("/locations/1/floors", data={"name": "Main"})
-    r = client.get("/floors/1/edit-image", follow_redirects=False)
-    assert r.status_code == 303
-    assert "edit=1" in r.headers["location"]
+    r = client.get("/floors/1/edit-image")
+    assert r.status_code == 200
+    page = r.text
+    assert 'id="floor-edit-canvas"' in page
+    # FLOORPLAN_URL is the JS-side toggle for "load image vs blank
+    # canvas".  When the floor has no plan, the template emits
+    # ``const FLOORPLAN_URL = null;``.
+    assert "FLOORPLAN_URL = null" in page
+
+
+def test_location_page_offers_browser_draw_when_no_floorplan(client):
+    """When a fresh floor has no plan, the upload card now offers
+    both "draw in the browser" + "upload an image" CTAs.  The
+    user shouldn't be forced through a paint detour just to start."""
+    client.post("/locations", data={"name": "House"})
+    client.post("/locations/1/floors", data={"name": "Main"})
+    page = client.get("/locations/1?floor=1&edit=1").text
+    assert 'href="/floors/1/edit-image"' in page
+    assert "Draw floorplan in the browser" in page
 
 
 def test_edit_image_404_for_unknown_floor(client):

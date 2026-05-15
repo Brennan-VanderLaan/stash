@@ -75,12 +75,18 @@
     </form>
   </div>
   <p class="text-sm text-muted mb-2">
-    Upload a floorplan image — a real plan, a hand sketch, or even a satellite screenshot.
-    You'll draw rectangles over it to mark each room.
+    Two ways to start:  upload a real plan / hand sketch / satellite screenshot,
+    or draw one from scratch in the browser editor.  Either way you'll mark
+    each room afterwards.
   </p>
-  <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data">
-    <label>Floorplan image<input type="file" name="image" accept="image/*" required></label>
-    <button type="submit" class="btn btn-primary btn-block">Upload floorplan</button>
+  <a href="/floors/{{ current_floor.id }}/edit-image"
+     class="btn btn-primary btn-block">
+    🖌 Draw floorplan in the browser
+  </a>
+  <form method="post" action="/floors/{{ current_floor.id }}/floorplan"
+        enctype="multipart/form-data" class="mt-1">
+    <label>Or upload an image<input type="file" name="image" accept="image/*" required></label>
+    <button type="submit" class="btn btn-secondary btn-block">Upload floorplan</button>
   </form>
 </div>
 {% elif current_floor %}

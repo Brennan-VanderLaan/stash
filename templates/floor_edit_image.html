@@ -34,6 +34,10 @@
             data-tool="text" title="Text — click to place (T)">
       <span aria-hidden="true">T</span><span>Text</span>
     </button>
+    <button type="button" class="floor-edit-tool"
+            data-tool="eraser" title="Eraser — click a shape to delete (E)">
+      <span aria-hidden="true">⌫</span><span>Eraser</span>
+    </button>
   </div>
 
   <div class="floor-edit-tool-group" role="group" aria-label="Color">
@@ -99,9 +103,15 @@
   const saveBtn = document.getElementById('floor-edit-save');
   const toolBtns = document.querySelectorAll('[data-tool]');
   const swatches = document.querySelectorAll('.floor-edit-swatch');
-  const FLOORPLAN_URL = "/uploads/{{ floor.floorplan }}";
+  const FLOORPLAN_URL = {{ ('/uploads/' ~ floor.floorplan) | tojson if floor.floorplan else 'null' }};
   const SAVE_URL = "/floors/{{ floor.id }}/floorplan";
   const RETURN_URL = "/locations/{{ floor.location_id }}?floor={{ floor.id }}&edit=1";
+  // Default blank-canvas dimensions when this floor doesn't have a
+  // floorplan yet.  Letter-paper-ish aspect at a screen-friendly
+  // resolution; the user can draw their plan from scratch + Save
+  // will create the floorplan via the existing upload endpoint.
+  const BLANK_W = 1200;
+  const BLANK_H = 800;
 
   // ── Canvas init ──────────────────────────────────────────────
   // Size the canvas to fit its wrapper at load.  We load the
@@ -127,7 +137,14 @@
     ));
     canvas.isDrawingMode = false;
     canvas.selection = (tool === 'select');
-    canvas.defaultCursor = (tool === 'select') ? 'default' : 'crosshair';
+    if (tool === 'select') canvas.defaultCursor = 'default';
+    else if (tool === 'eraser') canvas.defaultCursor = 'not-allowed';
+    else canvas.defaultCursor = 'crosshair';
+    // Make the per-object hover cursor match the tool: in eraser
+    // mode hovering over a shape gives a 'not-allowed' cursor so
+    // the user knows the click will delete.
+    canvas.hoverCursor = (tool === 'eraser') ? 'not-allowed'
+                       : (tool === 'select' ? 'move' : 'crosshair');
     canvas.discardActiveObject().requestRenderAll();
   }
   function setColor(c) {
@@ -162,26 +179,59 @@
     return { w, h };
   }
 
-  fabric.Image.fromURL(FLOORPLAN_URL, { crossOrigin: 'anonymous' }).then((img) => {
-    const dims = fitCanvasToImage(img);
-    img.scaleToWidth(dims.w);
-    canvas.backgroundImage = img;
+  if (FLOORPLAN_URL) {
+    fabric.Image.fromURL(FLOORPLAN_URL, { crossOrigin: 'anonymous' }).then((img) => {
+      const dims = fitCanvasToImage(img);
+      img.scaleToWidth(dims.w);
+      canvas.backgroundImage = img;
+      canvas.requestRenderAll();
+    }).catch(err => {
+      status.textContent = 'Failed to load floorplan: ' + (err.message || err);
+    });
+  } else {
+    // No existing floorplan — start with a blank white canvas
+    // sized like a sheet of paper.  Save creates the floorplan
+    // for the first time via the same upload endpoint.
+    fitCanvasToImage({ width: BLANK_W, height: BLANK_H });
+    status.textContent =
+      'New floorplan — draw walls / rooms below, then Save.';
     canvas.requestRenderAll();
-  }).catch(err => {
-    status.textContent = 'Failed to load floorplan: ' + (err.message || err);
-  });
+  }
 
   // ── Drag-to-draw for rect + line ──────────────────────────────
+  // ``canvas.skipTargetFind = true`` while a shape is being drawn
+  // is the load-bearing detail.  Without it, Fabric's mouse:move
+  // tries to interact with the just-added rect (hover/move/drag),
+  // which intercepts our resize handler and the user sees a
+  // "stuck to the mouse" shape that never commits on release.
+  // We restore skipTargetFind on mouse:up.
   canvas.on('mouse:down', (opt) => {
+    if (activeTool === 'eraser') {
+      // ``mouse:down`` carries the targeted object on opt.target
+      // when the user clicks a real shape.  Background image is
+      // selectable:false so we can't delete it accidentally.
+      const target = opt.target;
+      if (target && target !== canvas.backgroundImage) {
+        canvas.remove(target);
+        canvas.requestRenderAll();
+      }
+      return;
+    }
     if (activeTool === 'select') return;
     const p = canvas.getViewportPoint(opt.e);
     drawingStart = p;
+    canvas.skipTargetFind = true;
     if (activeTool === 'rect') {
       drawing = new fabric.Rect({
         left: p.x, top: p.y, width: 1, height: 1,
         fill: 'rgba(0,0,0,0)', stroke: activeColor, strokeWidth: 3,
         strokeUniform: true, cornerStyle: 'circle',
         cornerSize: 9, transparentCorners: false,
+        // selectable/evented off WHILE drawing so the live shape
+        // doesn't compete with our own mouse handlers for events.
+        // Flipped back to true on mouse:up so the user can move
+        // / resize the shape after it's committed.
+        selectable: false, evented: false,
       });
       canvas.add(drawing);
     } else if (activeTool === 'line') {
@@ -189,6 +239,7 @@
         stroke: activeColor, strokeWidth: 3, strokeUniform: true,
         cornerStyle: 'circle', cornerSize: 9,
         transparentCorners: false, strokeLineCap: 'round',
+        selectable: false, evented: false,
       });
       canvas.add(drawing);
     } else if (activeTool === 'text') {
@@ -203,6 +254,7 @@
       history.push(t);
       setTool('select');
       drawing = null;
+      canvas.skipTargetFind = false;
     }
   });
   canvas.on('mouse:move', (opt) => {
@@ -223,7 +275,9 @@
     drawing.setCoords();
     canvas.requestRenderAll();
   });
-  canvas.on('mouse:up', () => {
+
+  function finishDrawing() {
+    canvas.skipTargetFind = false;
     if (drawing) {
       // If the drag barely moved, drop the shape — accidental
       // taps shouldn't litter the canvas.
@@ -233,6 +287,8 @@
       if (tiny) {
         canvas.remove(drawing);
       } else {
+        // Flip the shape back to interactive now that it's committed.
+        drawing.set({ selectable: true, evented: true });
         history.push(drawing);
         setTool('select');
         canvas.setActiveObject(drawing);
@@ -240,7 +296,13 @@
     }
     drawing = null;
     drawingStart = null;
-  });
+  }
+  canvas.on('mouse:up', finishDrawing);
+  // A drag that ends OUTSIDE the canvas (or above the toolbar)
+  // never fires Fabric's mouse:up.  Listen on window too so the
+  // shape commits even when the user releases off-canvas.
+  window.addEventListener('mouseup', finishDrawing);
+  window.addEventListener('touchend', finishDrawing);
 
   // ── Undo / delete ─────────────────────────────────────────────
   function undoOne() {
@@ -276,6 +338,7 @@
     else if (e.key === 'r' || e.key === 'R') setTool('rect');
     else if (e.key === 'l' || e.key === 'L') setTool('line');
     else if (e.key === 't' || e.key === 'T') setTool('text');
+    else if (e.key === 'e' || e.key === 'E') setTool('eraser');
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault(); deleteSelection();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
@@ -333,9 +396,12 @@
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       const img = canvas.backgroundImage;
-      if (!img) return;
-      const dims = fitCanvasToImage(img);
-      img.scaleToWidth(dims.w);
+      if (img) {
+        const dims = fitCanvasToImage(img);
+        img.scaleToWidth(dims.w);
+      } else {
+        fitCanvasToImage({ width: BLANK_W, height: BLANK_H });
+      }
       canvas.requestRenderAll();
     }, 120);
   });
