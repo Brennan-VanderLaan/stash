@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.16.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.15.0...v1.16.0) (2026-05-15)
+
+
+### Features
+
+* **labels:** print N copies of each selected box (1–4) ([db4d2dc](https://github.com/Brennan-VanderLaan/stash/commit/db4d2dc70dcf0b429fdedcc93634aca79d374b58))
+
+
+### Bug Fixes
+
+* **labels:** larger, darker text for arm's-length legibility ([448135d](https://github.com/Brennan-VanderLaan/stash/commit/448135d1fa843c018148ac675aceab1e9e0e9126))
+* **labels:** preserve selection across new-tab nav + fix 5164 layout ([1c09755](https://github.com/Brennan-VanderLaan/stash/commit/1c09755e52552d575a117ca8361ae44827d53d1a))
+
 ## [1.15.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.14.0...v1.15.0) (2026-05-14)
 
 
