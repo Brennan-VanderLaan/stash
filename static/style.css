@@ -588,6 +588,58 @@ main.main-wide {
   background: rgba(220, 38, 38, 0.15);
 }
 
+/* === /usage facelift ===
+   Spec § phase 13: per-tenant home reorganised into named sections.
+   The TOC is a horizontal anchor strip at the top; each section
+   gets an h2 heading + id so the anchor links scroll cleanly. */
+.usage-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+.usage-toc a {
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+}
+.usage-toc a:hover { background: var(--accent-dim); }
+.usage-section {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 1.2rem 0 0.4rem;
+  padding-top: 0.2rem;
+  /* Scroll-margin keeps anchored sections from sitting under the
+     top nav when the user jumps via TOC. */
+  scroll-margin-top: 1rem;
+}
+.usage-cost-block .cost-block {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+.usage-cost-block .cost-block dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.usage-cost-block .cost-block dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 /* Admin feedback queue */
 .feedback-queue-row {
   display: grid;

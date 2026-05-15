@@ -2,6 +2,23 @@
 {% block title %}{{ _("Usage") }} · Stash{% endblock %}
 {% block content %}
 
+{# ── Section nav ──────────────────────────────────────────────
+   Anchor list so a tenant with everything turned on can jump
+   straight to the section they want.  Each section below carries
+   the matching id.  Visible only when JS isn't blocking links —
+   plain anchors so no scripting required. #}
+<nav class="usage-toc" aria-label="{{ _('Usage page sections') }}">
+  <a href="#plan">{{ _("Plan & role") }}</a>
+  <a href="#cost">{{ _("Cost transparency") }}</a>
+  <a href="#quotas">{{ _("Quotas") }}</a>
+  {% if is_maintainer %}<a href="#backups">{{ _("Backups") }}</a>{% endif %}
+  <a href="#members">{{ _("Members") }}</a>
+  {% if is_maintainer %}<a href="#tokens">{{ _("API tokens") }}</a>{% endif %}
+  {% if is_maintainer %}<a href="#shares">{{ _("Shares") }}</a>{% endif %}
+</nav>
+
+<h2 class="usage-section" id="plan">{{ _("Plan & role") }}</h2>
+
 {# ── Tenant + you ─────────────────────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">{{ _("This stash") }}</div>
@@ -12,6 +29,46 @@
     <div><dt>{{ _("Your role") }}</dt><dd>{{ current_role }}</dd></div>
   </dl>
 </div>
+
+<h2 class="usage-section" id="cost">{{ _("Cost transparency") }}</h2>
+
+{# ── Five-line cost-transparency block (Spec § phase 13).
+   Headline numbers + an honest "this is what we pay vendors for
+   your tenant" line.  No marketing dressing — the ethos is
+   transparency, not opacity. #}
+<div class="card maintenance-card usage-cost-block">
+  <div class="card-title">{{ _("What this tenant costs us") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("Operator-side estimates.  We don't bill you yet — quotas exist so the billing boundary is wired when payment lands.") }}
+  </p>
+  <dl class="cost-block">
+    <div><dt>{{ _("AI calls (month)") }}</dt><dd>{{ usage.ai_calls }}</dd></div>
+    <div>
+      <dt>{{ _("AI cost (month)") }}</dt>
+      <dd>${{ "%.2f" | format(usage.ai_cost_micros / 1_000_000) }}</dd>
+    </div>
+    <div>
+      <dt>{{ _("Uploaded in (month)") }}</dt>
+      <dd>{{ "%.1f" | format(usage.upload_bytes / (1024 * 1024)) }} MB</dd>
+    </div>
+    <div>
+      <dt>{{ _("Served out (month)") }}</dt>
+      <dd>{{ "%.1f" | format(usage.download_bytes / (1024 * 1024)) }} MB</dd>
+    </div>
+    <div>
+      <dt>{{ _("On disk now") }}</dt>
+      <dd>
+        {% set storage_mb = usage.storage_bytes / (1024 * 1024) %}
+        {% if storage_mb < 1 %}{{ "%.0f" | format(usage.storage_bytes / 1024) }} KB
+        {% elif storage_mb < 1024 %}{{ "%.1f" | format(storage_mb) }} MB
+        {% else %}{{ "%.2f" | format(storage_mb / 1024) }} GB
+        {% endif %}
+      </dd>
+    </div>
+  </dl>
+</div>
+
+<h2 class="usage-section" id="quotas">{{ _("Quotas") }}</h2>
 
 {# ── This-month usage meters ──────────────────────────────────── #}
 <div class="card maintenance-card">
@@ -189,6 +246,10 @@
   </dl>
 </div>
 
+{% if is_maintainer %}
+<h2 class="usage-section" id="backups">{{ _("Backups") }}</h2>
+{% endif %}
+
 {# ── Backup ───────────────────────────────────────────────────── #}
 {% if is_maintainer %}
 <div class="card maintenance-card">
@@ -213,6 +274,8 @@
   </a>
 </div>
 {% endif %}
+
+<h2 class="usage-section" id="members">{{ _("Members") }}</h2>
 
 {# ── Members ──────────────────────────────────────────────────── #}
 <div class="card maintenance-card">
@@ -284,6 +347,8 @@
   {% endif %}
 </div>
 
+<h2 class="usage-section" id="tokens">{{ _("API tokens") }}</h2>
+
 {# ── API tokens ─────────────────────────────────────────────── #}
 <div class="card maintenance-card">
   <div class="card-title">{{ _("API tokens") }} ({{ api_tokens | length }})</div>
@@ -349,6 +414,8 @@
   </ul>
   {% endif %}
 </div>
+
+<h2 class="usage-section" id="shares">{{ _("Shares") }}</h2>
 
 {# ── Outbound object shares ───────────────────────────────────── #}
 <div class="card maintenance-card">
