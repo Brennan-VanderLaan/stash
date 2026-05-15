@@ -1701,6 +1701,42 @@ summary.card-summary-soft {
 }
 summary.card-summary-soft::-webkit-details-marker { display: none; }
 .card-meta-row { margin-top: 0.2rem; }
+
+/* Box-detail header: meta on the left, visible "Edit box" CTA on
+   the right.  Without a CTA the disclosure looks like a static
+   header — users were filing bugs about not being able to edit
+   the box at all (feedback #4).  The chevron rotates on open so
+   the affordance also doubles as the state indicator. */
+.box-edit-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.box-edit-summary-meta {
+  min-width: 0;
+  flex: 1;
+}
+.box-edit-cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  /* The CTA is purely visual — the parent <summary> handles the
+     click — so pointer-events on this child are off to avoid
+     swallowing the toggle target. */
+  pointer-events: none;
+}
+.box-edit-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.box-edit-card[open] .box-edit-chevron { transform: rotate(180deg); }
+@media (max-width: 480px) {
+  /* Hide the label on phones so the CTA shrinks to ``✎ ▾`` and
+     doesn't push the box name into a tiny column. */
+  .box-edit-cta-label { display: none; }
+}
 .danger-zone-blurb { margin: 0.75rem 0 0.5rem; }
 .location-card-preview {
   width: 64px;

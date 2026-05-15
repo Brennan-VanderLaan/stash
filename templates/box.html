@@ -19,22 +19,35 @@
   {% for t in all_tags %}<option value="{{ t }}">{% endfor %}
 </datalist>
 
-{# --- Box Info (tap to edit) --- #}
-<details class="card">
-  <summary class="card-summary-soft">
-    <div class="card-title card-title-lg">{{ box.name }}</div>
-    {% if box.room_name %}
-      <div class="text-sm card-meta-row">
-        <a href="/locations/{{ box.location_id }}#room-{{ box.room_id }}"
-           class="room-chip room-chip-link" style="--room-color: {{ box.room_color or '#4ade80' }};">
-          📍 {{ box.room_name }}
-        </a>
-        {% if box.location_name %}<span class="text-muted">in {{ box.location_name }}</span>{% endif %}
-      </div>
-    {% elif box.location %}
-      <div class="text-sm text-muted">{{ box.location }}</div>
-    {% endif %}
-    {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
+{# --- Box Info (tap to edit) ---
+   The disclosure is the only edit affordance for the box's name +
+   room + color + notes.  Earlier passes hid the marker entirely
+   (`summary::-webkit-details-marker { display: none }`) so users
+   reported having no idea the header was tappable.  Restored a
+   visible "Edit" CTA + chevron in the summary so it's obviously
+   interactive without the user needing the onboarding tour to find
+   it. #}
+<details class="card box-edit-card">
+  <summary class="card-summary-soft box-edit-summary">
+    <div class="box-edit-summary-meta">
+      <div class="card-title card-title-lg">{{ box.name }}</div>
+      {% if box.room_name %}
+        <div class="text-sm card-meta-row">
+          <a href="/locations/{{ box.location_id }}#room-{{ box.room_id }}"
+             class="room-chip room-chip-link" style="--room-color: {{ box.room_color or '#4ade80' }};">
+            📍 {{ box.room_name }}
+          </a>
+          {% if box.location_name %}<span class="text-muted">in {{ box.location_name }}</span>{% endif %}
+        </div>
+      {% elif box.location %}
+        <div class="text-sm text-muted">{{ box.location }}</div>
+      {% endif %}
+      {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
+    </div>
+    <span class="btn btn-secondary btn-sm box-edit-cta" aria-hidden="true">
+      ✎ <span class="box-edit-cta-label">Edit box</span>
+      <span class="box-edit-chevron" aria-hidden="true">▾</span>
+    </span>
   </summary>
   <form method="post" action="/boxes/{{ box.id }}/edit">
     {# Optimistic concurrency: tells the server what version we
