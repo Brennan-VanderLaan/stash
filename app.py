@@ -3782,14 +3782,15 @@ def search(
 @app.get("/tags", response_class=HTMLResponse)
 def tags_page(request: Request):
     actor: Actor = request.state.actor
-    # ``use_count`` here is the template's "item_count" — rename in the
-    # template if/when this loses its single caller, but for now keep
-    # the dict shape stable.
-    tags = [
-        {"id": t["id"], "name": t["name"], "item_count": t["use_count"]}
-        for t in dao_tags.list_with_counts(actor)
-    ]
-    return templates.TemplateResponse(request, "tags.html", {"tags": tags})
+    # Rich-distribution view per tag (item count + which rooms +
+    # which locations the tagged items live in) — feedback #20
+    # asked the /tags landing to actually carry weight instead of
+    # being a flat name list.  list_with_distribution does the
+    # JOIN + aggregation in one pass.
+    tags = dao_tags.list_with_distribution(actor)
+    return templates.TemplateResponse(
+        request, "tags.html", {"tags": tags},
+    )
 
 
 @app.get("/tags/autocomplete")

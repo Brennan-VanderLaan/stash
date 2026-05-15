@@ -2,26 +2,121 @@
 {% block title %}Tags · Stash{% endblock %}
 {% block content %}
 
-<div class="card">
-  <div class="card-title">All tags</div>
-  {% if tags %}
+{# Tag landing.  Feedback #20 — "this page is so sad, can it
+   have fun pictures, better UI, a reason for existing?  I feel
+   like it could do so much more like saying which locations
+   have what tags — just, more."
+
+   Each card now carries:
+     * the tag chip + total item count
+     * top boxes carrying the tag
+     * a strip of room chips coloured by --room-color
+     * locations the tag's items live in
+     * a Search-this-tag CTA
+   Empty tags collapse to a slim card so the user can still
+   prune them, but they don't claim screen real estate they
+   don't have. #}
+
+<div class="card tags-hero">
+  <div class="card-title">Tags</div>
+  <p class="text-sm text-muted">
+    {% if tags %}
+      {{ tags | length }} tag{{ '' if tags | length == 1 else 's' }} ·
+      {{ tags | sum(attribute='item_count') }}
+      tagged item{{ '' if tags | sum(attribute='item_count') == 1 else 's' }} across
+      your stash.  Tap any tag to jump to its search.
+    {% else %}
+      Tags are how you find things that live across boxes —
+      "fragile," "kitchen," "winter coats."  Add tags from any
+      item or use the AI tag-suggest button on a box detail page.
+    {% endif %}
+  </p>
+</div>
+
+{% if tags %}
+<div class="tags-grid">
   {% for t in tags %}
-  <a href="/search?tag={{ t.name }}" class="result-card">
-    <div class="item-info">
-      <div class="gap-row">
-        <span class="tag" style="font-size:0.85rem;">{{ t.name }}</span>
-        <span class="text-sm text-muted">
-          {{ t.item_count }} item{{ '' if t.item_count == 1 else 's' }}
-        </span>
+  <article class="tag-card {% if t.item_count == 0 %}tag-card-empty{% endif %}">
+    <header class="tag-card-head">
+      <a href="/search?tag={{ t.name }}"
+         class="tag tag-card-chip"
+         title="Search items tagged {{ t.name }}">{{ t.name }}</a>
+      <span class="tag-card-count">{{ t.item_count }} item{{ '' if t.item_count == 1 else 's' }}</span>
+    </header>
+
+    {% if t.item_count > 0 %}
+    {% if t.rooms %}
+    <div class="tag-card-section">
+      <div class="tag-card-section-label">Rooms</div>
+      <div class="tag-card-chips">
+        {% for r in t.rooms %}
+        <a href="/rooms/{{ r.id }}/boxes"
+           class="room-chip tag-card-room-chip"
+           style="--room-color: {{ r.color or '#88b884' }};"
+           title="{{ r.count }} tagged in {{ r.name }}">
+          {{ r.name }}
+          <span class="tag-card-room-count">{{ r.count }}</span>
+        </a>
+        {% endfor %}
       </div>
     </div>
-  </a>
+    {% endif %}
+
+    {% if t.locations %}
+    <div class="tag-card-section">
+      <div class="tag-card-section-label">Locations</div>
+      <div class="tag-card-locations">
+        {% for l in t.locations %}
+        <a href="/locations/{{ l.id }}"
+           class="tag-card-location-link"
+           title="{{ l.count }} tagged at {{ l.name }}">
+          {{ l.name }}
+          <span class="text-muted">· {{ l.count }}</span>
+        </a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if t.boxes %}
+    <div class="tag-card-section">
+      <div class="tag-card-section-label">
+        Top boxes
+        {% if t.boxes | length >= 8 %}
+        <span class="text-muted text-sm">(top 8)</span>
+        {% endif %}
+      </div>
+      <div class="tag-card-boxes">
+        {% for b in t.boxes %}
+        <a href="/boxes/{{ b.id }}" class="tag-card-box">
+          <span class="tag-card-box-name">📦 {{ b.name }}</span>
+          <span class="tag-card-box-count text-muted">{{ b.count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="tag-card-foot">
+      <a href="/search?tag={{ t.name }}"
+         class="btn btn-secondary btn-sm">
+        Search {{ t.name }} →
+      </a>
+    </div>
+    {% else %}
+    <p class="text-sm text-muted tag-card-empty-note">
+      No items use this tag yet.  Apply it from any item's detail dialog.
+    </p>
+    {% endif %}
+  </article>
   {% endfor %}
-  {% else %}
-  <div class="empty empty-mascot" data-mascot="cat">
-    <p>No tags yet. Add tags from any box detail page.</p>
-  </div>
-  {% endif %}
 </div>
+{% else %}
+<div class="empty empty-mascot" data-mascot="cat">
+  <p>No tags yet.  Add tags from any item's detail dialog —
+     or open a box and tap the AI suggest-tags button to bulk-
+     populate from the item photos.</p>
+</div>
+{% endif %}
 
 {% endblock %}

@@ -5557,6 +5557,160 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   margin-left: auto;
 }
 
+/* === /tags landing redesign ==================================
+   Feedback #20: the original /tags template was a one-line-per-
+   tag flat list — "this page is so sad, can it have fun
+   pictures, better UI, a reason for existing?"  Replaced with a
+   grid of substantive tag-cards each showing the tag's
+   distribution across boxes / rooms / locations.  Each card is
+   a self-contained answer to "where does the 'fragile' tag
+   actually live in my stash?". */
+.tags-hero {
+  margin-bottom: 1rem;
+}
+.tags-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+}
+@media (min-width: 720px) {
+  .tags-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 1100px) {
+  .tags-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.tag-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 0.95rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tag-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
+}
+.tag-card-empty {
+  opacity: 0.7;
+}
+.tag-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.tag-card-chip {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.tag-card-chip:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.tag-card-count {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.tag-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.tag-card-section-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.tag-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.tag-card-room-chip {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+.tag-card-room-count {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem;
+  background: var(--bg);
+  color: var(--text-muted);
+  padding: 0.02rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.tag-card-locations {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.tag-card-location-link {
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--border-strong);
+}
+.tag-card-location-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tag-card-boxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.tag-card-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  color: var(--text);
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+.tag-card-box:hover {
+  background: var(--hover);
+  color: var(--accent);
+}
+.tag-card-box-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-card-box-count {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+.tag-card-foot {
+  margin-top: auto;
+  padding-top: 0.25rem;
+}
+.tag-card-empty-note {
+  font-style: italic;
+  margin: 0;
+}
+
 /* === Broken-image placeholder ================================
    Swapped in by the global ``error``-event handler in base.html
    when an ``<img>`` fails to load.  Inherits the original
