@@ -18,6 +18,7 @@ from dao import Actor, ConflictError, ForbiddenError, NotFoundError
 from dao import api_tokens as dao_api_tokens
 from dao import audit as dao_audit
 from dao import backups as dao_backups
+from dao import billing as dao_billing
 from dao import boxes as dao_boxes
 from dao import feedback as dao_feedback
 from dao import floors as dao_floors
@@ -1306,6 +1307,18 @@ def migrate_db():
         _add_column_if_missing(
             conn, "boxes", "label_orientation",
             "TEXT NOT NULL DEFAULT 'landscape'",
+        )
+        # Stripe billing (phase: Pro tier).  The Pro tier is "same
+        # features, higher caps" — quota differentiation is already
+        # in dao/quotas.py's ``_PLAN_DEFAULTS``.  Subscription state
+        # rides on the tenants row so a webhook update is one
+        # UPDATE.  Missing columns on a legacy schema add as NULL;
+        # the upgrade flow handles "no Stripe state yet" implicitly.
+        _add_column_if_missing(conn, "tenants", "stripe_customer_id", "TEXT")
+        _add_column_if_missing(conn, "tenants", "stripe_subscription_id", "TEXT")
+        _add_column_if_missing(conn, "tenants", "subscription_status", "TEXT")
+        _add_column_if_missing(
+            conn, "tenants", "subscription_current_period_end", "TEXT",
         )
         # Packing-session hint (carried from /ingest's box picker).
         # The session lives entirely in the page form — leave the
@@ -4489,6 +4502,11 @@ def _render_usage_page(
         api_tokens = dao_api_tokens.list_for_tenant(actor)
     summary = dao_usage.summary(actor)
     months = dao_usage.monthly_summary(actor.tenant_id, months_back=12)
+    billing_enabled = dao_billing.is_configured()
+    subscription = (
+        dao_billing.subscription_for_tenant(actor.tenant_id)
+        if billing_enabled else None
+    )
     return templates.TemplateResponse(
         request, "usage.html",
         {
@@ -4505,6 +4523,9 @@ def _render_usage_page(
             "months": months,
             "invite_url": invite_url,
             "public_url": PUBLIC_URL,
+            "billing_enabled": billing_enabled,
+            "subscription": subscription,
+            "billing_status": request.query_params.get("billing", ""),
         },
     )
 
@@ -4714,6 +4735,75 @@ def admin_feedback_status(
     except NotFoundError:
         raise HTTPException(404)
     return RedirectResponse("/admin#feedback", status_code=303)
+
+
+# ── Stripe billing ─────────────────────────────────────────────────
+
+
+@app.post("/usage/upgrade")
+def usage_upgrade(request: Request):
+    """Create a Stripe Checkout session and redirect the user's
+    browser to it.  Maintainer-only.  503 when STRIPE_SECRET_KEY +
+    STRIPE_WEBHOOK_SECRET + STRIPE_PRICE_ID_PRO aren't all set."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None:
+        raise HTTPException(403, "No active tenant")
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    try:
+        url = dao_billing.create_checkout_session(
+            actor,
+            success_url=f"{base}/usage?billing=success",
+            cancel_url=f"{base}/usage?billing=canceled",
+        )
+    except dao_billing.BillingNotConfiguredError as exc:
+        raise HTTPException(503, str(exc))
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/usage/billing-portal")
+def usage_billing_portal(request: Request):
+    """Redirect to the Stripe Customer Portal so an existing
+    subscriber can manage / cancel without us building a portal
+    UI."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None:
+        raise HTTPException(403, "No active tenant")
+    base = PUBLIC_URL or str(request.base_url).rstrip("/")
+    try:
+        url = dao_billing.create_portal_session(
+            actor, return_url=f"{base}/usage",
+        )
+    except dao_billing.BillingNotConfiguredError as exc:
+        raise HTTPException(503, str(exc))
+    except NotFoundError:
+        raise HTTPException(404, "No Stripe customer yet — upgrade first.")
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/webhooks/stripe")
+async def webhooks_stripe(request: Request):
+    """Stripe webhook receiver.  Signature-verified inside the DAO
+    via the SDK; we don't trust the body until that check passes.
+    Returns 200 + small JSON for any handled or no-op event;
+    returns 400 on signature failures so Stripe surfaces the
+    delivery error in the dashboard."""
+    sig = request.headers.get("Stripe-Signature", "")
+    body = await request.body()
+    try:
+        outcome = dao_billing.process_webhook_event(body, sig)
+    except dao_billing.BillingNotConfiguredError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        # Stripe's SignatureVerificationError + any other parse
+        # failure end up here; surface as 400 so the dashboard
+        # marks the delivery failed and Stripe retries.
+        _LOG_ROUTE.warning("billing.webhook.error err=%r", exc)
+        raise HTTPException(400, "webhook verification failed")
+    return outcome
 
 
 @app.get("/usage/gdpr-export")

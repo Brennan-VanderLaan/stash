@@ -68,6 +68,60 @@
   </dl>
 </div>
 
+{# ── Billing (Stripe) ──────────────────────────────────────────
+   Only renders when STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET +
+   STRIPE_PRICE_ID_PRO are all set; otherwise the upgrade CTA hides
+   so users don't click into a 503.  Maintainer-only — readonly
+   members can't flip the tenant's plan on the maintainer's behalf. #}
+{% if billing_enabled and is_maintainer %}
+{% if billing_status == "success" %}
+<div class="notice notice-success">
+  <strong>{{ _("Thanks — you're on Pro!") }}</strong>
+  {{ _("Quotas have been raised on this tenant.  Pull-down to refresh if any meters look stale.") }}
+</div>
+{% elif billing_status == "canceled" %}
+<div class="notice">
+  <strong>{{ _("Checkout canceled.") }}</strong>
+  {{ _("No change to your subscription.") }}
+</div>
+{% endif %}
+
+{% if tenant.plan == "pro" %}
+<div class="card maintenance-card billing-card billing-card-pro">
+  <div class="card-title">
+    {{ _("Pro subscription") }}
+    <span class="data-choice-badge">{{ _("active") }}</span>
+  </div>
+  <p class="text-sm text-muted">
+    {{ _("You're on the Pro plan.  Manage your subscription, payment method, or invoices via the Stripe customer portal.") }}
+    {% if subscription and subscription.subscription_current_period_end %}
+      {{ _("Renews") }} {{ subscription.subscription_current_period_end[:10] }}.
+    {% endif %}
+  </p>
+  <a href="/usage/billing-portal" class="btn btn-secondary btn-block">
+    {{ _("Manage subscription") }} →
+  </a>
+</div>
+{% else %}
+<div class="card maintenance-card billing-card billing-card-upgrade">
+  <div class="card-title">{{ _("Upgrade to Pro") }}</div>
+  <p class="text-sm">
+    {{ _("You're on the Free plan.  Upgrade unlocks the same Stash with higher quotas — 50× more AI calls, 20× more upload bytes, and a much higher daily AI cost cap.") }}
+  </p>
+  <ul class="data-choice-list">
+    <li>{{ _("Free: 1,000 AI calls/mo · 5 GB uploads/mo · $1 daily AI cost cap") }}</li>
+    <li>{{ _("Pro: 50,000 AI calls/mo · 100 GB uploads/mo · $50 daily AI cost cap") }}</li>
+    <li>{{ _("Cancel anytime via the Stripe customer portal.") }}</li>
+  </ul>
+  <form method="post" action="/usage/upgrade">
+    <button type="submit" class="btn btn-primary btn-block">
+      {{ _("Upgrade to Pro") }} →
+    </button>
+  </form>
+</div>
+{% endif %}
+{% endif %}
+
 <h2 class="usage-section" id="quotas">{{ _("Quotas") }}</h2>
 
 {# ── This-month usage meters ──────────────────────────────────── #}

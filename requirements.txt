@@ -28,3 +28,11 @@ cryptography
 # a bespoke B2 SDK.  Lives behind a factory in dao/backups so a unit
 # test can swap in a stub without hitting the real network.
 boto3
+
+# Stripe SDK for billing.  Pro tier = 'bigger quotas only' today
+# (see _PLAN_DEFAULTS in dao/quotas.py); the integration is a thin
+# Checkout-session + webhook flow that flips tenants.plan from
+# 'free' to 'pro' on subscription events.  Stash refuses-to-show-
+# upgrade-CTA cleanly when STRIPE_SECRET_KEY is unset, same pattern
+# as the B2 surface.
+stripe

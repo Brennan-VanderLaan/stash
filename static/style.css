@@ -688,6 +688,18 @@ main.main-wide {
   vertical-align: middle;
 }
 
+/* Billing cards on /usage: upgrade CTA (gradient highlight when
+   the tenant is free) and the manage-subscription card (recessed
+   when they're already paying). */
+.billing-card-upgrade {
+  background: linear-gradient(
+    140deg, var(--panel-2), var(--accent-dim) 200%
+  );
+  border-color: var(--accent);
+}
+.billing-card-upgrade .card-title { color: var(--accent); }
+.billing-card-pro { background: var(--panel-2); }
+
 /* Admin feedback queue */
 .feedback-queue-row {
   display: grid;
