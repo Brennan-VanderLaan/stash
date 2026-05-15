@@ -379,6 +379,38 @@
           · purges {{ t.hard_delete_after[:10] }}
         {% endif %}
       </div>
+      {% if t.open_invite_list %}
+      {# Surface every un-consumed invite for this tenant so the
+         operator can re-copy a URL they missed on first mint —
+         the "you minted an invite" callout only renders once on
+         POST-redirect.  Each row has a click-to-select input so
+         the operator can grab the link without fumbling for it
+         in the DB. #}
+      <details class="admin-tenant-card-invites" open>
+        <summary>
+          🔗 {{ t.open_invite_list | length }}
+          open invite{{ '' if t.open_invite_list|length == 1 else 's' }}
+        </summary>
+        <ul class="admin-tenant-invite-list">
+          {% for inv in t.open_invite_list %}
+          <li class="admin-tenant-invite-row">
+            <div class="admin-tenant-invite-meta">
+              <code>{{ inv.email }}</code>
+              <span class="text-sm text-muted">
+                · {{ inv.role }}
+                {% if inv.created_at %} · created {{ inv.created_at[:10] }}{% endif %}
+                {% if inv.expires_at %} · expires {{ inv.expires_at[:10] }}{% endif %}
+              </span>
+            </div>
+            <input type="text" readonly value="{{ inv.url }}"
+                   class="admin-tenant-invite-url"
+                   onclick="this.select()"
+                   aria-label="Invite URL for {{ inv.email }}">
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
       {% if t.members %}
       <details class="admin-tenant-card-members">
         <summary>{{ t.members | length }} member{{ '' if t.members|length == 1 else 's' }}</summary>

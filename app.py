@@ -368,6 +368,20 @@ _OPERATOR_EMAILS = frozenset(
     for e in os.environ.get("STASH_OPERATOR_EMAILS", "").split(",")
     if e.strip()
 )
+# Leaderboard ignore list — emails kept off the /leaderboard
+# rankings.  Operator typically wants to be excluded (so they
+# don't trophy themselves on their own platform); other names a
+# deploy might want hidden (bots, test accounts) can be listed
+# here too.  Defaults to the operator set when unset so the
+# common case Just Works.
+_LEADERBOARD_IGNORE_EMAILS = frozenset(
+    e.strip().lower()
+    for e in os.environ.get(
+        "STASH_LEADERBOARD_IGNORE_EMAILS",
+        os.environ.get("STASH_OPERATOR_EMAILS", ""),
+    ).split(",")
+    if e.strip()
+)
 # Actor lives in dao/_base.py so DAO methods can take it without a
 # circular dao→app import.  Imported at the top of this module.
 
@@ -4857,6 +4871,13 @@ def _render_usage_page(
             "pro_caps": pro_caps,
             "tour_catalogue": tour_catalogue,
             "tour_seen": tour_seen,
+            # Feedback stars + recent submissions — feeds the
+            # "Your contributions" card.  Tracks the actor email
+            # so the count survives a tenant switch.
+            "your_stars": dao_feedback.stars_for_actor(actor.email or ""),
+            "your_feedback": dao_feedback.list_for_actor(
+                actor.email or "", limit=20,
+            ),
         },
     )
 
@@ -4958,6 +4979,37 @@ def submit_feedback(
     # off-site targets and falls back to /home.
     return RedirectResponse(
         _safe_internal_redirect(source_url), status_code=303,
+    )
+
+
+@app.get("/leaderboard", response_class=HTMLResponse)
+def leaderboard_page(request: Request):
+    """Top-N feedback contributors across the whole stash —
+    cross-tenant, cross-actor.  Stars are 1:1 with shipped
+    (``status='done'``) feedback rows.  The page is intentionally
+    celebratory: every contributor who landed even one shipped
+    item shows up on the user's own card with confetti vibes;
+    the global podium below ranks the top 3.
+
+    Visible to any signed-in tenant member.  The operator's email
+    (and anything else in ``STASH_LEADERBOARD_IGNORE_EMAILS``) is
+    filtered out of the ranking so the operator doesn't trophy
+    themselves on their own platform."""
+    actor: Actor = request.state.actor
+    top = dao_feedback.leaderboard(
+        exclude_emails=tuple(_LEADERBOARD_IGNORE_EMAILS),
+        limit=3,
+    )
+    your_stars = dao_feedback.stars_for_actor(actor.email or "")
+    you_excluded = (actor.email or "").lower() in _LEADERBOARD_IGNORE_EMAILS
+    return templates.TemplateResponse(
+        request, "leaderboard.html",
+        {
+            "top": top,
+            "your_stars": your_stars,
+            "your_email": actor.email,
+            "you_excluded": you_excluded,
+        },
     )
 
 
@@ -6321,6 +6373,16 @@ def admin_dashboard(
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
+    # Bucket open invites by tenant_id so each tenant card can
+    # surface the actual invite URLs.  The original
+    # "you minted an invite — here's the URL" panel only renders
+    # once, on the POST-create redirect; an operator who navigates
+    # away (or misses the copy on first paint) had no way to fish
+    # the link back out short of opening the DB by hand.
+    open_invites_by_tenant: dict[int, list[dict]] = {}
+    for inv in dao_invites.list_open_for_operator(actor):
+        open_invites_by_tenant.setdefault(inv["tenant_id"], []).append(inv)
+    base = (PUBLIC_URL or "").rstrip("/") or str(request.base_url).rstrip("/")
     # Decorate each tenant row with its current effective caps + the
     # member roster (so the operator gets per-email last_active_at
     # without a follow-up click into a per-tenant page).
@@ -6328,6 +6390,10 @@ def admin_dashboard(
         t["caps"] = dao_quotas.get_caps(t["id"])
         t["usage"] = dao_quotas.usage_for_tenant(t["id"])
         t["members"] = dao_tenants.list_members(actor, t["id"])
+        t["open_invite_list"] = [
+            {**inv, "url": f"{base}/invite/{inv['token']}"}
+            for inv in open_invites_by_tenant.get(t["id"], [])
+        ]
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     oauth_client_groups = _group_oauth_tokens(api_tokens)
     recent_activity = dao_audit.list_recent_for_operator(actor, limit=50)

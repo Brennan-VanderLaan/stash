@@ -25,6 +25,7 @@ from dao._base import (
     ForbiddenError,
     NotFoundError,
     db,
+    require_operator,
     require_role,
 )
 
@@ -156,6 +157,30 @@ def list_for_tenant(actor: Actor) -> list[dict]:
             "  AND (expires_at IS NULL OR expires_at > ?) "
             "ORDER BY created_at DESC",
             (actor.tenant_id, now),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_open_for_operator(actor: Actor) -> list[dict]:
+    """Every un-consumed un-expired invite across every tenant.
+
+    Operator-only.  /admin uses this to surface the actual invite
+    tokens on each tenant card so the operator can re-copy a URL
+    they missed on first mint (the original "you minted an
+    invite — here's the URL" panel only shows once, on the
+    POST-redirect render).  Returns ``tenant_id`` so the caller
+    can bucket per-tenant without an extra query."""
+    require_operator(actor)
+    now = _utcnow().isoformat()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT tenant_id, token, email, role, "
+            "       created_by_email, created_at, expires_at "
+            "FROM tenant_invites "
+            "WHERE consumed_at IS NULL "
+            "  AND (expires_at IS NULL OR expires_at > ?) "
+            "ORDER BY tenant_id, created_at DESC",
+            (now,),
         ).fetchall()
     return [dict(r) for r in rows]
 
