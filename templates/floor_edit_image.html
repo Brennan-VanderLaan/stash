@@ -137,6 +137,16 @@
     ));
     canvas.isDrawingMode = false;
     canvas.selection = (tool === 'select');
+    // ``skipTargetFind`` is what stops Fabric from grabbing
+    // whatever shape is under the cursor on mouse:down.  We turn
+    // it ON while a draw tool (rect/line) is active so the user
+    // can start a stroke ON TOP of an existing shape without
+    // also selecting + dragging that shape — feedback #17,
+    // "if you try to draw a line on a box then you end up moving
+    // the box around and selecting it while also drawing".  Off
+    // for select (need to find targets to click them) and for
+    // eraser (the eraser's whole job is to find the target).
+    canvas.skipTargetFind = (tool === 'rect' || tool === 'line');
     if (tool === 'select') canvas.defaultCursor = 'default';
     else if (tool === 'eraser') canvas.defaultCursor = 'not-allowed';
     else canvas.defaultCursor = 'crosshair';
@@ -280,7 +290,14 @@
   });
 
   function finishDrawing() {
-    canvas.skipTargetFind = false;
+    // Don't blindly reset ``skipTargetFind`` to false here — the
+    // active tool drives that flag via setTool() now, and a
+    // drawing tool is *sticky* (user can fire several rects in
+    // a row without re-tapping the toolbar).  If we cleared it
+    // every mouse:up, the NEXT rect drag would grab whatever
+    // shape happens to be under the cursor.  Re-sync with the
+    // tool's intent instead.
+    canvas.skipTargetFind = (activeTool === 'rect' || activeTool === 'line');
     if (drawing) {
       // If the drag barely moved, drop the shape — accidental
       // taps shouldn't litter the canvas.
