@@ -267,6 +267,161 @@ def _extract_image_bytes(response) -> bytes | None:
     return None
 
 
+class TagSuggestions(BaseModel):
+    tags: list[str] = Field(
+        description=(
+            "3–5 short, lowercase, kebab-case tags.  Prefer tags from "
+            "the existing catalog when applicable; only invent a new "
+            "name when none of the existing ones fit."
+        ),
+    )
+
+
+_TAG_SUGGEST_INSTRUCTIONS = (
+    "You're helping organise a household inventory.  Suggest 3-5 short "
+    "tags (lowercase, kebab-case, one or two words each — e.g. "
+    "'kitchen', 'fragile', 'serial:numbered'). Prefer tags from the "
+    "existing catalog when they fit so the user's tag namespace stays "
+    "tight; only propose a new tag when none of the existing ones do.  "
+    "Skip generic words like 'item', 'thing', 'stuff'.  Don't include "
+    "spaces — use hyphens.  Don't repeat tags."
+)
+
+
+def _format_existing_tags(existing_tags: list[str] | None) -> str:
+    if not existing_tags:
+        return "(no existing tags yet)"
+    # Soft cap so a stash with 500 tags doesn't blow the prompt budget.
+    head = existing_tags[:120]
+    listing = ", ".join(head)
+    if len(existing_tags) > len(head):
+        listing += f", … ({len(existing_tags) - len(head)} more)"
+    return listing
+
+
+def suggest_tags_for_item(
+    name: str,
+    description: str,
+    photo_bytes: bytes | None = None,
+    existing_tags: list[str] | None = None,
+) -> list[str]:
+    """Gemini-suggested tags for a single item.  Sends the item's name
+    + notes + optional photo + the tenant's existing tag catalog;
+    returns 3-5 tag names, deduplicated and stripped.
+
+    The Pydantic schema constraint forces a parseable list; if Gemini
+    hallucinates an empty response we return an empty list rather
+    than raising — the caller surfaces "no suggestions" instead of
+    a 502.
+    """
+    from google.genai import types as _genai_types
+    prompt = (
+        f"{_TAG_SUGGEST_INSTRUCTIONS}\n\n"
+        f"Item:\n  name: {name}\n  notes: {description or '(none)'}\n\n"
+        f"Existing tag catalog: {_format_existing_tags(existing_tags)}"
+    )
+    parts: list = [prompt]
+    if photo_bytes:
+        parts.append(_genai_types.Part.from_bytes(
+            data=photo_bytes, mime_type="image/jpeg",
+        ))
+    response = get_gemini().models.generate_content(
+        model=GEMINI_MODEL,
+        contents=parts,
+        config=_genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=TagSuggestions,
+        ),
+    )
+    parsed = _parse_tag_response(response)
+    return _clean_tag_list(parsed)
+
+
+def suggest_tags_for_box(
+    box_name: str,
+    box_notes: str,
+    items: list[dict],
+    existing_tags: list[str] | None = None,
+) -> list[str]:
+    """Tags that apply across the items in a box — e.g. a box of
+    kitchenware gets ('kitchen', 'utensils', 'cookware') back.
+
+    ``items`` is a list of ``{name, notes}`` dicts (notes optional).
+    Photos aren't threaded through to keep the prompt cheap and the
+    cost predictable on large boxes; the per-item flow is the way
+    to incorporate photo context.
+    """
+    from google.genai import types as _genai_types
+    if not items:
+        return []
+    head = items[:30]  # soft cap; 30 items is plenty of context
+    listing = "\n".join(
+        f"- {it.get('name', '(unnamed)')}" + (
+            f" — {it['notes']}" if it.get("notes") else ""
+        )
+        for it in head
+    )
+    if len(items) > len(head):
+        listing += f"\n…(+{len(items) - len(head)} more items)"
+
+    prompt = (
+        f"{_TAG_SUGGEST_INSTRUCTIONS}\n\n"
+        f"Box name: {box_name}\n"
+        f"Box notes: {box_notes or '(none)'}\n\n"
+        f"Items in the box:\n{listing}\n\n"
+        "Suggest tags that apply across MOST of these items — broad "
+        "themes the user can stamp on every item at once.  Don't "
+        "include item-specific oddities that wouldn't generalise.\n\n"
+        f"Existing tag catalog: {_format_existing_tags(existing_tags)}"
+    )
+    response = get_gemini().models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt],
+        config=_genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=TagSuggestions,
+        ),
+    )
+    parsed = _parse_tag_response(response)
+    return _clean_tag_list(parsed)
+
+
+def _parse_tag_response(response) -> list[str]:
+    """Extract the ``tags`` list from a Gemini ``generate_content``
+    response.  Returns ``[]`` for any shape we can't parse rather
+    than raising — the caller treats "no suggestions" as a normal
+    outcome."""
+    text = getattr(response, "text", None) or ""
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        tags = payload.get("tags")
+    else:
+        tags = payload
+    if not isinstance(tags, list):
+        return []
+    return [str(t) for t in tags if t]
+
+
+def _clean_tag_list(tags: list[str]) -> list[str]:
+    """Trim, lowercase, dedupe (preserve order), strip stray
+    whitespace + leading/trailing punctuation that the model
+    occasionally appends ('kitchen,' instead of 'kitchen')."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in tags:
+        t = raw.strip().strip(".,;:").lower()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out[:5]
+
+
 def suggest_box(item_name: str, item_description: str, boxes: list[dict]) -> BoxMatch:
     """Stage 2: Claude matching — pick best existing box or propose a new one."""
     if boxes:

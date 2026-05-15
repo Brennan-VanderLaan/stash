@@ -41,6 +41,10 @@ _PRICE_MICROS_PER_UNIT: dict[tuple[str, str], int] = {
     ("ai", "gemini_detect"): 700,
     ("ai", "gemini_art"): 40_000,
     ("ai", "anthropic_match"): 1_500,
+    # Tag suggestions: Gemini Flash with a short text-only round-trip
+    # (per-item) or a multi-item context (per-box).  Both are cheap
+    # — same ballpark as detect — so 700 µ$ is a safe upper bound.
+    ("ai", "gemini_tags"): 700,
     # upload_bytes records bytes; ~0.000006 µ$/byte (storage cost
     # only); rounded to 1 µ$/MB so multiplication stays an integer.
     ("upload", "upload_bytes"): 0,  # filled by formula in record()

@@ -33,6 +33,18 @@
                list="tag-suggestions" autocomplete="off" style="flex:1;">
         <button type="submit" class="btn btn-secondary btn-sm">Add</button>
       </form>
+      {% if art_enabled %}
+      {# AI-suggest: one tap, renders proposed tags as click-to-apply
+         pills.  Quota-gated server-side; failures surface in-place
+         so the user knows what happened without a console. #}
+      <div class="tag-suggest" data-item-id="{{ it.id }}">
+        <button type="button" class="btn btn-secondary btn-sm tag-suggest-trigger">
+          <span class="tag-suggest-icon">✨</span>
+          Suggest tags
+        </button>
+        <div class="tag-suggest-results" data-tag-suggest-results hidden></div>
+      </div>
+      {% endif %}
     </div>
 
     {# Move #}

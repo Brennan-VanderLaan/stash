@@ -120,7 +120,7 @@
     <details class="card-header-extra bulk-tag-disclosure">
       <summary class="btn btn-secondary btn-sm">+ Tag all</summary>
       <form method="post" action="/boxes/{{ box.id }}/tag-all"
-            class="bulk-tag-form">
+            class="bulk-tag-form" id="bulk-tag-form">
         <input type="text" name="tag" required
                placeholder="e.g. fragile, room:garage"
                list="tag-suggestions" autocomplete="off"
@@ -129,6 +129,15 @@
           Apply to {{ items_with_tags|length }} item{{ '' if items_with_tags|length == 1 else 's' }}
         </button>
       </form>
+      {% if art_enabled %}
+      <div class="tag-suggest tag-suggest-box" data-box-id="{{ box.id }}">
+        <button type="button" class="btn btn-secondary btn-sm tag-suggest-trigger">
+          <span class="tag-suggest-icon">✨</span>
+          Suggest tags for box
+        </button>
+        <div class="tag-suggest-results" data-tag-suggest-results hidden></div>
+      </div>
+      {% endif %}
     </details>
     {% endif %}
   </div>
@@ -384,6 +393,125 @@
       btn.disabled = input.value.trim() !== expected;
     });
   })();
+</script>
+
+{# ── AI tag-suggest wiring ─────────────────────────────────────────
+   One handler covers both flavours: per-item (inside .item-detail
+   dialog) and box-wide (.tag-suggest-box on the contents card).
+   Pills render with click-to-apply; per-item applies via
+   ``/items/{id}/tags``, box-wide applies via
+   ``/boxes/{id}/tag-all``.  The page reloads after a successful
+   apply so the new tag chips show up in the same dialog. #}
+<script>
+(function() {
+  function pill(label, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tag-suggest-pill';
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function setBusy(btn, busy) {
+    if (busy) {
+      btn.dataset.originalLabel = btn.textContent;
+      btn.textContent = 'Thinking…';
+      btn.disabled = true;
+    } else {
+      if (btn.dataset.originalLabel) {
+        btn.textContent = btn.dataset.originalLabel;
+        delete btn.dataset.originalLabel;
+      }
+      btn.disabled = false;
+    }
+  }
+
+  async function fetchSuggestions(url) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    return data.tags || [];
+  }
+
+  async function applyTag(url, tag) {
+    const fd = new FormData();
+    fd.append('tag', tag);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      body: fd,
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  function renderResults(container, tags, onPick, opts) {
+    container.innerHTML = '';
+    container.hidden = false;
+    if (!tags.length) {
+      const msg = document.createElement('span');
+      msg.className = 'tag-suggest-empty';
+      msg.textContent = 'No suggestions — try adding more notes or a photo.';
+      container.appendChild(msg);
+      return;
+    }
+    tags.forEach(t => {
+      container.appendChild(pill(opts.prefix + t, () => onPick(t)));
+    });
+  }
+
+  function wireOne(wrap) {
+    const trigger = wrap.querySelector('.tag-suggest-trigger');
+    const results = wrap.querySelector('[data-tag-suggest-results]');
+    if (!trigger || !results) return;
+    const isBox = wrap.classList.contains('tag-suggest-box');
+    const id = isBox ? wrap.dataset.boxId : wrap.dataset.itemId;
+    const suggestUrl = isBox
+      ? `/boxes/${id}/suggest-tags`
+      : `/items/${id}/suggest-tags`;
+    const applyUrl = isBox
+      ? `/boxes/${id}/tag-all`
+      : `/items/${id}/tags`;
+    const prefix = isBox ? 'Apply to all: ' : '+ ';
+
+    trigger.addEventListener('click', async () => {
+      setBusy(trigger, true);
+      results.hidden = true;
+      try {
+        const tags = await fetchSuggestions(suggestUrl);
+        renderResults(results, tags, async (tag) => {
+          try {
+            await applyTag(applyUrl, tag);
+            // Reload so the new tag chip(s) appear in the dialog /
+            // grid.  The dialog state isn't preserved (a modal close
+            // + reopen feels fine after a tag apply).
+            window.location.reload();
+          } catch (err) {
+            alert(`Couldn't apply tag: ${err.message || err}`);
+          }
+        }, { prefix });
+      } catch (err) {
+        results.hidden = false;
+        results.innerHTML = '';
+        const msg = document.createElement('span');
+        msg.className = 'tag-suggest-empty';
+        msg.textContent = `Suggestion failed: ${err.message || err}`;
+        results.appendChild(msg);
+      } finally {
+        setBusy(trigger, false);
+      }
+    });
+  }
+
+  document.querySelectorAll('.tag-suggest').forEach(wireOne);
+})();
 </script>
 
 {% endblock %}

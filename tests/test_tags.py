@@ -125,6 +125,86 @@ def test_bulk_tag_box_404_for_other_tenant(client):
     assert r.status_code == 404
 
 
+def test_suggest_item_tags_returns_gemini_list(client, monkeypatch):
+    """The item-level suggest endpoint returns whatever Gemini gives
+    back, cleaned + deduped.  We stub the vision call so the test
+    doesn't talk to the real model."""
+    _box(client)
+    _item(client, 1, "spatula", "kitchen")
+    calls = {}
+
+    def fake_suggest(name, description, photo_bytes=None, existing_tags=None):
+        calls["name"] = name
+        calls["description"] = description
+        calls["existing_tags"] = existing_tags
+        return ["kitchen", "cookware", "utensil"]
+
+    monkeypatch.setattr(client.app_module.vision,
+                        "suggest_tags_for_item", fake_suggest)
+    r = client.post("/items/1/suggest-tags",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["ok"] is True
+    assert payload["tags"] == ["kitchen", "cookware", "utensil"]
+    # Stub saw the item name + the existing-tag catalog (the box
+    # creation flow already created 'kitchen' so it shows up here).
+    assert calls["name"] == "spatula"
+    assert "kitchen" in calls["existing_tags"]
+
+
+def test_suggest_item_tags_404_for_unknown_item(client, monkeypatch):
+    monkeypatch.setattr(
+        client.app_module.vision, "suggest_tags_for_item",
+        lambda *a, **kw: [],
+    )
+    r = client.post("/items/999/suggest-tags",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 404
+
+
+def test_suggest_box_tags_threads_item_names(client, monkeypatch):
+    """Box-level suggest sends every item's name/notes into the
+    vision call.  Empty boxes short-circuit to an empty list without
+    incurring a Gemini call."""
+    _box(client)
+    _item(client, 1, "drill", "power tool")
+    _item(client, 1, "saw")
+    calls = {}
+
+    def fake_suggest(box_name, box_notes, items, existing_tags=None):
+        calls["box_name"] = box_name
+        calls["items"] = items
+        return ["tools", "garage", "power-tools"]
+
+    monkeypatch.setattr(client.app_module.vision,
+                        "suggest_tags_for_box", fake_suggest)
+    r = client.post("/boxes/1/suggest-tags",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["tags"] == ["tools", "garage", "power-tools"]
+    assert calls["box_name"] == "Box A"
+    names = [i["name"] for i in calls["items"]]
+    assert names == ["drill", "saw"]
+
+
+def test_suggest_box_tags_empty_box_skips_gemini(client, monkeypatch):
+    """Empty box returns an empty list without hitting the vision
+    layer (which would otherwise rack up cost for no useful output)."""
+    _box(client)
+    called = []
+    monkeypatch.setattr(
+        client.app_module.vision, "suggest_tags_for_box",
+        lambda *a, **kw: called.append(1) or [],
+    )
+    r = client.post("/boxes/1/suggest-tags",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 200
+    assert r.json()["tags"] == []
+    assert called == []
+
+
 def test_tags_case_insensitive(client):
     _box(client)
     _item(client, 1, "a", "Kitchen")

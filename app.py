@@ -2337,6 +2337,7 @@ def box_detail(request: Request, box_id: int):
             "rooms": rooms,
             "all_tags": all_tags,
             "color_palette": _ROOM_COLORS,
+            "art_enabled": bool(os.environ.get("GEMINI_API_KEY")),
         },
     )
 
@@ -2599,6 +2600,102 @@ def remove_item_tag(request: Request, item_id: int, tag_id: int):
     except ForbiddenError:
         raise HTTPException(403)
     return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
+
+
+def _tag_suggest_quota_check(actor: Actor) -> None:
+    """Pre-flight quota gate for the AI tag-suggest endpoints.
+    Gemini Flash for tags is the same price tier as detect; we still
+    bounce the call against ``dao_quotas`` so a runaway agent doesn't
+    burn through the tenant's daily-cost cap unnoticed."""
+    try:
+        dao_quotas.check_or_raise(
+            actor.tenant_id, "ai",
+            cost_about_to_record=dao_usage._cost_for(
+                "ai", "gemini_tags", 1,
+            ),
+        )
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"AI quota exceeded ({exc.key}={exc.used} > {exc.cap}).  "
+            "Wait for the window reset or raise the cap on /admin.",
+        )
+
+
+def _item_photo_bytes(tenant_id: int, photo_name: str | None) -> bytes | None:
+    """Read + decrypt an item's photo for vision prompting.  Returns
+    None for items without a photo or when the file is missing /
+    undecryptable — the suggest path keeps working off name + notes
+    alone in that case."""
+    if not photo_name:
+        return None
+    p = _tenant_file(tenant_id, photo_name)
+    if not p.exists():
+        return None
+    try:
+        return _decrypt_for(tenant_id, p.read_bytes())
+    except Exception:
+        return None
+
+
+@app.post("/items/{item_id}/suggest-tags")
+def suggest_item_tags(request: Request, item_id: int):
+    """Gemini-suggested tags for a single item.  Returns JSON
+    ``{"ok": true, "tags": [...]}``; the item-detail dialog renders
+    each as a one-tap apply pill.  Synchronous (sub-second on a
+    short prompt) so the user doesn't see a spinner forever."""
+    actor: Actor = request.state.actor
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    _tag_suggest_quota_check(actor)
+    existing = dao_tags.list_names(actor)
+    photo_bytes = _item_photo_bytes(item["tenant_id"], item.get("photo"))
+    try:
+        tags = vision.suggest_tags_for_item(
+            item["name"], item.get("notes") or "",
+            photo_bytes=photo_bytes,
+            existing_tags=existing,
+        )
+        dao_usage.record(item["tenant_id"], "ai", "gemini_tags")
+    except Exception as exc:
+        raise HTTPException(502, f"Tag suggestion failed: {exc}")
+    return {"ok": True, "item_id": item_id, "tags": tags}
+
+
+@app.post("/boxes/{box_id}/suggest-tags")
+def suggest_box_tags(request: Request, box_id: int):
+    """Tags that apply across every item in the box.  One Gemini call
+    over all the item names + notes (no photos — text context is
+    sufficient and keeps cost flat regardless of how many items the
+    box has).  JSON ``{"ok": true, "tags": [...]}`` so the box page
+    can render apply-to-all pills."""
+    actor: Actor = request.state.actor
+    try:
+        box = dao_boxes.get_by_id(actor, box_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    _tag_suggest_quota_check(actor)
+    existing = dao_tags.list_names(actor)
+    items = dao_items.list_for_box(actor, box_id)
+    if not items:
+        return {"ok": True, "box_id": box_id, "tags": []}
+    try:
+        tags = vision.suggest_tags_for_box(
+            box["name"], box.get("notes") or "",
+            items=[{"name": it["name"], "notes": it.get("notes") or ""}
+                   for it in items],
+            existing_tags=existing,
+        )
+        dao_usage.record(box["tenant_id"], "ai", "gemini_tags")
+    except Exception as exc:
+        raise HTTPException(502, f"Tag suggestion failed: {exc}")
+    return {"ok": True, "box_id": box_id, "tags": tags}
 
 
 @app.post("/boxes/{box_id}/tag-all")
