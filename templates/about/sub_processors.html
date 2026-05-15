@@ -1,0 +1,78 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Sub-processors</h1>
+  <p class="about-lede">
+    Third parties {{ business_name }} relies on to deliver the
+    service.  Each row lists what they touch and why.  We don't
+    ship your data to anyone not on this list.
+  </p>
+  <p class="text-sm text-muted">Last updated: 2026-05-15.</p>
+</section>
+
+<section class="about-section">
+  <table class="about-table">
+    <thead>
+      <tr>
+        <th>Vendor</th>
+        <th>Purpose</th>
+        <th>What data is involved</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Google</strong> (Gemini API)</td>
+        <td>AI vision: item detection + bounding boxes; tag suggestions; floorplan-art generation.</td>
+        <td>Photos you submit for ingest, item names, notes.  Output is returned to {{ business_name }}; Google's API terms govern downstream training (we use Vertex / Gemini API endpoints that opt out of training by default).</td>
+        <td>US / EU (region depends on the Gemini API endpoint).</td>
+      </tr>
+      <tr>
+        <td><strong>Anthropic</strong> (Claude API)</td>
+        <td>Box-matching suggestion ("which existing box should this item go in?").</td>
+        <td>Item names + notes + the box-name list.  No photos.</td>
+        <td>US.</td>
+      </tr>
+      <tr>
+        <td><strong>Stripe</strong></td>
+        <td>Subscription billing.</td>
+        <td>Email address, subscription state, payment-method metadata.  Card numbers go directly to Stripe; we never see them.</td>
+        <td>US / EU.</td>
+      </tr>
+      <tr>
+        <td><strong>Backblaze B2</strong></td>
+        <td>Off-site backup storage for nightly tenant DR archives.</td>
+        <td>Encrypted tenant database + photo bytes.  The key-encryption key is held separately from B2 by design — a B2 breach alone does not expose plaintext data.</td>
+        <td>US.</td>
+      </tr>
+      <tr>
+        <td><strong>Google</strong> (OAuth identity)</td>
+        <td>Sign-in identity provider via oauth2-proxy.</td>
+        <td>Email + Google account ID, used to map you to a {{ business_name }} tenant membership.</td>
+        <td>US / EU.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="about-section">
+  <h2>Changes</h2>
+  <p>
+    We'll update this page + email registered tenants at least 30
+    days before adding a new sub-processor that handles tenant
+    content.  Routine swaps within the same provider (e.g.
+    Stripe → Stripe successor product) don't trigger a notice.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Engineering note</h2>
+  <p>
+    This list is part of the operator surface — see the in-app
+    /admin "Vendor cost (this month)" panel for live spend across
+    these providers.  Cost numbers + sub-processor list never
+    leave {{ business_name }} operator hands and are not shown to
+    tenant maintainers.
+  </p>
+</section>
+{% endblock %}

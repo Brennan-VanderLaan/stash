@@ -1,0 +1,118 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Terms of Service</h1>
+  <p class="about-lede">
+    These terms govern your use of {{ business_name }}.  Plain-English
+    where possible; legal where necessary.  By creating an account or
+    paying for a subscription you agree to these terms.
+  </p>
+  <p class="text-sm text-muted">Last updated: 2026-05-15.</p>
+</section>
+
+<section class="about-section">
+  <h2>1. The service</h2>
+  <p>
+    {{ business_name }} is a SaaS application for cataloguing the
+    contents of your household: photographs, item names, locations,
+    rooms, floors, tags, audit history.  We host your data + provide
+    AI-assisted tooling to help you manage it.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>2. Your account</h2>
+  <p>
+    You authenticate through an OAuth identity provider (Google, by
+    default).  You're responsible for keeping that account secure.
+    Multi-tenant accounts can invite other users at maintainer or
+    read-only roles.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>3. Subscriptions and billing</h2>
+  <ul>
+    <li>
+      Pricing is published at <a href="/about/pricing">/about/pricing</a>
+      and may change with 30 days' notice for existing subscribers.
+    </li>
+    <li>
+      Charges are processed by Stripe.  We never see or store your
+      card number.
+    </li>
+    <li>
+      Cancellation, refunds, and account deletion are governed by
+      <a href="/about/refunds">/about/refunds</a>.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>4. Acceptable use</h2>
+  <p>You agree not to:</p>
+  <ul>
+    <li>Use {{ business_name }} for illegal goods or contraband cataloguing.</li>
+    <li>Upload content that infringes copyright or violates someone's privacy.</li>
+    <li>Attempt to gain unauthorized access to other tenants' data.</li>
+    <li>Use the AI surfaces to generate spam, malicious content, or content prohibited by the underlying model providers' terms (Google Gemini, Anthropic).</li>
+    <li>Probe, scan, or load-test our infrastructure without prior written consent at {{ contact_email }}.</li>
+  </ul>
+  <p>
+    We reserve the right to suspend or terminate accounts that violate
+    these terms.  Suspensions trigger a {{ business_name }} email to
+    the account owner with the reason.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>5. Your data</h2>
+  <p>
+    You retain ownership of everything you upload.  We process your
+    data per the <a href="/about/privacy">Privacy Policy</a>, with
+    the sub-processors listed at
+    <a href="/about/sub-processors">/about/sub-processors</a>.  You
+    can export everything at any time (GDPR Article 20 portability)
+    via the "Download my data" button in <code>/usage</code>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>6. AI features</h2>
+  <p>
+    AI-generated content (item detection, suggested tags, label art)
+    is produced by upstream models (Google Gemini, Anthropic Claude).
+    Output quality varies; you're responsible for reviewing AI
+    suggestions before accepting them into your inventory.  Costs
+    are billed to your monthly AI-call + AI-cost quotas — see
+    <code>/usage</code>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>7. Warranties + liability</h2>
+  <p>
+    {{ business_name }} is provided "as is" without warranty.  We
+    aim for high uptime + correct behaviour but make no specific
+    SLA commitments at the free or Pro tier.  Aggregate liability
+    is capped at the amount you've paid us in the preceding 12
+    months.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>8. Changes to these terms</h2>
+  <p>
+    We may update these terms.  Material changes get an email to
+    the registered address with at least 30 days' notice.  Continued
+    use after the effective date means you accept the new terms.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>9. Contact</h2>
+  <p>
+    Questions: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+  </p>
+</section>
+{% endblock %}

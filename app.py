@@ -514,10 +514,16 @@ _AUTH_BYPASS_EXACT = frozenset((
 # Prefix-based bypass: RFC 9728 protected-resource metadata can
 # live at the root or path-suffixed form (e.g.
 # ``/.well-known/oauth-protected-resource/mcp``); both have to
-# pass the wall.  Tightly scoped to one prefix so adding a new
-# bypass surface remains a deliberate code change.
+# pass the wall.  Static /about/* pages also bypass because
+# Stripe (and any KYC-grade financial partner) requires the
+# business name, description, contact, refund + cancellation
+# policy, and sub-processor list to be publicly reachable
+# without a login.  Tightly scoped to deliberate prefixes so
+# adding a new bypass surface remains a code change.
 _AUTH_BYPASS_PREFIXES = (
     "/.well-known/oauth-protected-resource",
+    "/about/",
+    "/about",
 )
 
 
@@ -4875,6 +4881,82 @@ def admin_feedback_status(
     except NotFoundError:
         raise HTTPException(404)
     return RedirectResponse("/admin#feedback", status_code=303)
+
+
+# ── Public /about pages (Stripe KYC + general transparency) ────────
+
+
+# Stash's public-facing contact email.  Stripe + similar financial
+# partners require a reachable customer-service channel on the
+# business website; this env var keeps the address out of the
+# template source so a deploy can swap it without a code change.
+# Fallback is a sensible "ops@<domain>" if the operator hasn't set
+# one yet — better than a hard-coded fake.
+def _public_contact_email() -> str:
+    v = (os.environ.get("STASH_PUBLIC_CONTACT_EMAIL") or "").strip()
+    if v:
+        return v
+    base = PUBLIC_URL or ""
+    host = (base.split("://", 1)[-1].split("/", 1)[0] or "stash.example.com")
+    return f"support@{host}"
+
+
+def _public_business_name() -> str:
+    return (os.environ.get("STASH_PUBLIC_BUSINESS_NAME") or "Stash").strip() or "Stash"
+
+
+def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
+    """One-stop renderer for the public /about/* pages.  Pages bypass
+    the auth wall (see ``_AUTH_BYPASS_PREFIXES``) so they're reachable
+    without a Google sign-in — Stripe + similar KYC-grade financial
+    partners require it.  ``hide_feedback_widget`` keeps the in-app
+    feedback bubble off these pages since the viewer may be a
+    prospect or auditor, not a tenant member."""
+    return templates.TemplateResponse(
+        request, f"about/{page}.html",
+        {
+            "page_title": title,
+            "business_name": _public_business_name(),
+            "contact_email": _public_contact_email(),
+            "public_url": PUBLIC_URL,
+            "hide_feedback_widget": True,
+        },
+    )
+
+
+@app.get("/about", response_class=HTMLResponse)
+def about_index(request: Request):
+    return _render_about(request, "index", "About")
+
+
+@app.get("/about/pricing", response_class=HTMLResponse)
+def about_pricing(request: Request):
+    return _render_about(request, "pricing", "Pricing")
+
+
+@app.get("/about/terms", response_class=HTMLResponse)
+def about_terms(request: Request):
+    return _render_about(request, "terms", "Terms of Service")
+
+
+@app.get("/about/privacy", response_class=HTMLResponse)
+def about_privacy(request: Request):
+    return _render_about(request, "privacy", "Privacy Policy")
+
+
+@app.get("/about/refunds", response_class=HTMLResponse)
+def about_refunds(request: Request):
+    return _render_about(request, "refunds", "Refunds & Cancellation")
+
+
+@app.get("/about/contact", response_class=HTMLResponse)
+def about_contact(request: Request):
+    return _render_about(request, "contact", "Contact")
+
+
+@app.get("/about/sub-processors", response_class=HTMLResponse)
+def about_sub_processors(request: Request):
+    return _render_about(request, "sub_processors", "Sub-processors")
 
 
 # ── Onboarding tours ───────────────────────────────────────────────

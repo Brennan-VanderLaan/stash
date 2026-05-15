@@ -1,0 +1,90 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Refunds & Cancellation</h1>
+  <p class="about-lede">
+    Plain-English version below.  This page is the canonical refund
+    and cancellation policy — referenced from our
+    <a href="/about/terms">Terms of Service</a>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Cancellation</h2>
+  <p>
+    You can cancel your {{ business_name }} subscription at any time
+    from the Stripe Customer Portal, linked from the
+    <code>/usage</code> page once you're signed in.  Cancellation
+    takes effect at the end of your current billing period —
+    your access stays uninterrupted until then.  We do not
+    pro-rate down to the day on cancellation; the unused time in
+    the current period is yours to keep.
+  </p>
+  <p>
+    There are no cancellation fees.  Re-subscribe at any time;
+    your tenant data is preserved at the Free-tier quotas in the
+    interim.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Refunds</h2>
+  <p>
+    {{ business_name }} is a recurring subscription service for
+    digital household-inventory hosting.  Our refund policy:
+  </p>
+  <ul>
+    <li>
+      <strong>14-day money-back on the first paid subscription.</strong>
+      If you subscribe for the first time and decide within 14 days
+      that {{ business_name }} isn't right for you, email
+      {{ contact_email }} and we'll refund the full amount of that
+      first charge.
+    </li>
+    <li>
+      <strong>Pro-rated refunds for service outages.</strong>  If
+      we experience an outage that prevents you from using the
+      service for more than 24 consecutive hours, you can claim a
+      pro-rated refund covering the affected time.  Email
+      {{ contact_email }} with the outage window.
+    </li>
+    <li>
+      <strong>No refunds on past billing cycles.</strong>  Outside
+      of the two cases above, completed billing periods are
+      non-refundable.  We don't auto-bill silently — you'll see
+      the upgrade prompt in <code>/usage</code> before any charge.
+    </li>
+    <li>
+      <strong>Disputes / chargebacks.</strong>  Email
+      {{ contact_email }} *before* disputing a charge with your
+      card issuer — almost every dispute we see is resolvable
+      faster via direct contact than through the chargeback
+      process.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>Promotions</h2>
+  <p>
+    {{ business_name }} occasionally offers promotional codes (e.g.,
+    introductory discounts).  Terms specific to each promotion are
+    posted on this page when the promotion is active.  Currently
+    active promotions: <em>none</em>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Account deletion</h2>
+  <p>
+    Cancelling your subscription does not delete your data.  To
+    permanently delete your {{ business_name }} tenant + every row
+    and photo associated with it, contact {{ contact_email }} or
+    use the operator-mediated tenant deletion flow described in
+    our <a href="/about/privacy">Privacy Policy</a>.  We honor
+    deletion requests within 30 days; data lives on a 30-day
+    soft-delete grace period before permanent deletion, after
+    which it's gone from primary storage + backups.
+  </p>
+</section>
+{% endblock %}

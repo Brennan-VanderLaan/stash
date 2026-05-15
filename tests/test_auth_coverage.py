@@ -203,8 +203,15 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         "/oauth/token",
         "/oauth/register",
     ))
+    # /about/ added: Stripe + similar KYC partners require the
+    # business name, refund policy, sub-processor list, etc. to be
+    # publicly reachable without a Google sign-in.  Both the
+    # trailing-slash + bare forms are listed so /about itself and
+    # every /about/* page bypass.
     assert app_mod._AUTH_BYPASS_PREFIXES == (
         "/.well-known/oauth-protected-resource",
+        "/about/",
+        "/about",
     )
 
 

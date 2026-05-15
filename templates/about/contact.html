@@ -1,0 +1,55 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Contact</h1>
+  <p class="about-lede">
+    One inbox handles everything — billing questions, bug reports,
+    feature requests, refund claims, security disclosures.
+  </p>
+</section>
+
+<section class="about-section about-contact-card">
+  <h2>Customer service</h2>
+  <p class="about-contact-email">
+    <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+  </p>
+  <p>
+    We aim to reply within one business day.  Include your tenant
+    name or registered email so we can correlate any account-side
+    issue without a back-and-forth.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>In-app feedback</h2>
+  <p>
+    Once you're signed in, every page carries a floating
+    <strong>Feedback</strong> button in the corner.  Use it for
+    bug reports + feature requests — submissions land in our
+    triage queue with the source URL + your viewport + an optional
+    screenshot, so we can reproduce what you were looking at
+    without a five-message thread.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Security</h2>
+  <p>
+    Report security issues to {{ contact_email }} with
+    <code>[security]</code> in the subject line.  We'll acknowledge
+    within 48 hours.  Coordinated disclosure timelines: 90 days
+    from acknowledgement to public write-up, sooner if a fix ships
+    earlier.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Billing</h2>
+  <p>
+    Direct billing questions to {{ contact_email }}, but most
+    self-service actions live in the Stripe Customer Portal that
+    you reach from <code>/usage</code> after signing in — update
+    your card, download invoices, cancel, change plans.
+  </p>
+</section>
+{% endblock %}

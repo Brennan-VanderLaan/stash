@@ -1,0 +1,166 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Privacy Policy</h1>
+  <p class="about-lede">
+    What we collect, why, how we store it, and what you can do
+    about it.  No dark patterns — same posture inside the product
+    as on this page.
+  </p>
+  <p class="text-sm text-muted">Last updated: 2026-05-15.</p>
+</section>
+
+<section class="about-section">
+  <h2>Who collects what</h2>
+  <p>
+    {{ business_name }} is the data controller for everything you
+    upload (boxes, items, photos, tags, room layouts) and everything
+    we observe about your account (sign-in email, IP, audit log,
+    usage meters).  The sub-processors we hand data to are listed at
+    <a href="/about/sub-processors">/about/sub-processors</a>.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Data we hold</h2>
+  <ul>
+    <li>
+      <strong>Identity:</strong> the email from your OAuth provider
+      (Google by default), tenant membership, role.
+    </li>
+    <li>
+      <strong>Inventory content:</strong> box / item names, notes,
+      tags, room positions, floorplan images, item photos.
+    </li>
+    <li>
+      <strong>Audit log:</strong> structured records of every
+      mutation in the system, attributed to the actor and tenant.
+      Used for incident response + your own change-tracking.
+    </li>
+    <li>
+      <strong>Usage meters:</strong> AI call counts, upload byte
+      totals, daily AI-cost figures.  Drives the quota system and
+      the cost-transparency block in <code>/usage</code>.
+    </li>
+    <li>
+      <strong>Stripe customer + subscription IDs</strong> for paid
+      tenants.  Card details live entirely with Stripe.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>How we secure it</h2>
+  <ul>
+    <li>
+      <strong>Encryption at rest.</strong>  Item photos and
+      thumbnails are encrypted with a per-tenant data-encryption
+      key wrapped by a deployment-wide key-encryption key.  DB
+      columns (names, notes, tags) stay cleartext for searchability
+      in v1.
+    </li>
+    <li>
+      <strong>Transport.</strong>  Everything in production rides
+      over HTTPS; the bearer-auth surface refuses non-HTTPS
+      requests for non-localhost.
+    </li>
+    <li>
+      <strong>Tenant isolation.</strong>  Every database query
+      enforces a <code>tenant_id</code> filter; cross-tenant probes
+      404 by design (no information disclosure).
+    </li>
+    <li>
+      <strong>Auditability.</strong>  Every mutation writes a row
+      to the audit log with the actor, action, target, and a
+      structured metadata blob.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>Your rights (GDPR + similar)</h2>
+  <ul>
+    <li>
+      <strong>Access (Article 15):</strong> the in-app
+      "Download my data" link on <code>/usage</code> returns a
+      readable SQLite + decrypted-JPEG zip of everything in your
+      tenant.
+    </li>
+    <li>
+      <strong>Portability (Article 20):</strong> same zip, same
+      link.  The format is standard SQLite + JPEG, so any tool
+      that reads either format can consume it.
+    </li>
+    <li>
+      <strong>Rectification (Article 16):</strong> edit any row in
+      the app directly, or email us if you need help.
+    </li>
+    <li>
+      <strong>Erasure (Article 17):</strong> account deletion via
+      {{ contact_email }} or the operator-mediated tenant
+      hard-delete.  30-day soft-delete grace, then permanent
+      removal from primary storage + backups.
+    </li>
+    <li>
+      <strong>Restriction (Article 18):</strong> suspend processing
+      while a request is being investigated — contact
+      {{ contact_email }}.
+    </li>
+    <li>
+      <strong>Objection / withdrawal of consent:</strong> cancel
+      your subscription and request deletion.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>Cookies</h2>
+  <p>
+    We use a single cookie set by our OAuth identity proxy
+    (Google sign-in session) and an optional <code>active_tenant</code>
+    cookie for multi-tenant users.  No third-party advertising or
+    analytics cookies.  We do not sell or share data with
+    advertisers, period.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Retention</h2>
+  <ul>
+    <li>
+      Account + tenant data: kept while your account is active.
+      Cancelling does not delete; explicit deletion does.
+    </li>
+    <li>
+      Soft-deleted tenants: 30 days, then hard-deleted by an
+      operator.  Backups containing the tenant age out within
+      the configured B2 retention window (default 90 days).
+    </li>
+    <li>
+      Audit log: retained indefinitely while the account is
+      active (incident-response usefulness).  Cleared on tenant
+      hard-delete.
+    </li>
+  </ul>
+</section>
+
+<section class="about-section">
+  <h2>Breach notification</h2>
+  <p>
+    If we experience a data breach affecting your personal data,
+    we'll notify you within 72 hours of discovery, including what
+    we know about the scope and our remediation status.  This is
+    a GDPR Article 33/34 obligation; we treat it as a hard
+    commitment regardless of jurisdiction.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Contact</h2>
+  <p>
+    Privacy questions: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+    For formal data-subject requests, include the relevant
+    article number in the subject line so we route it correctly.
+  </p>
+</section>
+{% endblock %}

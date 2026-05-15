@@ -1,0 +1,42 @@
+{# Minimal public-facing layout for /about/* pages.  Intentionally
+   NOT extending base.html — base.html assumes a populated
+   request.state.actor (tenant switcher, feedback widget, etc.)
+   and these pages render for unauthenticated visitors including
+   Stripe's KYC review crawler.  Inline styles + plain HTML so the
+   page renders without depending on anything tenant-scoped. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} · {{ business_name }}</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+  <meta name="description" content="{{ page_title }} — {{ business_name }} household inventory">
+</head>
+<body class="about-public">
+  <header class="about-header">
+    <a href="/about" class="about-brand">{{ business_name }}</a>
+    <nav class="about-nav">
+      <a href="/about/pricing">Pricing</a>
+      <a href="/about/refunds">Refunds</a>
+      <a href="/about/privacy">Privacy</a>
+      <a href="/about/terms">Terms</a>
+      <a href="/about/sub-processors">Sub-processors</a>
+      <a href="/about/contact">Contact</a>
+    </nav>
+    <a href="/" class="about-signin">Sign in →</a>
+  </header>
+  <main class="about-main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="about-footer">
+    <p>
+      © {{ business_name }} ·
+      <a href="/about/contact">{{ contact_email }}</a> ·
+      <a href="/about/terms">Terms</a> ·
+      <a href="/about/privacy">Privacy</a> ·
+      <a href="/about/refunds">Refunds</a>
+    </p>
+  </footer>
+</body>
+</html>

@@ -1181,6 +1181,175 @@ main.main-wide {
   .audit-action-hint { display: none; }
 }
 
+/* === Public /about pages ===
+   Stripe + similar KYC partners need a public-facing surface
+   describing the business, pricing, contact, refund policy, etc.
+   These pages render WITHOUT the actor-aware base.html so they
+   work for unauthenticated visitors.  Layout is intentionally
+   plain — readable typography, clear nav, no in-app chrome. */
+body.about-public {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  background: var(--bg, #0f1f14);
+  color: var(--text, #e6f4ea);
+  line-height: 1.5;
+}
+.about-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1.5rem;
+  border-bottom: 2px solid var(--accent, #4ade80);
+  background: var(--panel, #16331f);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.about-brand {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent, #4ade80);
+  text-decoration: none;
+}
+.about-nav {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.about-nav a {
+  color: var(--text, #e6f4ea);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+}
+.about-nav a:hover { color: var(--accent, #4ade80); background: rgba(255,255,255,0.04); }
+.about-signin {
+  padding: 0.45rem 0.85rem;
+  background: var(--accent, #4ade80);
+  color: var(--bg, #0a1810);
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+}
+.about-main {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 3rem;
+}
+.about-hero h1 {
+  font-size: 2rem;
+  color: var(--accent, #4ade80);
+  margin: 0 0 0.6rem;
+  line-height: 1.2;
+}
+.about-lede {
+  font-size: 1.05rem;
+  color: var(--muted, #9bbfa6);
+  margin: 0 0 1.5rem;
+  max-width: 65ch;
+}
+.about-section { margin: 2rem 0; }
+.about-section h2 {
+  font-size: 1.25rem;
+  color: var(--accent, #4ade80);
+  margin: 0 0 0.5rem;
+  border-bottom: 1px solid var(--border, #2a5a3a);
+  padding-bottom: 0.3rem;
+}
+.about-section p { margin: 0.7rem 0; }
+.about-section ul {
+  padding-left: 1.4rem;
+  margin: 0.6rem 0;
+}
+.about-section ul li { margin: 0.35rem 0; }
+.about-section a {
+  color: var(--accent, #4ade80);
+}
+.about-features ul {
+  padding-left: 1.4rem;
+}
+.about-features li { margin: 0.55rem 0; }
+
+.about-plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+.about-plan {
+  background: var(--panel, #16331f);
+  border: 1px solid var(--border, #2a5a3a);
+  border-radius: 12px;
+  padding: 1.25rem 1.35rem 1.4rem;
+}
+.about-plan h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.4rem;
+  color: var(--accent, #4ade80);
+  border: 0;
+  padding: 0;
+}
+.about-plan-price {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+  color: var(--text, #e6f4ea);
+}
+.about-plan ul {
+  padding-left: 1.2rem;
+  margin: 0.5rem 0 0.8rem;
+}
+.about-plan-pro {
+  border-color: var(--accent, #4ade80);
+  background: linear-gradient(140deg,
+              var(--panel, #16331f),
+              rgba(74, 222, 128, 0.1));
+}
+
+.about-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+.about-table th, .about-table td {
+  border-bottom: 1px solid var(--border, #2a5a3a);
+  padding: 0.55rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.about-table th { color: var(--accent, #4ade80); font-weight: 600; }
+
+.about-contact-card {
+  background: var(--panel, #16331f);
+  border: 1px solid var(--border, #2a5a3a);
+  border-radius: 12px;
+  padding: 1.2rem 1.4rem;
+}
+.about-contact-email {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+.about-contact-email a {
+  color: var(--accent, #4ade80);
+  text-decoration: none;
+}
+
+.about-footer {
+  text-align: center;
+  padding: 1.5rem 1rem 2.5rem;
+  color: var(--muted, #9bbfa6);
+  font-size: 0.85rem;
+  border-top: 1px solid var(--border, #2a5a3a);
+  margin-top: 2rem;
+}
+.about-footer a { color: var(--accent, #4ade80); text-decoration: none; }
+
 /* === /ingest facelift ===
    Lead with the primary action (Take photo / From gallery as big
    icon-and-label cards), keep detection scope as visible secondary

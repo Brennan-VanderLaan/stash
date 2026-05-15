@@ -83,7 +83,12 @@ services:
       # Env-var form requires COMMA separator — a YAML ``|-`` block
       # would be parsed as one giant regex with embedded newlines,
       # which is what bit a previous version of this file.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$
+      # /about/ pages added — Stripe + similar KYC partners require
+      # the business name, pricing, refund policy, sub-processor
+      # list, etc. to be publicly reachable without a login.  These
+      # also need a matching prefix in app.py's _AUTH_BYPASS_PREFIXES
+      # so the stash actor middleware doesn't 403 them.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

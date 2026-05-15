@@ -1,0 +1,65 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>Pricing</h1>
+  <p class="about-lede">
+    One paid tier.  Pay monthly via Stripe, cancel anytime — no
+    contract, no surprise upgrades.
+  </p>
+</section>
+
+<section class="about-plans-grid">
+  <article class="about-plan">
+    <h2>Free</h2>
+    <p class="about-plan-price">$0 / month</p>
+    <ul>
+      <li>1,000 AI calls per month</li>
+      <li>5 GB photo uploads per month</li>
+      <li>$1 / day AI-cost ceiling</li>
+      <li>Single tenant</li>
+      <li>All features available — only the quotas differ</li>
+    </ul>
+    <p class="text-sm text-muted">
+      Right for one person inventorying one household, light use.
+    </p>
+  </article>
+
+  <article class="about-plan about-plan-pro">
+    <h2>Pro</h2>
+    <p class="about-plan-price">$9 / month</p>
+    <ul>
+      <li>50,000 AI calls per month (50× Free)</li>
+      <li>100 GB photo uploads per month (20× Free)</li>
+      <li>$50 / day AI-cost ceiling</li>
+      <li>Multi-tenant (run several households side by side)</li>
+      <li>Priority support via {{ contact_email }}</li>
+    </ul>
+    <p class="text-sm text-muted">
+      Right for households that have outgrown the Free quotas or want
+      to ingest several boxes in one session without watching the meter.
+    </p>
+  </article>
+</section>
+
+<section class="about-billing-notes">
+  <h2>How billing works</h2>
+  <ul>
+    <li>
+      Subscriptions run on a 30-day rolling cycle billed by Stripe.
+      The first charge happens immediately on upgrade.
+    </li>
+    <li>
+      You can cancel anytime from the Stripe Customer Portal linked
+      from <code>/usage</code>; access continues until the end of the
+      current billing period.
+    </li>
+    <li>
+      We do not store or process card details directly — Stripe is
+      the only party that sees them.
+    </li>
+    <li>
+      Refunds: see <a href="/about/refunds">/about/refunds</a>.
+    </li>
+  </ul>
+</section>
+{% endblock %}

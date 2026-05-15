@@ -1,0 +1,74 @@
+{% extends "about/_layout.html" %}
+{% block content %}
+<section class="about-hero">
+  <h1>{{ business_name }} — household inventory that doesn't hate you.</h1>
+  <p class="about-lede">
+    Snap a photo of a pile, and {{ business_name }} sorts it into boxes
+    you can label, find, and audit.  Designed for the moment six months
+    from now when you need to remember which box your passport ended up
+    in.
+  </p>
+</section>
+
+<section class="about-features">
+  <h2>What you get</h2>
+  <ul>
+    <li>
+      <strong>Photo ingest.</strong>  Drop a photo into the app and an AI
+      vision model picks out every distinct item, with bounding boxes.
+      You review and accept; nothing lands in a box without your
+      blessing.
+    </li>
+    <li>
+      <strong>Boxes, rooms, floors.</strong>  Items live in boxes; boxes
+      live in rooms on floors of locations (homes, garages,
+      storage units).  Drag rooms onto a floorplan — sketch one in the
+      browser if you don't have a plan handy.
+    </li>
+    <li>
+      <strong>Tags + AI suggestions.</strong>  Tag any item; tag every
+      item in a box in one tap; let the AI propose tags from the
+      photos.
+    </li>
+    <li>
+      <strong>QR labels.</strong>  Print Avery shipping-label sheets
+      straight from the app.  Scan a label with your phone to jump to
+      that box's contents.
+    </li>
+    <li>
+      <strong>Audit.</strong>  Walk a box once or twice a year — swipe
+      right for "still there", left for "missing".  Missing items land
+      in a sort queue with their last known box recorded.
+    </li>
+    <li>
+      <strong>Sharing.</strong>  Hand a partner a maintainer or
+      read-only invite to your stash.  Object-level shares for one-off
+      "here's where I keep the camping gear" handoffs.
+    </li>
+    <li>
+      <strong>Your data, your copy.</strong>  Download your tenant as a
+      readable SQLite + JPEG zip any time
+      (<a href="/about/privacy">GDPR Article 20</a>).
+    </li>
+  </ul>
+</section>
+
+<section class="about-plans">
+  <h2>Plans</h2>
+  <p>
+    Free tier for personal use; a Pro tier raises every quota for
+    households that have outgrown the limits.  See
+    <a href="/about/pricing">/about/pricing</a> for the breakdown.
+  </p>
+</section>
+
+<section class="about-tldr">
+  <h2>Why does this page look so plain?</h2>
+  <p>
+    The {{ business_name }} app itself is the polished surface.  These
+    public pages exist to satisfy compliance partners (Stripe et al.)
+    that we are who we say we are and that you know what you're buying.
+    Sign in for the actual product.
+  </p>
+</section>
+{% endblock %}
