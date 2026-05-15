@@ -467,21 +467,56 @@ _SECURITY_HEADERS = {
     # Trim the Referer to the origin only on cross-origin nav.
     "Referrer-Policy": "strict-origin-when-cross-origin",
     # A baseline CSP — locks resource loads to same-origin (templates
-    # don't pull from CDNs), drops object/embed/applet, and
-    # explicitly forbids iframes (X-Frame-Options is the modern-
-    # browser path; this is the older-browser fallback).  Inline
-    # scripts are allowed because the existing templates have small
-    # snippets; tightening to nonces lands when there's bandwidth.
+    # don't pull from CDNs), drops object/embed/applet, explicitly
+    # forbids iframes (X-Frame-Options is the modern-browser path;
+    # this is the older-browser fallback), and pins form submissions
+    # to the same origin so a stolen form action can't redirect a
+    # POST off-site.  Inline scripts are allowed because the existing
+    # templates have small snippets; tightening to nonces lands when
+    # there's bandwidth.
     "Content-Security-Policy": (
         "default-src 'self'; "
         "img-src 'self' data:; "
         "style-src 'self' 'unsafe-inline'; "
         "script-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "form-action 'self'; "
         "frame-ancestors 'none'; "
+        "frame-src 'none'; "
         "object-src 'none'; "
         "base-uri 'self'"
     ),
+    # Lock the platform-level surfaces we never use.  An XSS that
+    # tried ``navigator.geolocation.getCurrentPosition`` or popped
+    # up a microphone prompt would be silently denied.  FLoC /
+    # interest-cohort opts out of Google's old behavioural-ad pool.
+    "Permissions-Policy": (
+        "camera=(), microphone=(), geolocation=(), "
+        "interest-cohort=(), payment=(), usb=(), bluetooth=(), "
+        "magnetometer=(), gyroscope=(), accelerometer=()"
+    ),
+    # Cross-Origin-Opener-Policy: same-origin isolates the browsing
+    # context so a popup opened from a malicious page can't peer
+    # into ``window.opener`` and probe stash state.  Pairs with
+    # CORP below to prevent cross-site image embedding.
+    "Cross-Origin-Opener-Policy": "same-origin",
+    # CORP refuses cross-origin loads of /uploads/{name} etc. — a
+    # rogue site cannot embed a tenant's photo via <img src=...>
+    # to confirm it exists.  All in-app references are same-origin
+    # so this is invisible to legitimate use.
+    "Cross-Origin-Resource-Policy": "same-origin",
 }
+
+
+def _is_https_request(request: Request) -> bool:
+    """True iff the request reached us over HTTPS (directly or via
+    a proxy that set X-Forwarded-Proto)."""
+    scheme = (
+        request.headers.get("X-Forwarded-Proto")
+        or request.url.scheme
+        or ""
+    ).strip().lower()
+    return scheme == "https"
 
 
 @app.middleware("http")
@@ -490,6 +525,15 @@ async def security_headers(request: Request, call_next):
     for k, v in _SECURITY_HEADERS.items():
         # Don't clobber a header a route deliberately set.
         response.headers.setdefault(k, v)
+    # HSTS only on HTTPS — sending it over plaintext would be a
+    # spec violation and breaks local dev on ``http://testserver``.
+    # Production also gets this at the edge via Caddy; this is the
+    # defense-in-depth copy.
+    if _is_https_request(request):
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains; preload",
+        )
     return response
 
 
