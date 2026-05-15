@@ -851,6 +851,23 @@
   // collapse the hero into a thin sticky KPI bar at the top of
   // the viewport.  Cheap, no scroll-event listener, naturally
   // robust to layout changes.
+  //
+  // ``rootMargin: '-48px 0px 0px 0px'`` shrinks the viewport top
+  // edge inward by 48px for intersection purposes — i.e., the
+  // sentinel has to clear the upper 48px of the actual viewport
+  // before we toggle compact.  Two reasons:
+  //   1. Avoids a twitchy boundary at scrollY=1 where a single
+  //      wheel notch flips compact mode on, the hero collapses,
+  //      content rises, the sentinel almost re-intersects, and
+  //      the user feels the page hesitate.  The buffer gives the
+  //      compact transition room to finish.
+  //   2. The page-level ``<header>`` is ~52px tall and sticky at
+  //      top:0 — anything in the upper 48px is already hidden
+  //      behind the page chrome from the user's POV, so toggling
+  //      compact while the sentinel is still "visible" there
+  //      would look broken anyway.
+  // The actual loop fix is ``overflow-anchor: none`` on the page
+  // (see style.css).  This rootMargin is just polish.
   const sentinel = document.querySelector('[data-admin-hero-sentinel]');
   if (sentinel && 'IntersectionObserver' in window) {
     new IntersectionObserver((entries) => {
@@ -859,7 +876,7 @@
           'admin-hero-compact', !e.isIntersecting,
         );
       }
-    }, { threshold: 0 }).observe(sentinel);
+    }, { threshold: 0, rootMargin: '-48px 0px 0px 0px' }).observe(sentinel);
   }
 })();
 </script>

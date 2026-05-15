@@ -1906,6 +1906,26 @@ body.about-public {
    Z-index 30 stays below the page-level <header> (z 100) so the
    header always sits on top.  The hero's background is opaque so
    content scrolling underneath doesn't bleed through. */
+
+/* Disable Chrome's scroll-anchoring on the admin page.  Reason:
+   the sticky hero collapses while in flow, so its flow-box height
+   drops ~7rem when compact mode kicks in.  With the default
+   ``overflow-anchor: auto`` Chrome reads that as "content above
+   the viewport just changed height" and tugs ``scrollY`` back
+   toward zero to "preserve" the visible anchor.  That pulls the
+   user past the sentinel boundary in the OPPOSITE direction —
+   IntersectionObserver fires the inverse edge, hero re-expands,
+   anchoring tugs the other way, hero re-collapses.  Visible
+   jitter loop, scroll feels "stuck at the top."  Feedback #12.
+
+   With anchoring off, the layout shift is visible (content rises
+   as the hero shrinks) but the toggle happens exactly once per
+   scroll past the sentinel and the user can scroll freely. */
+html:has(.admin-hero),
+body:has(.admin-hero) {
+  overflow-anchor: none;
+}
+
 .admin-hero-sentinel {
   height: 1px;
   margin: 0 0 -1px;
