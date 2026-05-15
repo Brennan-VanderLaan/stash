@@ -218,6 +218,118 @@ def test_backup_readonly_member_forbidden(tmp_path, monkeypatch):
     assert r.status_code == 403
 
 
+def _real_encrypted_file(app_mod, tenant_id: int, name: str, plaintext: bytes):
+    """Drop a *properly* encrypted blob into the tenant's uploads dir
+    so the GDPR decrypt path can read it back.  Uses the app's own
+    encrypt helper so the bytes match what production writes."""
+    app_mod._write_encrypted(tenant_id, name, plaintext)
+
+
+def test_gdpr_export_includes_readme_and_manifest(tmp_path, monkeypatch):
+    """GDPR bundle ships a README.md, a per-tenant SQLite file, and a
+    manifest tagged ``bundle_kind=gdpr_portability``."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        r = c.get("/usage/gdpr-export")
+        assert r.status_code == 200, r.text
+        zip_bytes = r.content
+    with _open_zip(zip_bytes) as zf:
+        names = set(zf.namelist())
+        assert "README.md" in names
+        assert "stash.db" in names
+        assert "manifest.json" in names
+        readme = zf.read("README.md").decode()
+        manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["bundle_kind"] == "gdpr_portability"
+    assert "Article 20" in manifest["gdpr_article"]
+    assert manifest["tenant_id"] == ids["t1"]
+    assert manifest["exported_by"] == "me@example.com"
+    # README should plain-language explain the bundle.
+    assert "GDPR Article 20" in readme
+    assert "stash.db" in readme
+    assert "uploads/" in readme
+
+
+def test_gdpr_export_decrypts_photos(tmp_path, monkeypatch):
+    """Properly-encrypted uploads round-trip as plaintext in the zip
+    so the data subject can read them without STASH_KEK."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    # Stash the fake ciphertext placeholders, replace with a real
+    # encrypted file we can verify on the way out.
+    plaintext = b"hello-this-is-my-photo-bytes"
+    _real_encrypted_file(app_mod, ids["t1"], "mine-real.jpg", plaintext)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        r = c.get("/usage/gdpr-export")
+        assert r.status_code == 200
+    with _open_zip(r.content) as zf:
+        # The fake ciphertext file ('mine.jpg') can't decrypt — it
+        # gets counted as a decrypt error.  The real one round-trips
+        # as plaintext.
+        assert "uploads/mine-real.jpg" in zf.namelist()
+        assert zf.read("uploads/mine-real.jpg") == plaintext
+        manifest = json.loads(zf.read("manifest.json"))
+    # Other tenant's data must not appear.
+    assert manifest["decrypt_errors"] >= 1  # the placeholder ciphertext
+    assert manifest["uploads_count"] == 1   # only the real one round-trips
+
+
+def test_gdpr_export_audit_log(tmp_path, monkeypatch):
+    """A gdpr.export audit row lands each download — distinct action
+    from backup.export so the two flows are individually auditable."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        c.get("/usage/gdpr-export")
+    with app_mod.db() as conn:
+        rows = conn.execute(
+            "SELECT actor_email, action, target_id, metadata_json "
+            "FROM audit_log WHERE action = 'gdpr.export'"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["actor_email"] == "me@example.com"
+    assert rows[0]["target_id"] == ids["t1"]
+    meta = json.loads(rows[0]["metadata_json"])
+    assert meta["bundle_kind"] == "gdpr_portability"
+
+
+def test_gdpr_export_readonly_member_forbidden(tmp_path, monkeypatch):
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'guest@example.com', 'readonly', "
+            " CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    headers = {"X-Forwarded-Email": "guest@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        r = c.get("/usage/gdpr-export", follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_gdpr_export_isolates_to_my_tenant(tmp_path, monkeypatch):
+    """Other tenants' rows must not appear in the bundle."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    headers = {"X-Forwarded-Email": "me@example.com"}
+    with TestClient(app_mod.app, headers=headers) as c:
+        r = c.get("/usage/gdpr-export")
+    with _open_zip(r.content) as zf:
+        db_path = tmp_path / "gdpr-extracted.db"
+        db_path.write_bytes(zf.read("stash.db"))
+    conn = sqlite3.connect(db_path)
+    try:
+        boxes = conn.execute("SELECT name, tenant_id FROM boxes").fetchall()
+        items = conn.execute("SELECT name, tenant_id FROM items").fetchall()
+    finally:
+        conn.close()
+    assert boxes == [("Mine box", ids["t1"])]
+    assert items == [("Whisk", ids["t1"])]
+
+
 def test_backup_zip_db_passes_integrity_check(tmp_path, monkeypatch):
     """The pruned SQLite file is valid + passes integrity_check.
     A botched VACUUM or schema mismatch would fail this; same gate

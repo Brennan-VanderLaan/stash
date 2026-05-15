@@ -201,6 +201,17 @@
     {{ _("Download backup") }}
   </a>
 </div>
+{# ── GDPR portability ─────────────────────────────────────────── #}
+<div class="card maintenance-card">
+  <div class="card-title">{{ _("Download my data") }}</div>
+  <p class="text-sm text-muted">
+    {{ _("GDPR Article 20 portability bundle — your tenant's DB rows + decrypted photos + a README explaining the layout. Different from the encrypted backup above: you can read this zip without STASH_KEK and take it to another service.") }}
+  </p>
+  <a href="/usage/gdpr-export" class="btn btn-primary btn-block"
+     download>
+    {{ _("Download my data") }}
+  </a>
+</div>
 {% endif %}
 
 {# ── Members ──────────────────────────────────────────────────── #}

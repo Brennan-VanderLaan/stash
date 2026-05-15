@@ -4490,6 +4490,37 @@ def usage_page(
     return _render_usage_page(request, invite_url=invite_url)
 
 
+@app.get("/usage/gdpr-export")
+def usage_gdpr_export(request: Request):
+    """GDPR Article 20 portability bundle — same per-tenant data as
+    the operator-format backup, but photos are *decrypted* into the
+    zip + a plain-language README explains the layout.  Maintainer-
+    only.  Audit-logged as ``gdpr.export``."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is None:
+        raise HTTPException(403, "No active tenant")
+    try:
+        zip_bytes, manifest = dao_backups.build_gdpr_zip(actor)
+    except ForbiddenError:
+        raise HTTPException(403)
+    except NotFoundError:
+        raise HTTPException(404)
+    safe_name = "".join(
+        c if c.isalnum() or c in "-_" else "-" for c in manifest["tenant_name"]
+    )[:40] or f"tenant-{actor.tenant_id}"
+    stamp = manifest["exported_at"][:10].replace("-", "")
+    filename = f"stash-data-{safe_name}-{stamp}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Backup-Sha256": manifest["zip_sha256"],
+            "X-GDPR-Article": "20",
+        },
+    )
+
+
 @app.get("/usage/backup")
 def usage_backup(request: Request):
     """Per-tenant backup zip download.  Maintainer-only — readonly

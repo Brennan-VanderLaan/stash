@@ -192,6 +192,204 @@ def build_tenant_zip(actor: Actor) -> tuple[bytes, dict]:
     return zip_bytes, manifest
 
 
+def build_gdpr_zip(actor: Actor) -> tuple[bytes, dict]:
+    """GDPR Article 20 portability bundle for the actor's tenant.
+
+    Same DB shape as :func:`build_tenant_zip` (per-tenant filtered
+    SQLite snapshot), but photos are *decrypted* into the zip so the
+    user can read their data without ``STASH_KEK``.  Article 20
+    requires "structured, commonly used, machine-readable" — the
+    SQLite + JPEGs + manifest combo satisfies that.
+
+    Includes a top-level ``README.md`` that names every artefact
+    and explains the format in plain language, because the
+    downloader is the data subject, not an engineer.
+
+    Maintainer-only — same role gate as the encrypted backup."""
+    import vault as _vault
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError("no active tenant")
+    tenant_id = actor.tenant_id
+
+    with db() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".db", prefix="stash-gdpr-")
+    os.close(fd)
+    tmp = Path(tmp_path)
+    try:
+        src = sqlite3.connect(_live_db_path())
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+                dst.execute("PRAGMA foreign_keys = OFF")
+                row_counts: dict[str, int] = {}
+                for table in _TENANT_OWNED_TABLES:
+                    dst.execute(
+                        f"DELETE FROM {table} WHERE tenant_id != ?",
+                        (tenant_id,),
+                    )
+                    remain = dst.execute(
+                        f"SELECT COUNT(*) FROM {table} "
+                        f"WHERE tenant_id = ?",
+                        (tenant_id,),
+                    ).fetchone()[0]
+                    row_counts[table] = remain
+                dst.execute(
+                    "DELETE FROM tenants WHERE id != ?", (tenant_id,),
+                )
+                row_counts["tenants"] = 1
+                dst.commit()
+                dst.execute("VACUUM")
+            finally:
+                dst.close()
+        finally:
+            src.close()
+
+        kek = _vault.get_kek()
+        manifest = {
+            "format_version": _BACKUP_FORMAT_VERSION,
+            "bundle_kind": "gdpr_portability",
+            "gdpr_article": "Article 20 — Right to data portability",
+            "tenant_id": tenant_id,
+            "tenant_name": _tenant_name(tenant_id),
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_by": actor.email,
+            "row_counts": row_counts,
+            "stash_version": os.environ.get("STASH_VERSION", "dev"),
+            "git_sha": os.environ.get("STASH_GIT_SHA", "")[:12],
+            "notes": (
+                "Photos are decrypted into uploads/.  The SQLite file "
+                "uses standard schema; open with `sqlite3 stash.db` or "
+                "any DB browser.  See README.md for the full layout."
+            ),
+        }
+        readme = _gdpr_readme(manifest)
+
+        buf = io.BytesIO()
+        decrypt_errors = 0
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("README.md", readme)
+            zf.write(tmp, arcname="stash.db")
+            uploads_root = _live_uploads_root() / str(tenant_id)
+            file_count = 0
+            file_bytes = 0
+            if uploads_root.exists():
+                with db() as conn:
+                    for p in sorted(uploads_root.iterdir()):
+                        if not p.is_file():
+                            continue
+                        try:
+                            plaintext = _vault.decrypt_for_tenant(
+                                conn, tenant_id, kek, p.read_bytes(),
+                            )
+                        except Exception:
+                            # A blob we can't decrypt (rotated KEK,
+                            # bit-rot) isn't fatal — we record the
+                            # count + skip it so the user knows
+                            # something didn't make it.
+                            decrypt_errors += 1
+                            continue
+                        zf.writestr(
+                            f"uploads/{p.name}", plaintext,
+                        )
+                        file_count += 1
+                        file_bytes += len(plaintext)
+            manifest["uploads_count"] = file_count
+            manifest["uploads_bytes"] = file_bytes
+            manifest["decrypt_errors"] = decrypt_errors
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+        zip_bytes = buf.getvalue()
+        manifest["zip_bytes"] = len(zip_bytes)
+        manifest["zip_sha256"] = hashlib.sha256(zip_bytes).hexdigest()
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+    _audit_gdpr_export(tenant_id, actor.email, manifest)
+    return zip_bytes, manifest
+
+
+def _gdpr_readme(manifest: dict) -> str:
+    """Plain-language README explaining the bundle's contents to a
+    non-engineer data subject."""
+    return f"""# Your Stash data export
+
+This zip is your personal copy of everything Stash has stored about
+your tenant, exported under **GDPR Article 20 (Right to data
+portability)**.
+
+## Tenant
+- Name: {manifest['tenant_name']}
+- Tenant ID: {manifest['tenant_id']}
+- Exported by: {manifest['exported_by']}
+- Exported at (UTC): {manifest['exported_at']}
+
+## Contents
+- `stash.db` — SQLite database with every row in your tenant: boxes,
+  items, rooms, locations, tags, shares, audit log, etc.  Open it
+  with the `sqlite3` command-line tool or any free DB browser
+  (e.g. https://sqlitebrowser.org/).  Schemas are standard — column
+  names match what you see in the Stash UI.
+- `uploads/` — every photo + thumbnail you've uploaded, **decrypted**
+  to standard JPEG.  Filenames match the values in the `items.photo`
+  / `items.thumb` columns.
+- `manifest.json` — machine-readable summary (row counts, byte
+  totals, SHA-256 of this archive).
+- `README.md` — this file.
+
+## What's NOT in here
+- Other tenants' data (this export is scoped to your tenant only).
+- Operator-level audit logs (those track platform-wide events and
+  belong to the operator, not you).
+- Encrypted-at-rest cipher material (the KEK).  You don't need it;
+  photos are already decrypted in `uploads/`.
+
+## Row counts in this bundle
+""" + "\n".join(
+        f"- `{table}`: {count}" for table, count in manifest["row_counts"].items()
+    ) + f"""
+
+## Notes
+- {manifest['notes']}
+- Stash version at export: {manifest['stash_version']}
+- Git SHA at export: {manifest['git_sha'] or 'unknown'}
+"""
+
+
+def _audit_gdpr_export(tenant_id: int, actor_email: str, manifest: dict) -> None:
+    summary = {
+        "format_version": manifest["format_version"],
+        "bundle_kind": "gdpr_portability",
+        "uploads_count": manifest["uploads_count"],
+        "uploads_bytes": manifest["uploads_bytes"],
+        "decrypt_errors": manifest["decrypt_errors"],
+        "zip_bytes": manifest["zip_bytes"],
+        "zip_sha256": manifest["zip_sha256"],
+    }
+    with db() as conn:
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=actor_email,
+            action="gdpr.export",
+            target_kind="tenant",
+            target_id=tenant_id,
+            metadata=summary,
+        )
+        conn.commit()
+    _log.info(
+        "gdpr.export tenant_id=%s sha256=%s bytes=%d files=%d",
+        tenant_id, manifest["zip_sha256"], manifest["zip_bytes"],
+        manifest["uploads_count"],
+    )
+
+
 def _tenant_name(tenant_id: int) -> str:
     with db() as conn:
         row = conn.execute(
