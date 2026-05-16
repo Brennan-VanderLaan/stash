@@ -236,7 +236,37 @@ document.addEventListener('submit', function(e) {
   if (!form) return;
   const id = form.id.replace(/^card-/, '');
   if (croppers[id]) finalizeCrop(id);
+  // Feedback #44: after Accept / Reject the server 303s back to
+  // /queue, which the browser handles as a fresh GET — scrolling
+  // the user straight to the top of the page mid-sort.  Stash the
+  // current scrollY so the post-redirect handler below can put
+  // them back where they were.  Session storage (not local) so
+  // the marker doesn't survive a tab close or hop to /usage.
+  try {
+    sessionStorage.setItem('queue:scrollY', String(window.scrollY));
+  } catch (_) { /* private mode / storage blocked — degrade silently */ }
 });
+
+// Page-load scroll restore — pairs with the form-submit save above.
+// Runs once per page render; clears the marker immediately so a
+// later visit to /queue from elsewhere starts at the top.  Uses
+// instant scroll (no smooth animation) to avoid a visible "lurch
+// from top to where I was" right after the redirect lands.
+(function() {
+  try {
+    const stored = sessionStorage.getItem('queue:scrollY');
+    if (stored === null) return;
+    sessionStorage.removeItem('queue:scrollY');
+    const y = parseInt(stored, 10);
+    if (Number.isFinite(y) && y > 0) {
+      // Wait one frame so the page layout has settled (cards
+      // rendered, fonts swapped) before we measure-against-max.
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: y, behavior: 'instant' });
+      });
+    }
+  } catch (_) { /* no-op */ }
+})();
 
 function toggleEmptyState() {
   const empty = document.querySelector('.queue-empty');
