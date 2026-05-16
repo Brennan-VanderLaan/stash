@@ -143,6 +143,50 @@ def test_leaderboard_page_renders_for_authed_user(client):
     assert "contrib" in r.text
 
 
+def test_star_tier_table_has_distinct_titles_per_threshold(client):
+    """The per-viewer celebration copy on /leaderboard fans out
+    over 20+ tiers (feedback #36).  Pin a sampling at known
+    thresholds so a future "let me trim some" PR trips."""
+    from app import _star_tier
+    # Bench (0).
+    assert "bench" in _star_tier(0)["title"].lower()
+    # First star — singular grammar matters.
+    assert "1 star" in _star_tier(1)["title"]
+    assert "first" in _star_tier(1)["title"].lower()
+    # Mid-range tiers each render their own message; titles
+    # are distinct (no two adjacent counts collapse to the
+    # same copy).
+    titles = {_star_tier(n)["title"] for n in (
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 50, 75, 100, 150,
+    )}
+    assert len(titles) >= 18, (
+        "expected each milestone threshold to surface a distinct title"
+    )
+    # The {n}-templated tiers interpolate the actual count, not
+    # the threshold value.
+    assert "47 stars" in _star_tier(47)["title"]   # falls in the 30-tier bucket
+    assert "201 stars" in _star_tier(201)["title"] # 150+ bucket
+
+
+def test_leaderboard_renders_tier_copy_inline(client):
+    """The /leaderboard page actually renders the tier-specific
+    title + body for the viewer's current count."""
+    from dao import feedback as dao_feedback
+    me = client.test_email
+    # Seed a single shipped feedback to land in the "1 star" tier.
+    for _ in range(1):
+        with client.app_module.db() as conn:
+            conn.execute(
+                "INSERT INTO feedback (tenant_id, actor_email, body, status) "
+                "VALUES (?, ?, 'thanks', 'done')",
+                (client.test_tenant_id, me),
+            )
+            conn.commit()
+    page = client.get("/leaderboard").text
+    assert "1 star" in page
+    assert "first one" in page.lower()
+
+
 def test_usage_renders_your_contributions_card(client):
     """``/usage#contributions`` shows the user's star count + a
     list of their feedback submissions with status badges."""

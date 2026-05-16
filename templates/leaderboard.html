@@ -34,35 +34,13 @@
     {% endif %}
   </div>
   <div class="leaderboard-you-text">
-    {% if your_stars == 0 %}
-    <h2>You're on the bench.</h2>
-    <p>
-      Hit the Feedback button on any page when you spot a bug or
-      have an idea.  If we ship a fix or a feature you sent in,
-      you earn a star here — fake currency, real warm feelings.
-    </p>
-    {% elif your_stars == 1 %}
-    <h2>You have <strong>1 star</strong>.</h2>
-    <p>
-      Thanks for filing the thing that became your first ship.
-      That counts.  We're already a little better because you
-      paid attention.  Keep going.
-    </p>
-    {% elif your_stars < 5 %}
-    <h2>You have <strong>{{ your_stars }} stars</strong>.</h2>
-    <p>
-      Every one of those is a fix or a feature that exists
-      because you wrote it down and sent it.  You're shaping
-      the app.  Genuinely — thank you.
-    </p>
-    {% else %}
-    <h2>You have <strong>{{ your_stars }} stars</strong>. 🎉</h2>
-    <p>
-      You're a power contributor.  This app is meaningfully
-      better because of how often you noticed and how often you
-      told us.  We see you.  Keep doing the thing.
-    </p>
-    {% endif %}
+    {# Per-tier celebration copy comes from the route's
+       _star_tier() — 20 distinct tiers from 0 → 150+ shipped
+       contributions.  Feedback #36 — "extend the star
+       responses, at least a dozen more, sassy but true to the
+       application, friendly, thankful, but definitely funny." #}
+    <h2>{{ your_tier.title }}</h2>
+    <p>{{ your_tier.body }}</p>
     {% if you_excluded %}
     <p class="text-sm text-muted leaderboard-you-excluded">
       You're hidden from the global podium below

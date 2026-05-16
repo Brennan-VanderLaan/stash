@@ -5134,6 +5134,112 @@ def submit_feedback(
     )
 
 
+def _star_tier(stars: int) -> dict:
+    """Pick the per-viewer celebration copy for ``stars`` shipped
+    feedback rows.  Tiers are roughly logarithmic — every single
+    star earns its own one-liner up to 10, then bigger jumps to
+    keep the celebration paced.  Tone target (feedback #36):
+    sassy, true to the app, friendly, thankful, funny.
+
+    Each tier returns ``{title, body}``; the template renders
+    inside the .leaderboard-you panel.  The bisect-like pick
+    walks the table top-down and stops at the first ``stars >=
+    threshold`` match — order matters."""
+    tiers = (
+        # (min_stars, title, body)
+        (150, "{n} stars. We can't keep up with you.",
+            "Look.  At this point you've filed more shipped feedback "
+            "than most people file across every product they use, "
+            "ever.  This is genuinely rare.  Stay weird."),
+        (100, "{n} stars. Co-founder energy.",
+            "We don't have equity to give you (sole prop, no shares "
+            "to issue) but we have very, very deep gratitude and an "
+            "open invitation: tell us what to build next, and we'll "
+            "build it."),
+        (75,  "{n} stars. The operator wants to know your day job.",
+            "Seventy-five.  You have spent more attention on this app "
+            "than most QA contractors.  If you have a LinkedIn, please "
+            "drop it on the feedback form — we'd like to read it."),
+        (50,  "{n} stars. Wait, who built this?",
+            "Fifty.  At this point the operator is genuinely unsure if "
+            "they built Stash or if Stash got built around you.  "
+            "Sincere, slightly-overwhelmed thanks."),
+        (30,  "{n} stars. Are you OK?",
+            "Thirty pieces of feedback that became real changes.  At "
+            "this point we have to ask: is the app at fault, or are "
+            "you just gifted at finding the seams in things?  Either "
+            "way: thank you."),
+        (25,  "{n} stars. The rest of us look bad.",
+            "Twenty-five.  You are single-handedly making everyone "
+            "else's contribution count look modest.  This is, somehow, "
+            "both the kindest and most competitive thing happening "
+            "on the leaderboard."),
+        (20,  "{n} stars. Please touch grass.",
+            "Twenty shipped pieces of feedback.  We are concerned "
+            "about your free time but also extremely grateful for it.  "
+            "Please go outside.  But also, keep filing things."),
+        (15,  "{n} stars. You might be co-running this place.",
+            "Fifteen.  At this rate the operator should probably just "
+            "give you commit access — except this is a one-person shop "
+            "and that would be weird.  Genuine, deep, warm thanks."),
+        (12,  "{n} stars. A dozen — you can taste it.",
+            "Twelve shipped contributions.  This number sounds round "
+            "because it is round.  We promise the next milestone is "
+            "weirder."),
+        (10,  "{n} stars. Officially on the masthead.",
+            "Ten shipped contributions.  If Stash had a masthead, "
+            "you'd be on it.  Stash doesn't have a masthead.  But if "
+            "it did.  (Maybe we should make one?  Tell us via "
+            "feedback.)"),
+        (9,   "{n} stars. Closing in on double digits.",
+            "One more and you hit ten.  Which, frankly, is unhinged "
+            "behavior for what is technically a household-inventory "
+            "app.  We love it.  Keep going."),
+        (8,   "{n} stars. The operator owes you a beer.",
+            "If we ever ship a 'buy the operator a beer' button, "
+            "you get the discount.  Until then: deep, sincere thanks."),
+        (7,   "{n} stars. The lucky number — and earned.",
+            "There's a version of this app that doesn't exist because "
+            "you didn't catch the bug seven different times.  We're "
+            "glad we're not in that timeline."),
+        (6,   "{n} stars. The operator is making mental notes.",
+            "Half a dozen shipped contributions.  You see the same "
+            "friction we see.  The roadmap, quietly, is partly yours."),
+        (5,   "{n} stars. You're on the inside.",
+            "Five things shipped because you said so.  At this point "
+            "we should probably let you pick which feature is next.  "
+            "Tell us, via the feedback widget — what's annoying you "
+            "today?"),
+        (4,   "{n} stars. Officially a regular.",
+            "The operator knows your handle.  Four ships in is the "
+            "territory where 'maintenance' starts to feel like "
+            "'collaboration'.  Genuinely — thank you."),
+        (3,   "{n} stars. The pattern is real.",
+            "Three shipped fixes / features from one person is not "
+            "luck.  You're paying attention to this app the way we "
+            "wish we could.  Cardboard salutes you."),
+        (2,   "{n} stars. Wasn't a fluke.",
+            "Twice now, you noticed something off and bothered to "
+            "write it up.  The operator notices.  Stash is shaped a "
+            "little bit by your taste."),
+        (1,   "{n} star. The first one's the hardest.",
+            "Thanks for filing the thing that became your first ship.  "
+            "That counts.  We're already a little better because you "
+            "paid attention.  Keep going."),
+        (0,   "On the bench.",
+            "Hit the Feedback button on any page when you spot a bug "
+            "or have an idea.  If we ship a fix or a feature you "
+            "sent in, you earn a star here — fake currency, real "
+            "warm feelings."),
+    )
+    for threshold, title, body in tiers:
+        if stars >= threshold:
+            return {"title": title.format(n=stars), "body": body}
+    # Defensive fallback — shouldn't reach (the 0 tier matches
+    # any non-negative count).
+    return {"title": "On the bench.", "body": ""}
+
+
 @app.get("/leaderboard", response_class=HTMLResponse)
 def leaderboard_page(request: Request):
     """Top-N feedback contributors across the whole stash —
@@ -5185,6 +5291,8 @@ def leaderboard_page(request: Request):
                 and your_handle_row.get("revoked_at") is not None
             ),
             "you_excluded": you_excluded,
+            # Per-tier celebration copy (feedback #36).
+            "your_tier": _star_tier(your_stars),
         },
     )
 
