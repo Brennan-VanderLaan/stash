@@ -1134,6 +1134,41 @@ def _tool_admin_set_feedback_status(
 
 
 @_tool(
+    "admin_set_feedback_urgent",
+    description=(
+        "Operator-only.  Flip the ``urgent`` flag on a feedback "
+        "row.  Urgent rows sort to the top of each /admin kanban "
+        "column and render with a red left border + 🔥 pill so an "
+        "operator scanning the queue can't miss them.  Pass "
+        "``urgent=true`` to flag, ``urgent=false`` to clear."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "feedback_id": {"type": "integer"},
+            "urgent": {"type": "boolean"},
+        },
+        "required": ["feedback_id", "urgent"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_set_feedback_urgent(
+    actor: Actor, feedback_id: int, urgent: bool,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    try:
+        updated = dao_feedback.set_urgent(
+            int(feedback_id), bool(urgent),
+            operator_email=actor.email or "operator",
+        )
+    except NotFoundError as exc:
+        return _tool_text_result(f"Not found: {exc}", is_error=True)
+    return {"ok": True, "feedback": updated}
+
+
+@_tool(
     "admin_feedback_counts",
     description=(
         "Operator-only.  Per-status counts for the feedback queue "

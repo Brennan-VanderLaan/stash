@@ -159,12 +159,15 @@
       </header>
       <div class="kanban-column-body">
         {% for fb in fb_buckets[col_key] %}
-        <article class="kanban-card kanban-card-{{ fb.status }}"
+        <article class="kanban-card kanban-card-{{ fb.status }}{% if fb.urgent %} kanban-card-urgent{% endif %}"
                  data-kanban-card
                  data-kanban-tenant="{{ fb.tenant_name or '' }}"
                  data-kanban-search="{{ (fb.body or '') ~ ' ' ~ (fb.actor_email or '') ~ ' ' ~ (fb.source_url or '') }}">
           <header class="kanban-card-head">
             <span class="kanban-card-id">#{{ fb.id }}</span>
+            {% if fb.urgent %}
+            <span class="pill pill-urgent" title="Flagged urgent">🔥 urgent</span>
+            {% endif %}
             <span class="kanban-card-when">{{ fb.created_at[:16] }}</span>
           </header>
           <div class="kanban-card-body">{{ fb.body }}</div>
@@ -205,6 +208,14 @@
               </form>
               {% endif %}
             {% endfor %}
+            <form method="post" action="/admin/feedback/{{ fb.id }}/urgent" style="display:inline;">
+              <input type="hidden" name="urgent" value="{{ '0' if fb.urgent else '1' }}">
+              <button type="submit"
+                      class="btn btn-sm kanban-card-action{% if fb.urgent %} kanban-card-action-urgent-on{% else %} kanban-card-action-urgent-off{% endif %}"
+                      title="{% if fb.urgent %}Clear urgent flag{% else %}Flag as urgent{% endif %}">
+                {% if fb.urgent %}✖ urgent{% else %}🔥 urgent{% endif %}
+              </button>
+            </form>
           </footer>
         </article>
         {% endfor %}

@@ -2836,6 +2836,28 @@ body.admin-hero-compact .admin-kpi-foot {
 .kanban-card-action-done { color: var(--success); }
 .kanban-card-action-rejected { color: var(--danger); }
 .kanban-card-action-accepted { color: var(--info); }
+/* Urgent flag — feedback #45.  Cards flagged urgent sort to the
+   top of each kanban column (server-side ORDER BY) and get a red
+   left border + corner pill so they're impossible to miss on a
+   crowded queue. */
+.kanban-card-urgent {
+  border-left: 4px solid var(--danger);
+  background: linear-gradient(90deg,
+              rgba(248, 113, 113, 0.08),
+              var(--panel) 18%);
+}
+.pill-urgent {
+  background: rgba(248, 113, 113, 0.18);
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.5);
+  font-weight: 700;
+}
+.kanban-card-action-urgent-off { color: var(--danger); }
+.kanban-card-action-urgent-on {
+  background: var(--danger);
+  color: var(--bg);
+  border-color: var(--danger);
+}
 
 /* Activity feed — compact rows aligned to a grid. */
 .admin-activity {

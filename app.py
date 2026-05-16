@@ -1644,6 +1644,16 @@ def migrate_db():
             conn, "feedback", "source",
             "TEXT NOT NULL DEFAULT 'user_widget'",
         )
+        # Operator-side severity flag — feedback #45 "It would be
+        # useful to be able to mark feedback/errors as 'urgent' if
+        # necessary - ie if a noted bug is a major usage blocking
+        # issue vs standard feedback."  Default 0 (standard); the
+        # /admin queue sorts urgent rows to the top of each kanban
+        # column so they're impossible to miss.
+        _add_column_if_missing(
+            conn, "feedback", "urgent",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
 
         _migrate_to_multi_tenant(conn)
         conn.commit()
@@ -5662,6 +5672,29 @@ def admin_feedback_status(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin#feedback", status_code=303)
+
+
+@app.post("/admin/feedback/{feedback_id}/urgent")
+def admin_feedback_urgent(
+    request: Request,
+    feedback_id: int,
+    urgent: str = Form(...),
+):
+    """Operator flips the urgent flag on a feedback row.  ``urgent``
+    form value is ``1`` or ``0`` — the toggle path posts the opposite
+    of whatever the card was rendered with, so a missed click just
+    flips back.  Audit-logged via dao_feedback.set_urgent (feedback
+    #45)."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_feedback.set_urgent(
+            feedback_id, urgent.strip() == "1",
+            operator_email=actor.email or "operator",
+        )
     except NotFoundError:
         raise HTTPException(404)
     return RedirectResponse("/admin#feedback", status_code=303)

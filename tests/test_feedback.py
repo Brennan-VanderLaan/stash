@@ -458,6 +458,133 @@ def test_dao_create_with_explicit_source(client):
         )
 
 
+# ── urgent flag (feedback #45) ──────────────────────────────────────
+
+
+def test_set_urgent_persists_and_audit_logs(client):
+    """DAO ``set_urgent`` flips the column + writes an audit_log row
+    so an operator history shows who escalated which feedback when."""
+    fb_id = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="urgent test",
+    )
+    client.app_module.dao_feedback.set_urgent(
+        fb_id, True, operator_email="op@example.com",
+    )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT urgent FROM feedback WHERE id = ?", (fb_id,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT actor_email, action, target_id FROM audit_log "
+            "WHERE target_kind = 'feedback' AND target_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (fb_id,),
+        ).fetchone()
+    assert row["urgent"] == 1
+    assert audit["actor_email"] == "op@example.com"
+    assert audit["action"] == "feedback.urgent"
+
+    # Clearing the flag writes a distinct ``feedback.urgent.clear``
+    # audit verb so the trail shows both directions.
+    client.app_module.dao_feedback.set_urgent(
+        fb_id, False, operator_email="op@example.com",
+    )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT urgent FROM feedback WHERE id = ?", (fb_id,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT action FROM audit_log "
+            "WHERE target_kind = 'feedback' AND target_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (fb_id,),
+        ).fetchone()
+    assert row["urgent"] == 0
+    assert audit["action"] == "feedback.urgent.clear"
+
+
+def test_list_for_operator_sorts_urgent_first(client):
+    """Operator queue reads return urgent rows ahead of non-urgent
+    in each status bucket — the whole point of the flag."""
+    a = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="older standard",
+    )
+    b = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="urgent middle",
+    )
+    c = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="newer standard",
+    )
+    client.app_module.dao_feedback.set_urgent(
+        b, True, operator_email="op@example.com",
+    )
+    rows = client.app_module.dao_feedback.list_for_operator(status="open")
+    bodies = [r["body"] for r in rows]
+    # Urgent row first regardless of created_at order; non-urgent
+    # rows fall in newest-first order beneath.
+    assert bodies.index("urgent middle") < bodies.index("newer standard")
+    assert bodies.index("urgent middle") < bodies.index("older standard")
+    assert bodies.index("newer standard") < bodies.index("older standard")
+
+
+def test_admin_urgent_route_toggles_flag(client, monkeypatch):
+    """POST /admin/feedback/{id}/urgent flips the row's flag.
+    Operator-only — non-operator gets a 404 (opacity rule)."""
+    fb_id = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="route test",
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    r = client.post(
+        f"/admin/feedback/{fb_id}/urgent", data={"urgent": "1"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT urgent FROM feedback WHERE id = ?", (fb_id,),
+        ).fetchone()
+    assert row["urgent"] == 1
+
+
+def test_admin_urgent_route_404_for_non_operator(client):
+    """Non-operators hit a 404 (not 403) per /admin opacity rule."""
+    fb_id = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="x",
+    )
+    r = client.post(
+        f"/admin/feedback/{fb_id}/urgent", data={"urgent": "1"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 404
+
+
+def test_admin_queue_renders_urgent_pill(client, monkeypatch):
+    """An urgent-flagged row renders the 🔥 urgent pill in /admin."""
+    fb_id = client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="x@example.com",
+        body="render test",
+    )
+    client.app_module.dao_feedback.set_urgent(
+        fb_id, True, operator_email="op@example.com",
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    page = client.get("/admin").text
+    assert "pill-urgent" in page
+    assert "kanban-card-urgent" in page
+
+
 def test_admin_queue_renders_mcp_source_pill(client, monkeypatch):
     """The /admin feedback queue shows a source pill on rows that
     came in via MCP so the operator can spot automated findings

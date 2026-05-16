@@ -101,7 +101,12 @@ def list_for_operator(status: str | None = None, limit: int = 100) -> list[dict]
     """Operator queue read — every feedback row across tenants, joined
     with the tenant name for display.  Filter by status when set
     (default returns everything so the operator can see the queue
-    plus what's already been triaged)."""
+    plus what's already been triaged).
+
+    ``urgent`` rows sort to the top of each status bucket so a
+    flagged issue is impossible to miss when scanning the /admin
+    kanban (feedback #45).  Within urgent and within not-urgent,
+    secondary order is newest-first."""
     sql = (
         "SELECT f.*, t.name AS tenant_name "
         "FROM feedback f "
@@ -111,11 +116,51 @@ def list_for_operator(status: str | None = None, limit: int = 100) -> list[dict]
     if status and status in _VALID_STATUSES:
         sql += "WHERE f.status = ? "
         params = (status,)
-    sql += "ORDER BY f.created_at DESC LIMIT ?"
+    # ``id DESC`` as a final tiebreaker keeps the ordering
+    # deterministic for rows inserted within the same UTC second
+    # (CURRENT_TIMESTAMP has 1-s resolution).  Without it, the
+    # operator sees a row's position flip on every page reload.
+    sql += (
+        "ORDER BY COALESCE(f.urgent, 0) DESC, "
+        "         f.created_at DESC, f.id DESC LIMIT ?"
+    )
     params = params + (max(1, min(limit, 500)),)
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def set_urgent(
+    feedback_id: int, urgent: bool,
+    *, operator_email: str,
+) -> dict:
+    """Operator toggles the ``urgent`` flag on a feedback row.
+    Returns the updated row.  Audit-logged so the operator history
+    shows who flagged a row and when (compare to a tenant marking
+    their own row urgent — different action verb)."""
+    flag = 1 if urgent else 0
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE feedback SET urgent = ? WHERE id = ?",
+            (flag, feedback_id),
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"feedback {feedback_id}")
+        # Audit so an operator can later see who escalated what,
+        # alongside the existing accept/reject/done audit trail.
+        obs.write_audit(
+            conn,
+            tenant_id=None,
+            actor_email=operator_email,
+            action="feedback.urgent" if flag else "feedback.urgent.clear",
+            target_kind="feedback",
+            target_id=feedback_id,
+            metadata={"urgent": bool(flag)},
+        )
+        conn.commit()
+    _log.info("feedback.urgent feedback_id=%s urgent=%s by=%s",
+              feedback_id, bool(flag), operator_email)
+    return get(feedback_id)
 
 
 def get(feedback_id: int) -> dict:

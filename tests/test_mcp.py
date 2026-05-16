@@ -1031,6 +1031,55 @@ def test_admin_create_feedback_tags_source_mcp(tmp_path, monkeypatch):
     assert row["tenant_id"] is None
 
 
+def test_admin_set_feedback_urgent_via_mcp(tmp_path, monkeypatch):
+    """The new MCP urgent tool flips the flag from outside the
+    web UI.  Operator-only — non-operator gets a tool error.
+    Confirms the row is sorted to the top of subsequent list reads."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    older = _insert_feedback(app_mod, ids["t1"], "older standard")
+    urgent_id = _insert_feedback(app_mod, ids["t1"], "should be urgent")
+    _insert_feedback(app_mod, ids["t1"], "newer standard")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(
+            c, _headers(token), "admin_set_feedback_urgent",
+            {"feedback_id": urgent_id, "urgent": True},
+        )
+    payload = _result_json(body)
+    assert payload["ok"] is True
+    assert payload["feedback"]["urgent"] == 1
+
+    # The list_for_operator path sorts urgent first.
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_list_feedback",
+                          {"status": "open"})
+    payload = _result_json(body)
+    assert payload["feedback"][0]["body"] == "should be urgent"
+
+
+def test_admin_set_feedback_urgent_blocked_for_non_operator(tmp_path, monkeypatch):
+    """Same operator gate as the rest of the admin_* tools."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    token = _mint(app_mod, ids["t1"], "me@t1.example")
+    fb_id = _insert_feedback(app_mod, ids["t1"], "x")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(
+            c, _headers(token), "admin_set_feedback_urgent",
+            {"feedback_id": fb_id, "urgent": True},
+        )
+    assert body["result"]["isError"] is True
+
+
 def test_admin_create_feedback_blocked_for_non_operator(tmp_path, monkeypatch):
     """Same operator-gate as the rest of the admin_* tools."""
     app_mod, ids = _bootstrap(tmp_path, monkeypatch)
