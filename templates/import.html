@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Import inventory · Stash{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Import inventory</span>
+  </div>
+  <p class="text-sm text-muted">
+    Bring inventory from another tool. We map the columns to Stash
+    boxes, rooms, and items — text-first; photo extraction is on
+    the way.  Each import lands in its own
+    "<code>Imported from &lt;Source&gt;</code>" location so you can
+    Undo cleanly if it doesn't look right.
+  </p>
+</div>
+
+{# Last-import banner.  Round-trips via ``last_location_id`` query
+   so the page can render an Undo button after a redirect.  Goes
+   away after the undo (next page render won't have the param). #}
+{% if last_location_name %}
+<div class="notice notice-success">
+  <strong>Import landed.</strong>
+  Created
+  {% if request.query_params.get('items') %}
+  <strong>{{ request.query_params.get('items') }}</strong>
+  items across
+  <strong>{{ request.query_params.get('rooms') }}</strong>
+  rooms in <code>{{ last_location_name }}</code>.
+  {% endif %}
+  <form method="post" action="/import/{{ last_location_id }}/undo" style="margin-top:0.6rem;">
+    <button type="submit" class="btn btn-danger btn-sm"
+            onclick="return confirm('Cascade-delete this whole import? Items, boxes, rooms, and the auto-created location all go.');">
+      Undo this import
+    </button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-title">Upload</div>
+  <form method="post" action="/import" enctype="multipart/form-data">
+    <label>
+      Source
+      <select name="source" required>
+        {% for s in sources %}
+        <option value="{{ s.key }}"
+                {% if s.key == selected_source %}selected{% endif %}>
+          {{ s.label }}{% if not s.supports_xlsx %} (CSV only){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <small class="text-muted">
+        New sources land here as parsers are added.  Today's
+        list: {{ sources | length }}.
+      </small>
+    </label>
+
+    <label class="mt-1">
+      File
+      <input type="file" name="upload" accept=".xlsx,.xlsm,.csv" required>
+      <small class="text-muted">
+        .xlsx (preferred — Encircle's web-app export format)
+        or .csv (Save-As from Excel).
+        Photos in this format are coming in a follow-up — text
+        fields, rooms, brand/model/serial, warranty, purchase
+        info land today.
+      </small>
+    </label>
+
+    <button type="submit" class="btn btn-primary btn-block mt-1">
+      Import
+    </button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">What gets created</div>
+  <ul class="text-sm">
+    <li>A new <strong>Location</strong> named
+        <code>Imported from &lt;Source&gt; (date)</code>.</li>
+    <li>One <strong>Floor</strong> under that location, named
+        "<code>Imported</code>".</li>
+    <li>One <strong>Room</strong> under that floor for each unique
+        room in your export.</li>
+    <li>A <strong>"Loose items"</strong> box per room.  You can
+        promote items into proper boxes later via the home view or
+        by re-running them through the sort queue.</li>
+    <li>One <strong>Item</strong> per row.  Brand / model / serial
+        / warranty / purchase metadata get packed into the item's
+        notes — Stash doesn't yet have first-class columns for
+        every Encircle field, but search + audit reads still
+        match against the merged notes blob.</li>
+  </ul>
+</div>
+
+{% endblock %}

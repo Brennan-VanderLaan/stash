@@ -23,6 +23,7 @@ from dao import boxes as dao_boxes
 from dao import feedback as dao_feedback
 from dao import floors as dao_floors
 from dao import handles as dao_handles
+from dao import imports as dao_imports
 from dao import ingest_jobs as dao_ingest_jobs
 from dao import invites as dao_invites
 from dao import items as dao_items
@@ -3599,6 +3600,116 @@ def ingest_jobs_fragment(request: Request):
         request, "_ingest_jobs.html",
         {"jobs": dao_ingest_jobs.list_active(actor)},
     )
+
+
+# ── Bulk import (Encircle + future sources) ────────────────────────
+
+
+@app.get("/import", response_class=HTMLResponse)
+def import_page(
+    request: Request,
+    source: str = "encircle",
+    last_location_id: int = 0,
+):
+    """Upload form for bulk-importing inventory from external tools.
+    Currently registered sources live in :data:`dao_imports.PARSERS`;
+    the dropdown enumerates them so the user picks the right
+    parser for their export.
+
+    ``last_location_id`` round-trips from a successful import so the
+    page can render an "Undo last import" button — one-shot UX with
+    no surprises."""
+    actor: Actor = request.state.actor
+    sources = [
+        {"key": key, "label": imp.label,
+         "supports_csv": imp.parse_csv is not None,
+         "supports_xlsx": imp.parse_xlsx is not None}
+        for key, imp in dao_imports.PARSERS.items()
+    ]
+    last_location_name = None
+    if last_location_id:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT name FROM locations "
+                "WHERE id = ? AND tenant_id = ?",
+                (last_location_id, actor.tenant_id),
+            ).fetchone()
+            if row and str(row["name"]).startswith(
+                dao_imports.IMPORTED_LOCATION_PREFIX,
+            ):
+                last_location_name = row["name"]
+    return templates.TemplateResponse(
+        request, "import.html",
+        {
+            "sources": sources,
+            "selected_source": source,
+            "last_location_id": last_location_id if last_location_name else 0,
+            "last_location_name": last_location_name,
+        },
+    )
+
+
+@app.post("/import")
+async def import_execute(
+    request: Request,
+    source: str = Form(...),
+    upload: UploadFile = File(...),
+):
+    """One-shot import: parse the upload + create items in the
+    actor's tenant + redirect back to /import with the new
+    location id so the page can render the result + an Undo
+    button.
+
+    Errors at the parse layer (unknown extension, malformed file,
+    too many rows) bubble up as 400s with a human-readable
+    message; the page renders them as an alert."""
+    actor: Actor = request.state.actor
+    if not actor.tenant_id:
+        raise HTTPException(403, "Import requires an active tenant")
+    file_bytes = await upload.read()
+    if len(file_bytes) > dao_imports.MAX_IMPORT_BYTES:
+        raise HTTPException(
+            413,
+            f"Upload too large: {len(file_bytes)} bytes "
+            f"(max {dao_imports.MAX_IMPORT_BYTES})",
+        )
+    try:
+        parsed = dao_imports.parse(
+            source, upload.filename or "upload.dat", file_bytes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    try:
+        result = dao_imports.execute_import(
+            actor, parsed.items, source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    from urllib.parse import urlencode
+    qs = urlencode({
+        "source": source,
+        "last_location_id": result["location_id"] or 0,
+        "items": result["item_count"],
+        "rooms": result["room_count"],
+        "errors": result["error_count"],
+    })
+    return RedirectResponse(f"/import?{qs}", status_code=303)
+
+
+@app.post("/import/{location_id}/undo")
+def import_undo(request: Request, location_id: int):
+    """Cascade-delete an import's auto-created Location — undoes
+    the entire bulk in one click.  Refuses to delete a Location
+    whose name doesn't carry the IMPORTED_LOCATION_PREFIX (defends
+    against a typo'd id pointing at a real location)."""
+    actor: Actor = request.state.actor
+    try:
+        dao_imports.undo_import(actor, location_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError as exc:
+        raise HTTPException(403, str(exc))
+    return RedirectResponse("/import", status_code=303)
 
 
 @app.post("/ingest")

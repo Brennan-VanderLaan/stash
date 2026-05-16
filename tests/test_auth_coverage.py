@@ -220,6 +220,10 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         "/",
         "/robots.txt",
         "/__stash_robots_txt",
+        # Targeted ad-campaign landing for Encircle refugees — see
+        # /encircle-alternative route + the test_encircle_alternative
+        # module for the full discovery-only-via-ads contract.
+        "/encircle-alternative",
     ))
     # /about/ added: Stripe + similar KYC partners require the
     # business name, refund policy, sub-processor list, etc. to be

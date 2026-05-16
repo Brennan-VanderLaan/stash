@@ -36,3 +36,10 @@ boto3
 # upgrade-CTA cleanly when STRIPE_SECRET_KEY is unset, same pattern
 # as the B2 surface.
 stripe
+
+# XLSX parsing for the /import flow.  Encircle's "Detailed
+# Spreadsheet" export is .xlsx with embedded images + a separate
+# media .zip — the importer reads the XLSX with openpyxl to get
+# text fields and (later) images via ``xl/media/``.  Light dep
+# (~5 MB), no system requirements.
+openpyxl
