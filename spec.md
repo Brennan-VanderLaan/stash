@@ -159,6 +159,71 @@ tenant_invites(
     consumed_at TEXT
 )
 
+-- Operator-minted self-onboarding link.  Kept separate from
+-- tenant_invites so the recipient names their own tenant on
+-- accept (the maintainer-invites-someone-into-an-existing-
+-- tenant flow above still uses tenant_invites).  The plan is
+-- locked at mint; the link is single-use via the consumed_at
+-- sentinel; consumed_tenant_id traces the link to the resulting
+-- tenant for audit.
+tenant_bootstrap_invites(
+    token TEXT PRIMARY KEY,
+    plan TEXT NOT NULL,                -- 'free' | 'pro'
+    role TEXT NOT NULL DEFAULT 'maintainer',
+    created_by_email TEXT NOT NULL,    -- the operator
+    created_at TEXT,
+    expires_at TEXT,
+    consumed_at TEXT,
+    consumed_by_email TEXT,
+    consumed_tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL
+)
+
+-- In-app feedback widget.  Body is the user's free-text; the
+-- rest only populates when the user taps "Capture this page" in
+-- the widget — opt-in telemetry, never silent.  screenshot +
+-- page_html are filenames in the tenant's encrypted upload dir
+-- (same pipeline as item photos), so a captured DOM containing
+-- unsubmitted form values can't sit cleartext on disk.
+feedback(
+    id INTEGER PRIMARY KEY,
+    tenant_id INTEGER,                 -- nullable; anonymous paths reserved
+    actor_email TEXT,
+    body TEXT NOT NULL,
+    screenshot TEXT,                   -- encrypted-blob filename
+    source_url TEXT,
+    user_agent TEXT,
+    viewport_w INTEGER,
+    viewport_h INTEGER,
+    status TEXT NOT NULL DEFAULT 'open',  -- open | accepted | rejected | done
+    operator_notes TEXT,
+    created_at TEXT,
+    resolved_at TEXT,
+    resolved_by TEXT,
+    -- Extended telemetry (filled in only on "Capture this page"):
+    page_html TEXT,                    -- encrypted-blob filename
+    console_log TEXT,                  -- JSON array of console.{error,warn} +
+                                       -- window.onerror + unhandledrejection
+    focused_selector TEXT,
+    scroll_x INTEGER,
+    scroll_y INTEGER,
+    page_title TEXT,
+    color_scheme TEXT,                 -- 'light' | 'dark'
+    client_timestamp TEXT,
+    perf_timing TEXT                   -- JSON: ttfb, dom interactive, FCP, LCP, transfer sizes
+)
+
+-- Public-leaderboard handle opt-in for feedback contributors.
+-- Stars count = rows in `feedback` with status='done' and
+-- matching actor_email.  No handle, no public display — the
+-- email's local-part is never shown.
+feedback_handles(
+    actor_email TEXT PRIMARY KEY,
+    handle TEXT NOT NULL,
+    handle_lower TEXT NOT NULL,
+    set_at TEXT,
+    revoked_at TEXT                    -- operator anti-abuse
+)
+
 object_shares(
     id INTEGER PRIMARY KEY,
     tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -327,18 +392,30 @@ removed. The migration takes a B2 snapshot first (see
 
 ### Sign-up + onboarding
 
-Three resolved sign-in shapes:
+Four resolved sign-in shapes:
 
 1. **Fresh email, no relationship to any tenant.** Land on a
    "create your stash?" screen. Self-serve tenant creation,
    opt-in. The user becomes the sole maintainer of a Personal
    tenant with free-tier defaults. No operator approval needed.
-2. **Sign-in following an invite link.** The invite token in the
-   URL bypasses the global allowlist for *this* sign-in only,
-   completes authentication, and adds the user as a member of the
-   inviting tenant at the granted role. They may also self-create
-   their own tenant later from the switcher.
-3. **Sign-in with an active object share but no member/invite
+2. **Sign-in following a member-invite link.** Operator (or a
+   maintainer of the inviting tenant) pre-named the tenant + bound
+   the invite to an expected email.  The token in the URL bypasses
+   the global allowlist for *this* sign-in only, completes
+   authentication, and adds the user as a member of the inviting
+   tenant at the granted role.  Identity-vs-invite rebinding (see
+   below) lets the *actual* signed-in email win.  They may also
+   self-create their own tenant later from the switcher.
+3. **Sign-in following a bootstrap (self-onboarding) link.**
+   Operator minted a single-use link with only a plan + role —
+   no tenant exists yet.  The recipient signs in via the same
+   middleware-bypass path, then *names their own stash* on the
+   accept page.  On POST, atomically: race-safe consume of the
+   token, create the tenant with the locked-in plan, add the
+   recipient as the lone maintainer.  Tier intentionally hidden
+   on the accept page so the recipient isn't surprised by
+   billing.
+4. **Sign-in with an active object share but no member/invite
    relationship.** Same logic as #2 — the share is sufficient
    "you're allowed in" signal; the user can browse the shared
    object and optionally self-create a Personal tenant.
@@ -928,14 +1005,24 @@ Surfaces:
   (GDPR right-to-erasure), trigger an off-cycle backup.
 - Per-tenant restore from B2 — operator confirms then a tenant
   maintainer drives the actual restore from `/usage` after sign-in.
-- Operator-only DR: full-DB import (today's
-  `/maintenance/import`) for the catastrophic case where the whole
-  deployment needs reseeding. Logs prominently to the global audit
-  log.
+- Operator-only deployment controls at
+  `/admin/maintenance/{update,cleanup,export,import}`: watchtower-
+  driven container update, orphan cleanup, whole-platform backup
+  export, whole-platform DB import.  All four 404 for non-operators
+  to keep the surface opaque.
+- Operator-only DR: full-DB import (at
+  `/admin/maintenance/import`) for the catastrophic case where the
+  whole deployment needs reseeding. Logs prominently to the global
+  audit log.
 - Quota override editor.
 - Vendor cost panel — what the platform paid each vendor last
   cycle, total revenue, gross margin. The numbers shown here are the
   source of truth for the in-app price-transparency block.
+- Onboarding-link minter — single-use plan-bearing magic link
+  for recipient-self-naming (see "Sign-up + onboarding" shape #3).
+- In-app feedback triage kanban with captured-DOM + screenshot
+  follow-up routes.  Same opacity rule: non-operators 404 on the
+  whole surface.
 
 ### User-facing usage page (replaces `/maintenance` for tenants)
 
@@ -1146,10 +1233,11 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-12).** Phases 1–4 + 6 + 9 + 10 + 11 + 12 + 15 + 16
+**Status (2026-05-16).** Phases 1–4 + 6 + 9 + 10 + 11 + 12 + 15 + 16
 + 18 + 19 shipped; phases 5, 7, 8 partially shipped (link-share
 invites, per-tenant backup download, manual B2 upload from /admin
-respectively).
+respectively).  In-app feedback widget shipped out-of-phase as the
+support-loop replacement (was deferred at the end of the roadmap).
 Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
 moved up to unblock immediate use.  Pre-MCP security audit drove a
 pass that closes the audit's P0/P1 list: per-share file allow-list,
@@ -1226,6 +1314,90 @@ already shipped:
   a separate ``error-detail`` block under the headline rather
   than replacing the personality.
 
+**Recent polish ships (2026-05-13 → 2026-05-16).** Operator-surface
+security pass + in-app feedback overhaul + onboarding rethink:
+
+* **RBAC pass on `/maintenance`.** The user-facing maintenance
+  page used to host deployment controls — watchtower-driven
+  container update, orphan cleanup, whole-platform backup
+  export, and whole-platform DB import — all reachable by any
+  signed-in tenant member.  Any tenant could trigger a restart,
+  download every tenant's encrypted blobs, walk every tenant's
+  filesystem, or wipe the whole platform.  All four moved to
+  ``/admin/maintenance/{update,cleanup,export,import}`` behind
+  ``_require_operator_route`` (404-opaque to non-operators,
+  per the operator-surface opacity rule).  ``/maintenance`` now
+  carries only the three cards safe for any tenant member:
+  Version, Access (tenant + members read-only), Changelog.
+  ``_run_orphan_cleanup`` + ``_produce_full_backup_zip``
+  extracted as pure helpers so tests don't need operator creds
+  for between-test cleanup.  New ``as_operator`` side-effect
+  fixture promotes the test actor on the live module without
+  app reload.
+* **In-app feedback widget — extended telemetry on opt-in.**
+  The floating "tell us what's wrong" button now captures a
+  coherent snapshot when the user taps "Capture this page":
+  screenshot + ``document.documentElement.outerHTML`` (capped
+  512 KB) + console.error/warn ring buffer + window.onerror +
+  unhandledrejection trail (50 entries) + focused-element CSS
+  selector + scroll position + page title +
+  prefers-color-scheme + client clock + Navigation Timing +
+  First Contentful Paint + Largest Contentful Paint.
+  Always-on passive ``PerformanceObserver`` (with
+  ``buffered: true``) catches LCP entries that fired before
+  the widget script loaded.  Nothing sent silently — the bare
+  body+URL+UA path is preserved for users who don't tap the
+  capture button.  Page HTML rides the same tenant-encrypted-
+  blob pipeline as the screenshot so unsubmitted form values
+  can't sit cleartext on disk.  New operator route
+  ``GET /admin/feedback/{id}/page_html`` serves the captured
+  DOM with ``Content-Security-Policy: sandbox`` +
+  ``X-Content-Type-Options: nosniff`` + attachment disposition
+  so the operator's browser can never *execute* the captured
+  page.  Admin queue cards surface 📸 + 📄 + ↗ icons for
+  follow-up views.  MCP ``admin_get_feedback`` gains an
+  ``include`` array (``screenshot`` / ``page_html`` /
+  ``console_log`` / ``perf_timing`` / ``all``) — screenshots
+  return as base64 data URLs, HTML as text (capped 256 KB with
+  a truncation flag), console + perf parsed to structured
+  shapes.  ``admin_list_feedback`` rows gain ``has_screenshot``
+  + ``has_page_html`` booleans for cheap triage scanning.
+* **html2canvas colour-function fix.** Recent Chrome serialises
+  a resolved ``color-mix()`` as ``color(srgb …)`` whenever the
+  alpha channel is non-1 — especially inside ``box-shadow``.
+  html2canvas 1.4.1 dies on that with "Attempting to parse an
+  unsupported color function 'color'", and the existing
+  copy-computed-to-inline trick just copied the literal
+  ``color(...)`` straight into the clone.  Fix: the onclone
+  callback routes every computed value through a 1×1 canvas
+  round-trip.  The canvas paints with the browser's own colour
+  engine and reads back rgba bytes, so ``color()``,
+  ``color-mix()``, ``oklch()``, and ``oklab()`` all get
+  normalised before h2c sees them.  Nested cases like
+  ``linear-gradient(color-mix(...), red)`` work because the
+  outer function resolves as a whole.  PROPS list broadened to
+  cover text-shadow, text-decoration-color, caret-color,
+  accent-color, and column-rule-color.
+* **Onboarding-link flow — operator mints, recipient
+  self-names.** Replaces the operator-pre-names-everything
+  flow.  Old flow: operator typed a tenant name + invitee
+  email; server created the tenant immediately; recipient
+  redeemed a magic link to join.  New flow: operator mints a
+  self-onboarding link with only a plan + role at
+  ``POST /admin/onboarding-links``; whoever clicks first signs
+  in, names their own stash, and becomes its sole maintainer.
+  Single-use enforced atomically at redeem time via the
+  ``consumed_at`` sentinel — two parallel redeems get exactly
+  one tenant (loser sees NotFoundError and rolls back the
+  orphan).  Per-IP throttle on redeem
+  (``check_tenant_creation_rate``) defends against a stolen
+  operator credential being scripted into mass tenant
+  creation.  New ``tenant_bootstrap_invites`` table — kept
+  separate from ``tenant_invites`` so the maintainer-invites-
+  members-into-own-tenant flow stays untouched.  Tier hidden
+  on the accept page so a free-tier recipient doesn't worry
+  about being billed.
+
 See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
@@ -1271,6 +1443,26 @@ See per-phase `[shipped]` / `[partial]` markers below.
      invite collision handled per spec — actual oauth2-proxy email
      wins, audit logs the rebind.  Audit entries on send / accept /
      revoke.
+   * **[shipped]** Bootstrap (self-onboarding) invites.  Operator-
+     minted single-use link carrying only a plan + role — no
+     tenant, no recipient email — at
+     ``POST /admin/onboarding-links``.  Whoever clicks first names
+     their own stash on accept and becomes its sole maintainer.
+     New ``tenant_bootstrap_invites`` table; ``dao_invites``
+     gains ``create_bootstrap`` / ``get_bootstrap_by_token`` /
+     ``redeem_bootstrap`` / ``list_open_bootstrap_for_operator`` /
+     ``any_token_exists`` (the last one extends the middleware
+     bypass).  ``dao_tenants.create_self_serve_tenant`` is the
+     bypass-the-operator-check helper the redeem path calls.
+     Race-safe consume with ``UPDATE … WHERE consumed_at IS NULL``
+     + ``rowcount=0`` check; if the loser of the race created an
+     orphan tenant it gets rolled back before the NotFoundError.
+     Per-IP throttle on redeem via
+     ``check_tenant_creation_rate`` so a stolen operator
+     credential can't mint+redeem in a loop to mass-create
+     tenants.  Replaces the prior
+     ``POST /admin/tenants`` operator-pre-names-tenant route
+     entirely.
    * **[deferred]** Postmark templates + transactional send.  Until
      this lands, invite URLs are copy-pasted out-of-band; the
      `/usage` page round-trips the link into `?invite_url=…` so
@@ -1417,10 +1609,33 @@ See per-phase `[shipped]` / `[partial]` markers below.
     * **[shipped]** Tenant roster (counts + plan + lifecycle
       state — never content).  `dao.tenants.list_all` +
       `create_tenant`; `dao.invites.create` operator-bypass for
-      cross-tenant minting.  "Create tenant + invite first
-      maintainer" form so operators can bootstrap a friend onto
-      their own tenant without ever joining it.  GET + POST gates
-      404 (not 403) for non-operators so the surface stays opaque.
+      cross-tenant minting.  Self-onboarding link mint form (the
+      "Create tenant + invite first maintainer" flow was replaced
+      in May 2026 — operator now mints a plan-bearing link via
+      `POST /admin/onboarding-links`, recipient names the tenant
+      themselves; see phase 5).  GET + POST gates 404 (not 403)
+      for non-operators so the surface stays opaque.
+    * **[shipped]** RBAC pass on `/maintenance` (May 2026).
+      Deployment controls (watchtower-driven update, orphan
+      cleanup, whole-platform backup export + DB import) used to
+      live on the user-facing maintenance page and were reachable
+      by any signed-in tenant member.  All four moved to
+      ``/admin/maintenance/{update,cleanup,export,import}``
+      behind ``_require_operator_route``; non-operators get the
+      opaque 404 instead of 403.  `/maintenance` now carries only
+      Version + Access + Changelog cards.
+    * **[shipped]** In-app feedback triage queue (replaces the
+      deferred support loop).  Operator-only `/admin/feedback`
+      kanban with status pills (open / accepted / rejected /
+      done), per-row screenshot + captured-DOM links, CSV/JSON
+      export, MCP triage tools (``admin_list_feedback``,
+      ``admin_get_feedback`` with optional ``include`` array,
+      ``admin_set_feedback_status``, ``admin_feedback_counts``).
+      ``feedback`` + ``feedback_handles`` schema in "Schema
+      additions".  Done feedback earns the submitter a star —
+      counted via `WHERE status='done' AND actor_email=…`, no
+      new column.  Public-leaderboard handle is explicit opt-in
+      so a star never reveals an email's local-part.
     * **[shipped]** Tenant last-activity column +  per-member
       ``last_active_at`` (joined on ``audit_log.actor_email``)
       surfaced as a disclosure under each tenant row.
@@ -1608,7 +1823,8 @@ See per-phase `[shipped]` / `[partial]` markers below.
       Documents — overkill for a single-deploy stash.
 
 
-(Support / Sentry / in-app feedback link — deferred.)
+(Support / Sentry — deferred.  In-app feedback shipped out-of-phase;
+see phase 12 + the "Recent polish ships" block.)
 
 ## Migration plan (live user)
 
