@@ -174,7 +174,11 @@
             <span>{{ fb.tenant_name or 'no tenant' }}</span>
             {% if fb.screenshot %}
               · <a href="/admin/feedback/{{ fb.id }}/screenshot"
-                   target="_blank">📸</a>
+                   target="_blank" title="Screenshot">📸</a>
+            {% endif %}
+            {% if fb.page_html %}
+              · <a href="/admin/feedback/{{ fb.id }}/page_html"
+                   target="_blank" title="Captured DOM">📄</a>
             {% endif %}
             {% if fb.source_url %}
               · <a href="{{ fb.source_url }}" target="_blank"

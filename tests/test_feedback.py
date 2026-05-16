@@ -293,3 +293,128 @@ def test_non_operator_cannot_view_feedback_screenshot(client):
     # /admin convention.
     r = client.get("/admin/feedback/1/screenshot")
     assert r.status_code == 404
+
+
+# ── Extended telemetry (page HTML, console log, perf timing) ──────────
+
+
+def test_submit_feedback_persists_extended_telemetry(client):
+    """Capture-this-page populates the new columns + the page HTML
+    blob, all in the same submit."""
+    r = client.post(
+        "/feedback",
+        data={
+            "body": "the modal won't close",
+            "page_html": "<html><body>hello</body></html>",
+            "console_log": '[{"level":"error","msg":"boom"}]',
+            "focused_selector": "#feedback-launcher",
+            "scroll_x": "0",
+            "scroll_y": "420",
+            "page_title": "Locations · Stash",
+            "color_scheme": "dark",
+            "client_timestamp": "2026-05-16T05:54:01.123Z",
+            "perf_timing": '{"ttfb_ms":42,"lcp_ms":900}',
+        },
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200, r.text
+    fb_id = r.json()["feedback_id"]
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT page_html, console_log, focused_selector, "
+            "       scroll_x, scroll_y, page_title, color_scheme, "
+            "       client_timestamp, perf_timing, tenant_id "
+            "FROM feedback WHERE id = ?",
+            (fb_id,),
+        ).fetchone()
+    # Page HTML lives encrypted on disk; the column holds the filename.
+    assert row["page_html"], "page_html filename not stored"
+    assert row["page_html"].endswith(".html.enc")
+    blob = (client.app_module.UPLOAD_DIR
+            / str(row["tenant_id"]) / row["page_html"])
+    assert blob.exists()
+    # Small fields land in columns directly.
+    assert row["console_log"] == '[{"level":"error","msg":"boom"}]'
+    assert row["focused_selector"] == "#feedback-launcher"
+    assert row["scroll_x"] == 0 and row["scroll_y"] == 420
+    assert row["page_title"] == "Locations · Stash"
+    assert row["color_scheme"] == "dark"
+    assert row["client_timestamp"] == "2026-05-16T05:54:01.123Z"
+    assert row["perf_timing"] == '{"ttfb_ms":42,"lcp_ms":900}'
+
+
+def test_submit_feedback_page_html_encrypted_on_disk(client):
+    """Page HTML rides the tenant-encryption pipeline like
+    screenshots — plaintext must never sit on disk."""
+    plaintext = "<html><body>secret token tk_abc123</body></html>"
+    r = client.post(
+        "/feedback",
+        data={"body": "x", "page_html": plaintext},
+        headers={"Accept": "application/json"},
+    )
+    fb_id = r.json()["feedback_id"]
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT page_html, tenant_id FROM feedback WHERE id = ?",
+            (fb_id,),
+        ).fetchone()
+    blob = (client.app_module.UPLOAD_DIR
+            / str(row["tenant_id"]) / row["page_html"])
+    # Disk bytes are NOT the cleartext.  (Cleartext substring check is
+    # the cheapest way to confirm encryption without re-decrypting.)
+    assert b"secret token tk_abc123" not in blob.read_bytes()
+
+
+def test_submit_feedback_drops_oversize_page_html(client):
+    """A 1 MB capture must be silently dropped — same contract as
+    the oversize screenshot path: the feedback is more valuable
+    than the attached payload."""
+    huge = "x" * 1_000_000
+    r = client.post(
+        "/feedback",
+        data={"body": "huge dom", "page_html": huge},
+        headers={"Accept": "application/json"},
+    )
+    assert r.status_code == 200
+    fb_id = r.json()["feedback_id"]
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT page_html FROM feedback WHERE id = ?", (fb_id,),
+        ).fetchone()
+    assert row["page_html"] is None
+
+
+def test_admin_feedback_page_html_round_trip(client, monkeypatch):
+    """Operator can fetch the captured HTML as inert text/html with
+    a CSP sandbox header so it can't actually execute."""
+    plaintext = "<html><body><h1>captured</h1></body></html>"
+    client.post(
+        "/feedback",
+        data={"body": "x", "page_html": plaintext},
+        headers={"Accept": "application/json"},
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    r = client.get("/admin/feedback/1/page_html")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    # The sandbox header is what makes this safe to view — without
+    # it the captured page could run scripts in the operator's
+    # session origin.
+    assert r.headers["content-security-policy"] == "sandbox"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "attachment" in r.headers["content-disposition"]
+    assert r.text == plaintext
+
+
+def test_admin_feedback_page_html_404_for_non_operator(client):
+    """Same opacity rule as the rest of /admin — non-operator → 404."""
+    client.post(
+        "/feedback",
+        data={"body": "x", "page_html": "<html></html>"},
+        headers={"Accept": "application/json"},
+    )
+    r = client.get("/admin/feedback/1/page_html")
+    assert r.status_code == 404

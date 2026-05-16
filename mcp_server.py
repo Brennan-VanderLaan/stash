@@ -977,6 +977,11 @@ def _tool_admin_list_feedback(actor: Actor,
         status=None if status == "all" else status,
         limit=max(1, min(int(limit), 500)),
     )
+    # Cheap booleans so the agent can decide which rows are worth
+    # a follow-up ``admin_get_feedback`` with ``include`` set.
+    for r in rows:
+        r["has_screenshot"] = bool(r.get("screenshot"))
+        r["has_page_html"] = bool(r.get("page_html"))
     return {
         "ok": True,
         "filter": {"status": status},
@@ -985,21 +990,106 @@ def _tool_admin_list_feedback(actor: Actor,
     }
 
 
+# Page HTML payloads can be large; cap what we return inline to MCP
+# clients so a 500 KB capture doesn't blow the agent's context budget.
+# The full file is always available via the /admin/feedback/{id}/page_html
+# route — this cap only affects the MCP inline-return path.
+_MCP_FEEDBACK_PAGE_HTML_RETURN_CAP = 256_000
+
+
 @_tool(
     "admin_get_feedback",
-    description="Operator-only.  Fetch a single feedback row by id.",
+    description=(
+        "Operator-only.  Fetch a single feedback row by id.  Pass "
+        "``include`` to also embed binary/large telemetry attached "
+        "to the row: \"screenshot\" returns the captured page image "
+        "as a base64 data URL, \"page_html\" returns the captured "
+        "DOM as text (capped at 256 KB), \"console_log\" + "
+        "\"perf_timing\" inline the parsed JSON.  \"all\" includes "
+        "everything available.  Without ``include`` the response is "
+        "just the row + boolean flags for what's attached."
+    ),
     input_schema={
         "type": "object",
-        "properties": {"feedback_id": {"type": "integer"}},
+        "properties": {
+            "feedback_id": {"type": "integer"},
+            "include": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "screenshot", "page_html",
+                        "console_log", "perf_timing", "all",
+                    ],
+                },
+                "description": (
+                    "Optional list of extras to embed in the response. "
+                    "Default omits all large payloads."
+                ),
+            },
+        },
         "required": ["feedback_id"],
         "additionalProperties": False,
     },
 )
-def _tool_admin_get_feedback(actor: Actor, feedback_id: int) -> dict | list:
+def _tool_admin_get_feedback(
+    actor: Actor, feedback_id: int,
+    include: list[str] | None = None,
+) -> dict | list:
     err = _require_operator(actor)
     if err:
         return err
     row = dao_feedback.get(int(feedback_id))
+    # Always surface the cheap flags so callers can decide whether
+    # a follow-up call with ``include`` is worthwhile.
+    row["has_screenshot"] = bool(row.get("screenshot"))
+    row["has_page_html"] = bool(row.get("page_html"))
+
+    wanted = set(include or [])
+    if "all" in wanted:
+        wanted = {"screenshot", "page_html", "console_log", "perf_timing"}
+
+    tenant_id = row.get("tenant_id")
+
+    if "screenshot" in wanted and row.get("screenshot") and tenant_id:
+        try:
+            from app import _read_encrypted
+            data = _read_encrypted(tenant_id, row["screenshot"])
+            row["screenshot_data_url"] = (
+                "data:image/jpeg;base64,"
+                + base64.b64encode(data).decode("ascii")
+            )
+        except Exception as exc:  # noqa: BLE001
+            row["screenshot_error"] = str(exc)
+
+    if "page_html" in wanted and row.get("page_html") and tenant_id:
+        try:
+            from app import _read_encrypted
+            data = _read_encrypted(tenant_id, row["page_html"])
+            text = data.decode("utf-8", errors="replace")
+            truncated = len(text) > _MCP_FEEDBACK_PAGE_HTML_RETURN_CAP
+            if truncated:
+                text = text[:_MCP_FEEDBACK_PAGE_HTML_RETURN_CAP]
+            row["page_html_text"] = text
+            row["page_html_truncated"] = truncated
+        except Exception as exc:  # noqa: BLE001
+            row["page_html_error"] = str(exc)
+
+    # console_log + perf_timing live in columns as JSON strings —
+    # parse them on the way out so the agent gets structured data
+    # instead of a quoted string-of-JSON.
+    if "console_log" in wanted and row.get("console_log"):
+        try:
+            row["console_log_parsed"] = json.loads(row["console_log"])
+        except Exception:
+            row["console_log_parsed"] = None
+
+    if "perf_timing" in wanted and row.get("perf_timing"):
+        try:
+            row["perf_timing_parsed"] = json.loads(row["perf_timing"])
+        except Exception:
+            row["perf_timing_parsed"] = None
+
     return {"ok": True, "feedback": row}
 
 

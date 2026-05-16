@@ -655,6 +655,119 @@
     const shotData = document.getElementById('feedback-screenshot-data');
     const submit = document.getElementById('feedback-submit');
 
+    // Passive telemetry — a tiny ring buffer that watches
+    // ``console.error``/``console.warn``, ``window.onerror``, and
+    // ``unhandledrejection``.  Always on for the logged-in widget so
+    // a problem from earlier in the session is still in the buffer
+    // when the user finally opens the dialog.  Never sent unless the
+    // user opts in via "Capture this page".
+    const telemetry = (function() {
+      const log = [];
+      const MAX_ENTRIES = 50;
+      function push(level, parts) {
+        try {
+          const msg = Array.from(parts).map(a => {
+            if (a instanceof Error) return a.stack || a.message;
+            if (a && typeof a === 'object') {
+              try { return JSON.stringify(a); }
+              catch (_) { return String(a); }
+            }
+            return String(a);
+          }).join(' ').slice(0, 1000);
+          log.push({ t: Date.now(), level, msg });
+          while (log.length > MAX_ENTRIES) log.shift();
+        } catch (_) { /* telemetry must never crash the page */ }
+      }
+      ['error', 'warn'].forEach(level => {
+        const orig = console[level];
+        console[level] = function() {
+          push(level, arguments);
+          return orig.apply(console, arguments);
+        };
+      });
+      window.addEventListener('error', e => push('error', [
+        e.message || 'error',
+        (e.filename || '') + ':' + (e.lineno || ''),
+      ]));
+      window.addEventListener('unhandledrejection', e => push('error', [
+        'unhandledrejection', String(e.reason).slice(0, 500),
+      ]));
+
+      // LCP via PerformanceObserver — entries arrive as the largest
+      // paint shifts; we keep only the most recent.  ``buffered: true``
+      // pulls prior entries so this widget script (which loads at
+      // </body>, after LCP usually fires) doesn't miss them.
+      let lastLCP = null;
+      try {
+        const po = new PerformanceObserver(list => {
+          for (const entry of list.getEntries()) lastLCP = entry.startTime;
+        });
+        po.observe({ type: 'largest-contentful-paint', buffered: true });
+      } catch (_) { /* no-op when not supported */ }
+
+      function selectorFor(el) {
+        if (!el || !el.tagName) return null;
+        if (el.id) return '#' + el.id;
+        const cls = (typeof el.className === 'string')
+          ? el.className.split(/\s+/).filter(Boolean).slice(0, 3).join('.')
+          : '';
+        return el.tagName.toLowerCase() + (cls ? '.' + cls : '');
+      }
+
+      function perfTiming() {
+        try {
+          const nav = performance.getEntriesByType('navigation')[0];
+          if (!nav) return null;
+          const fcpEntry = performance.getEntriesByName(
+            'first-contentful-paint')[0];
+          return {
+            ttfb_ms: Math.round(nav.responseStart - nav.requestStart),
+            dom_interactive_ms: Math.round(nav.domInteractive),
+            dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd),
+            load_event_end_ms: Math.round(nav.loadEventEnd),
+            fcp_ms: fcpEntry ? Math.round(fcpEntry.startTime) : null,
+            lcp_ms: lastLCP ? Math.round(lastLCP) : null,
+            transfer_size: nav.transferSize || null,
+            encoded_body_size: nav.encodedBodySize || null,
+            decoded_body_size: nav.decodedBodySize || null,
+          };
+        } catch (_) { return null; }
+      }
+
+      function colorScheme() {
+        try {
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            return 'dark';
+          }
+          return 'light';
+        } catch (_) { return null; }
+      }
+
+      return {
+        log,
+        snapshot() {
+          // Captured at "Capture this page" time so the operator sees
+          // a coherent picture: the screenshot, the HTML, and the
+          // telemetry all reflect the same moment.
+          return {
+            page_html: document.documentElement.outerHTML,
+            console_log: JSON.stringify(log),
+            focused_selector: selectorFor(document.activeElement),
+            scroll_x: Math.round(window.scrollX || 0),
+            scroll_y: Math.round(window.scrollY || 0),
+            page_title: document.title || null,
+            color_scheme: colorScheme(),
+            client_timestamp: new Date().toISOString(),
+            perf_timing: JSON.stringify(perfTiming()),
+          };
+        },
+      };
+    })();
+    // Filled in by shotBtn at "Capture this page" time, appended to
+    // the form's POST body at submit.  Cleared after a successful
+    // send so a second submission doesn't carry stale telemetry.
+    let capturedTelemetry = null;
+
     function open() {
       result.hidden = true;
       result.textContent = '';
@@ -757,10 +870,19 @@
         });
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         shotData.value = dataUrl;
-        shotStatus.textContent = `📎 ${Math.round(dataUrl.length / 1024)} KB`;
+        // Telemetry snapshot is taken at the same moment as the
+        // canvas — same closed-dialog state, same scroll position,
+        // same focused element.  Operator sees the screenshot and
+        // the captured DOM as a coherent pair.
+        capturedTelemetry = telemetry.snapshot();
+        const kb = Math.round(dataUrl.length / 1024);
+        const htmlKb = Math.round(
+          capturedTelemetry.page_html.length / 1024);
+        shotStatus.textContent = `📎 ${kb} KB + DOM ${htmlKb} KB`;
       } catch (err) {
         shotStatus.textContent = `(${err.message || err})`;
         shotData.value = '';
+        capturedTelemetry = null;
       } finally {
         shotBtn.disabled = false;
         if (wasOpen) open();
@@ -778,6 +900,20 @@
       fd.append('user_agent', navigator.userAgent);
       fd.append('viewport_w', String(window.innerWidth));
       fd.append('viewport_h', String(window.innerHeight));
+      // Extended telemetry rides along only when the user actually
+      // tapped "Capture this page" — silent telemetry would be a
+      // surprise.  capturedTelemetry is null otherwise; the server
+      // treats empty form fields as "not captured".
+      if (capturedTelemetry) {
+        for (const k of [
+          'page_html', 'console_log', 'focused_selector',
+          'scroll_x', 'scroll_y', 'page_title', 'color_scheme',
+          'client_timestamp', 'perf_timing',
+        ]) {
+          const v = capturedTelemetry[k];
+          if (v !== null && v !== undefined) fd.append(k, String(v));
+        }
+      }
       try {
         const r = await fetch('/feedback', {
           method: 'POST',
@@ -794,6 +930,7 @@
         form.reset();
         shotData.value = '';
         shotStatus.textContent = '';
+        capturedTelemetry = null;
         setTimeout(close, 1200);
       } catch (err) {
         result.hidden = false;

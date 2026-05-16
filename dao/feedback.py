@@ -34,6 +34,15 @@ def create(
     user_agent: str | None = None,
     viewport_w: int | None = None,
     viewport_h: int | None = None,
+    page_html: str | None = None,
+    console_log: str | None = None,
+    focused_selector: str | None = None,
+    scroll_x: int | None = None,
+    scroll_y: int | None = None,
+    page_title: str | None = None,
+    color_scheme: str | None = None,
+    client_timestamp: str | None = None,
+    perf_timing: str | None = None,
 ) -> int:
     """Insert one feedback row.  Returns the new id.
 
@@ -41,6 +50,10 @@ def create(
     feedback paths (e.g., from a public share page) might land here
     without a resolved actor.  The route layer is the one that
     decides whether to allow that.
+
+    The extended telemetry fields (``page_html`` through
+    ``perf_timing``) are only populated when the user opts in via
+    the "Capture this page" widget button.
     """
     body = (body or "").strip()
     if not body:
@@ -49,16 +62,24 @@ def create(
         cur = conn.execute(
             "INSERT INTO feedback "
             "(tenant_id, actor_email, body, screenshot, source_url, "
-            " user_agent, viewport_w, viewport_h) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " user_agent, viewport_w, viewport_h, "
+            " page_html, console_log, focused_selector, "
+            " scroll_x, scroll_y, page_title, color_scheme, "
+            " client_timestamp, perf_timing) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (tenant_id, actor_email, body, screenshot, source_url,
-             user_agent, viewport_w, viewport_h),
+             user_agent, viewport_w, viewport_h,
+             page_html, console_log, focused_selector,
+             scroll_x, scroll_y, page_title, color_scheme,
+             client_timestamp, perf_timing),
         )
         feedback_id = cur.lastrowid
         conn.commit()
     _log.info(
-        "feedback.create id=%s tenant_id=%s len=%d screenshot=%s",
-        feedback_id, tenant_id, len(body), bool(screenshot),
+        "feedback.create id=%s tenant_id=%s len=%d "
+        "screenshot=%s page_html=%s",
+        feedback_id, tenant_id, len(body),
+        bool(screenshot), bool(page_html),
     )
     return feedback_id
 

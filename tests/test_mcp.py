@@ -749,16 +749,58 @@ def test_unknown_method_returns_rpc_error(tmp_path, monkeypatch):
 
 
 def _insert_feedback(app_mod, tenant_id: int, body: str,
-                     actor_email: str = "me@t1.example") -> int:
+                     actor_email: str = "me@t1.example",
+                     screenshot: str | None = None,
+                     page_html: str | None = None,
+                     console_log: str | None = None,
+                     perf_timing: str | None = None) -> int:
     with app_mod.db() as conn:
         cur = conn.execute(
-            "INSERT INTO feedback (tenant_id, actor_email, body) "
-            "VALUES (?, ?, ?)",
-            (tenant_id, actor_email, body),
+            "INSERT INTO feedback "
+            "(tenant_id, actor_email, body, screenshot, page_html, "
+            " console_log, perf_timing) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tenant_id, actor_email, body, screenshot, page_html,
+             console_log, perf_timing),
         )
         fb_id = cur.lastrowid
         conn.commit()
     return fb_id
+
+
+def _post_feedback_with_attachments(
+    app_mod, tenant_id: int, actor_email: str,
+    *,
+    screenshot_bytes: bytes | None = None,
+    page_html_text: str | None = None,
+    console_log: str | None = None,
+    perf_timing: str | None = None,
+) -> int:
+    """Insert a feedback row AND write its encrypted blobs to disk so
+    the MCP ``include`` path can actually round-trip the bytes (the
+    plain ``_insert_feedback`` only sets the DB columns, no files)."""
+    import secrets as _secrets
+    screenshot_name: str | None = None
+    if screenshot_bytes is not None:
+        screenshot_name = f"feedback-{_secrets.token_hex(8)}.jpg"
+        app_mod._write_encrypted(
+            tenant_id, screenshot_name, screenshot_bytes,
+        )
+    page_html_name: str | None = None
+    if page_html_text is not None:
+        page_html_name = f"feedback-{_secrets.token_hex(8)}.html.enc"
+        app_mod._write_encrypted(
+            tenant_id, page_html_name,
+            page_html_text.encode("utf-8"),
+        )
+    return _insert_feedback(
+        app_mod, tenant_id, "with attachments",
+        actor_email=actor_email,
+        screenshot=screenshot_name,
+        page_html=page_html_name,
+        console_log=console_log,
+        perf_timing=perf_timing,
+    )
 
 
 def test_admin_tools_visible_in_tools_list(tmp_path, monkeypatch):
@@ -879,3 +921,109 @@ def test_admin_feedback_counts_returns_per_status(tmp_path, monkeypatch):
     payload = _result_json(body)
     assert payload["counts"]["open"] == 1
     assert payload["counts"]["accepted"] == 1
+
+
+def test_admin_list_feedback_includes_has_flags(tmp_path, monkeypatch):
+    """List rows surface ``has_screenshot`` / ``has_page_html`` so
+    the agent can decide whether a follow-up ``admin_get_feedback``
+    with ``include`` is worthwhile."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    # One row with both attachments, one with neither.
+    _insert_feedback(app_mod, ids["t1"], "rich",
+                     screenshot="feedback-deadbeef.jpg",
+                     page_html="feedback-cafebabe.html.enc")
+    _insert_feedback(app_mod, ids["t1"], "bare")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_list_feedback",
+                          {"status": "all"})
+    payload = _result_json(body)
+    by_body = {fb["body"]: fb for fb in payload["feedback"]}
+    assert by_body["rich"]["has_screenshot"] is True
+    assert by_body["rich"]["has_page_html"] is True
+    assert by_body["bare"]["has_screenshot"] is False
+    assert by_body["bare"]["has_page_html"] is False
+
+
+def test_admin_get_feedback_omits_attachments_by_default(tmp_path, monkeypatch):
+    """Without ``include``, the response stays light — flags only,
+    no base64 image, no HTML text."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    # Submit via the real /feedback path so the encrypted blobs
+    # actually exist on disk under the test tenant.
+    fb_id = _post_feedback_with_attachments(
+        app_mod, ids["t1"], "ops@example.com",
+        screenshot_bytes=b"\xff\xd8\xff\xe0jpeg",
+        page_html_text="<html><body>captured</body></html>",
+    )
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_get_feedback",
+                          {"feedback_id": fb_id})
+    fb = _result_json(body)["feedback"]
+    assert fb["has_screenshot"] is True
+    assert fb["has_page_html"] is True
+    assert "screenshot_data_url" not in fb
+    assert "page_html_text" not in fb
+
+
+def test_admin_get_feedback_returns_attachments_when_requested(
+    tmp_path, monkeypatch,
+):
+    """``include=["all"]`` embeds the screenshot as a base64 data URL,
+    the page HTML as text, and parses console_log / perf_timing
+    into structured shapes."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    fb_id = _post_feedback_with_attachments(
+        app_mod, ids["t1"], "ops@example.com",
+        screenshot_bytes=b"\xff\xd8\xff\xe0jpeg-bytes",
+        page_html_text="<html><body>captured</body></html>",
+        console_log='[{"level":"error","msg":"boom"}]',
+        perf_timing='{"ttfb_ms":42,"lcp_ms":900}',
+    )
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(c, _headers(token), "admin_get_feedback",
+                          {"feedback_id": fb_id, "include": ["all"]})
+    fb = _result_json(body)["feedback"]
+    assert fb["screenshot_data_url"].startswith("data:image/jpeg;base64,")
+    # Decode the data URL and confirm we got the cleartext back.
+    decoded = base64.b64decode(
+        fb["screenshot_data_url"].split(",", 1)[1])
+    assert decoded == b"\xff\xd8\xff\xe0jpeg-bytes"
+    assert fb["page_html_text"] == "<html><body>captured</body></html>"
+    assert fb["page_html_truncated"] is False
+    assert fb["console_log_parsed"] == [
+        {"level": "error", "msg": "boom"},
+    ]
+    assert fb["perf_timing_parsed"] == {"ttfb_ms": 42, "lcp_ms": 900}

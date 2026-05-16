@@ -1278,7 +1278,20 @@ def init_db():
             operator_notes TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             resolved_at TEXT,
-            resolved_by TEXT
+            resolved_by TEXT,
+            -- Extended telemetry — only populated when the user opts
+            -- in via "Capture this page".  ``page_html`` is the
+            -- encrypted-blob filename (same pipeline as ``screenshot``);
+            -- the rest are small enough to live in columns.
+            page_html TEXT,
+            console_log TEXT,
+            focused_selector TEXT,
+            scroll_x INTEGER,
+            scroll_y INTEGER,
+            page_title TEXT,
+            color_scheme TEXT,
+            client_timestamp TEXT,
+            perf_timing TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_feedback_tenant ON feedback(tenant_id, created_at DESC);
@@ -1567,6 +1580,20 @@ def migrate_db():
         for tbl in ("boxes", "items", "rooms", "floors", "locations"):
             _add_column_if_missing(conn, tbl, "version", "INTEGER NOT NULL DEFAULT 1")
             _add_column_if_missing(conn, tbl, "updated_at", "TEXT")
+
+        # Extended feedback telemetry — added 2026-05.  Existing
+        # rows pre-date the capture so all of these stay NULL on
+        # legacy feedback; new submissions populate them only when
+        # the user taps "Capture this page".
+        _add_column_if_missing(conn, "feedback", "page_html", "TEXT")
+        _add_column_if_missing(conn, "feedback", "console_log", "TEXT")
+        _add_column_if_missing(conn, "feedback", "focused_selector", "TEXT")
+        _add_column_if_missing(conn, "feedback", "scroll_x", "INTEGER")
+        _add_column_if_missing(conn, "feedback", "scroll_y", "INTEGER")
+        _add_column_if_missing(conn, "feedback", "page_title", "TEXT")
+        _add_column_if_missing(conn, "feedback", "color_scheme", "TEXT")
+        _add_column_if_missing(conn, "feedback", "client_timestamp", "TEXT")
+        _add_column_if_missing(conn, "feedback", "perf_timing", "TEXT")
 
         _migrate_to_multi_tenant(conn)
         conn.commit()
@@ -5051,6 +5078,13 @@ def usage_page(
 
 _MAX_FEEDBACK_BODY = 4000
 _MAX_FEEDBACK_SCREENSHOT_BYTES = 1_500_000
+# Page HTML caps at 512 KB — generous for a normal Stash page but
+# enough to refuse a runaway capture before we even touch disk.
+_MAX_FEEDBACK_PAGE_HTML_BYTES = 512_000
+# Console log + perf timing are tiny JSON blobs; cap each at 32 KB
+# so a hostile / runaway client can't poison a feedback row.
+_MAX_FEEDBACK_CONSOLE_LOG_BYTES = 32_000
+_MAX_FEEDBACK_PERF_TIMING_BYTES = 32_000
 
 
 def _decode_feedback_screenshot(data_url: str) -> bytes | None:
@@ -5072,6 +5106,20 @@ def _decode_feedback_screenshot(data_url: str) -> bytes | None:
     return raw
 
 
+def _safe_int(s: str) -> int | None:
+    try:
+        return int(s) if s else None
+    except ValueError:
+        return None
+
+
+def _capped_text(s: str, limit: int) -> str | None:
+    s = (s or "").strip()
+    if not s:
+        return None
+    return s[:limit]
+
+
 @app.post("/feedback")
 def submit_feedback(
     request: Request,
@@ -5081,12 +5129,26 @@ def submit_feedback(
     user_agent: str = Form(""),
     viewport_w: str = Form(""),
     viewport_h: str = Form(""),
+    page_html: str = Form(""),
+    console_log: str = Form(""),
+    focused_selector: str = Form(""),
+    scroll_x: str = Form(""),
+    scroll_y: str = Form(""),
+    page_title: str = Form(""),
+    color_scheme: str = Form(""),
+    client_timestamp: str = Form(""),
+    perf_timing: str = Form(""),
 ):
     """In-app feedback widget submission.  Authenticated tenant
     members only — the widget is hidden for anonymous visitors and
     the route enforces the same.  Optional screenshot is encrypted
     with the tenant's DEK (same pipeline as item photos) so a
-    cross-tenant leak on disk is impossible."""
+    cross-tenant leak on disk is impossible.
+
+    The extended-telemetry fields (``page_html``, ``console_log``,
+    perf timing, …) are only present when the user taps "Capture
+    this page" in the widget — without that opt-in, only the body
+    + context lands."""
     actor: Actor = request.state.actor
     if not actor.tenant_id:
         raise HTTPException(403, "Feedback requires an active tenant")
@@ -5104,14 +5166,28 @@ def submit_feedback(
             # Screenshot write failure is non-fatal — the feedback
             # is more valuable than the attached image.
             screenshot_name = None
-    try:
-        viewport_w_int = int(viewport_w) if viewport_w else None
-    except ValueError:
-        viewport_w_int = None
-    try:
-        viewport_h_int = int(viewport_h) if viewport_h else None
-    except ValueError:
-        viewport_h_int = None
+    # Page HTML rides the same tenant-encrypted-blob pipeline as the
+    # screenshot — it can contain form values the user typed but
+    # didn't submit, so storing it cleartext on disk would be a
+    # tenant-leak surface.  Filename lives in the column; bytes on
+    # disk, encrypted with the tenant DEK.
+    page_html_name: str | None = None
+    if page_html:
+        page_html_bytes = page_html.encode("utf-8", errors="replace")
+        if len(page_html_bytes) <= _MAX_FEEDBACK_PAGE_HTML_BYTES:
+            page_html_name = f"feedback-{secrets.token_hex(8)}.html.enc"
+            try:
+                _write_encrypted(
+                    actor.tenant_id, page_html_name, page_html_bytes,
+                )
+            except Exception:
+                page_html_name = None
+    console_log_capped = _capped_text(
+        console_log, _MAX_FEEDBACK_CONSOLE_LOG_BYTES,
+    )
+    perf_timing_capped = _capped_text(
+        perf_timing, _MAX_FEEDBACK_PERF_TIMING_BYTES,
+    )
     feedback_id = dao_feedback.create(
         tenant_id=actor.tenant_id,
         actor_email=actor.email,
@@ -5119,8 +5195,17 @@ def submit_feedback(
         screenshot=screenshot_name,
         source_url=(source_url or "")[:512] or None,
         user_agent=(user_agent or "")[:256] or None,
-        viewport_w=viewport_w_int,
-        viewport_h=viewport_h_int,
+        viewport_w=_safe_int(viewport_w),
+        viewport_h=_safe_int(viewport_h),
+        page_html=page_html_name,
+        console_log=console_log_capped,
+        focused_selector=_capped_text(focused_selector, 512),
+        scroll_x=_safe_int(scroll_x),
+        scroll_y=_safe_int(scroll_y),
+        page_title=_capped_text(page_title, 256),
+        color_scheme=_capped_text(color_scheme, 32),
+        client_timestamp=_capped_text(client_timestamp, 64),
+        perf_timing=perf_timing_capped,
     )
     if _wants_json(request):
         return {"ok": True, "feedback_id": feedback_id}
@@ -5333,6 +5418,14 @@ _FEEDBACK_EXPORT_COLUMNS = (
     "body", "source_url", "user_agent", "viewport_w", "viewport_h",
     "screenshot", "operator_notes", "created_at", "resolved_at",
     "resolved_by",
+    # Extended telemetry — filenames + small JSON blobs, fits in a
+    # CSV cell or JSON value.  Page HTML stays out of the export
+    # (just the filename) for the same reason as the screenshot:
+    # blobs ship via the dedicated /admin/feedback/{id}/page_html
+    # route, not inline.
+    "page_html", "console_log", "focused_selector",
+    "scroll_x", "scroll_y", "page_title", "color_scheme",
+    "client_timestamp", "perf_timing",
 )
 
 
@@ -5416,6 +5509,49 @@ def admin_feedback_screenshot(request: Request, feedback_id: int):
     except Exception:
         raise HTTPException(500, "Screenshot decrypt failed")
     return Response(content=plaintext, media_type="image/jpeg")
+
+
+@app.get("/admin/feedback/{feedback_id}/page_html")
+def admin_feedback_page_html(request: Request, feedback_id: int):
+    """Operator-only fetch of the captured page HTML.  Served as
+    inert text/html with strict headers so the operator's browser
+    can't actually *execute* the captured page when viewing it:
+
+    * ``Content-Security-Policy: sandbox`` — no scripts, no forms,
+      no top-level navigation.  The browser still renders, but the
+      page is a corpse.
+    * ``X-Content-Type-Options: nosniff`` — belt-and-suspenders so
+      a quirky browser can't reinterpret as something dangerous.
+    * ``Content-Disposition: attachment`` — default to a download
+      rather than a render, so the operator chooses when to view.
+
+    Same encrypt-on-disk pipeline as the screenshot."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        row = dao_feedback.get(feedback_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    if not row.get("page_html") or not row.get("tenant_id"):
+        raise HTTPException(404, "No page HTML attached")
+    tenant_id = row["tenant_id"]
+    p = _tenant_file(tenant_id, row["page_html"])
+    if not p.exists():
+        raise HTTPException(404, "Page HTML file missing")
+    try:
+        plaintext = _decrypt_for(tenant_id, p.read_bytes())
+    except Exception:
+        raise HTTPException(500, "Page HTML decrypt failed")
+    return Response(
+        content=plaintext,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Security-Policy": "sandbox",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition":
+                f'attachment; filename="feedback-{feedback_id}.html"',
+        },
+    )
 
 
 @app.post("/admin/feedback/{feedback_id}/status")
