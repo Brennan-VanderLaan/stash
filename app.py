@@ -1298,6 +1298,12 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             resolved_at TEXT,
             resolved_by TEXT,
+            -- Where the row came from.  ``user_widget`` = floating
+            -- in-app feedback button.  ``mcp`` = created via the
+            -- admin_create_feedback MCP tool (typically by an
+            -- agent walking a visual-sweep manifest).  Future
+            -- ingestion paths add their own tag.
+            source TEXT NOT NULL DEFAULT 'user_widget',
             -- Extended telemetry — only populated when the user opts
             -- in via "Capture this page".  ``page_html`` is the
             -- encrypted-blob filename (same pipeline as ``screenshot``);
@@ -1613,6 +1619,17 @@ def migrate_db():
         _add_column_if_missing(conn, "feedback", "color_scheme", "TEXT")
         _add_column_if_missing(conn, "feedback", "client_timestamp", "TEXT")
         _add_column_if_missing(conn, "feedback", "perf_timing", "TEXT")
+
+        # Where the feedback row came from.  ``user_widget`` is the
+        # historical default — legacy rows pre-date the column and
+        # all originated from the floating in-app widget.  ALTER
+        # TABLE … ADD COLUMN with a DEFAULT backfills existing rows
+        # with that value, so legacy rows pick up ``'user_widget'``
+        # automatically without a separate UPDATE.
+        _add_column_if_missing(
+            conn, "feedback", "source",
+            "TEXT NOT NULL DEFAULT 'user_widget'",
+        )
 
         _migrate_to_multi_tenant(conn)
         conn.commit()

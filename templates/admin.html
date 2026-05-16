@@ -169,6 +169,10 @@
           </header>
           <div class="kanban-card-body">{{ fb.body }}</div>
           <div class="kanban-card-meta">
+            {% if fb.source and fb.source != 'user_widget' %}
+              <span class="pill pill-source-{{ fb.source }}">{{ fb.source }}</span>
+              ·
+            {% endif %}
             <span>{{ fb.actor_email or '(anon)' }}</span>
             <span>·</span>
             <span>{{ fb.tenant_name or 'no tenant' }}</span>

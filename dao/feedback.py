@@ -24,6 +24,9 @@ _log = obs.get_logger("dao.feedback")
 _VALID_STATUSES = {"open", "accepted", "rejected", "done"}
 
 
+_VALID_SOURCES = {"user_widget", "mcp"}
+
+
 def create(
     *,
     tenant_id: int | None,
@@ -43,6 +46,7 @@ def create(
     color_scheme: str | None = None,
     client_timestamp: str | None = None,
     perf_timing: str | None = None,
+    source: str = "user_widget",
 ) -> int:
     """Insert one feedback row.  Returns the new id.
 
@@ -54,10 +58,19 @@ def create(
     The extended telemetry fields (``page_html`` through
     ``perf_timing``) are only populated when the user opts in via
     the "Capture this page" widget button.
+
+    ``source`` distinguishes ingestion paths.  Default
+    ``user_widget`` matches the historical floating-button submit.
+    ``mcp`` flags rows created via the admin_create_feedback MCP
+    tool — typically an agent walking a visual-sweep manifest.
+    Operators can filter on this in /admin to keep automated
+    findings from drowning real-user reports.
     """
     body = (body or "").strip()
     if not body:
         raise ValueError("feedback body is empty")
+    if source not in _VALID_SOURCES:
+        raise ValueError(f"unknown feedback source {source!r}")
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO feedback "
@@ -65,21 +78,21 @@ def create(
             " user_agent, viewport_w, viewport_h, "
             " page_html, console_log, focused_selector, "
             " scroll_x, scroll_y, page_title, color_scheme, "
-            " client_timestamp, perf_timing) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " client_timestamp, perf_timing, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (tenant_id, actor_email, body, screenshot, source_url,
              user_agent, viewport_w, viewport_h,
              page_html, console_log, focused_selector,
              scroll_x, scroll_y, page_title, color_scheme,
-             client_timestamp, perf_timing),
+             client_timestamp, perf_timing, source),
         )
         feedback_id = cur.lastrowid
         conn.commit()
     _log.info(
         "feedback.create id=%s tenant_id=%s len=%d "
-        "screenshot=%s page_html=%s",
+        "screenshot=%s page_html=%s source=%s",
         feedback_id, tenant_id, len(body),
-        bool(screenshot), bool(page_html),
+        bool(screenshot), bool(page_html), source,
     )
     return feedback_id
 

@@ -1151,6 +1151,88 @@ def _tool_admin_feedback_counts(actor: Actor) -> dict | list:
     return {"ok": True, "counts": dao_feedback.queue_counts()}
 
 
+@_tool(
+    "admin_create_feedback",
+    description=(
+        "Operator-only.  Create a feedback row programmatically — "
+        "intended for an agent walking a visual-sweep manifest and "
+        "filing each finding as a feedback item.  The created row "
+        "is tagged ``source='mcp'`` so operators can distinguish "
+        "automated findings from real-user submissions in /admin."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "body": {
+                "type": "string",
+                "description": (
+                    "Free-text description of the issue.  Same shape "
+                    "as a user-widget submission body."
+                ),
+            },
+            "source_url": {
+                "type": "string",
+                "description": (
+                    "URL the finding refers to.  Optional but "
+                    "strongly recommended so the operator can "
+                    "click through to the offending page."
+                ),
+            },
+            "viewport_w": {
+                "type": "integer",
+                "description": "Viewport width in CSS pixels.",
+            },
+            "viewport_h": {
+                "type": "integer",
+                "description": "Viewport height in CSS pixels.",
+            },
+            "tenant_id": {
+                "type": "integer",
+                "description": (
+                    "Optional tenant to bind the row to.  Defaults "
+                    "to NULL (platform-wide finding) since sweep "
+                    "results aren't tenant-specific."
+                ),
+            },
+        },
+        "required": ["body"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_create_feedback(
+    actor: Actor, body: str,
+    source_url: str | None = None,
+    viewport_w: int | None = None,
+    viewport_h: int | None = None,
+    tenant_id: int | None = None,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    body = (body or "").strip()
+    if not body:
+        return _tool_text_result(
+            "feedback body is required", is_error=True,
+        )
+    # Cap the body to the same length the user-widget enforces so
+    # an enthusiastic agent can't insert a megabyte-long row.
+    body = body[:4000]
+    try:
+        feedback_id = dao_feedback.create(
+            tenant_id=tenant_id,
+            actor_email=actor.email,
+            body=body,
+            source_url=(source_url or "")[:512] or None,
+            viewport_w=viewport_w,
+            viewport_h=viewport_h,
+            source="mcp",
+        )
+    except ValueError as exc:
+        return _tool_text_result(f"bad input: {exc}", is_error=True)
+    row = dao_feedback.get(feedback_id)
+    return {"ok": True, "feedback_id": feedback_id, "feedback": row}
+
+
 # ── Resources ──────────────────────────────────────────────────────
 
 

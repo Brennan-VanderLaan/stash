@@ -2620,6 +2620,14 @@ body.admin-hero-compact .admin-kpi-foot {
   background: var(--accent-dim);
   color: var(--accent);
 }
+/* Feedback source pills.  ``user_widget`` rows don't render a pill
+   at all (template skips when source == 'user_widget') so we only
+   style the alternates here. */
+.pill-source-mcp {
+  background: rgba(96, 165, 250, 0.15);
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.4);
+}
 
 /* Feedback queue rows — replaces the old simple-grid layout with
    a "card per row" look so each entry has visible structure

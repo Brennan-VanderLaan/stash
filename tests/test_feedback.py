@@ -418,3 +418,65 @@ def test_admin_feedback_page_html_404_for_non_operator(client):
     )
     r = client.get("/admin/feedback/1/page_html")
     assert r.status_code == 404
+
+
+# ── source column ────────────────────────────────────────────────────
+
+
+def test_submit_feedback_defaults_source_to_user_widget(client):
+    """Every row from the in-app POST /feedback path lands as
+    ``source='user_widget'`` so the operator can later separate
+    real-user submissions from agent-created MCP rows."""
+    client.post(
+        "/feedback", data={"body": "from the widget"},
+        headers={"Accept": "application/json"},
+    )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT source FROM feedback WHERE body = 'from the widget'"
+        ).fetchone()
+    assert row["source"] == "user_widget"
+
+
+def test_dao_create_with_explicit_source(client):
+    """DAO ``create`` accepts ``source``; unknown values raise."""
+    fb_id = client.app_module.dao_feedback.create(
+        tenant_id=None, actor_email="op@example.com",
+        body="sweep finding", source="mcp",
+    )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT source FROM feedback WHERE id = ?", (fb_id,),
+        ).fetchone()
+    assert row["source"] == "mcp"
+
+    import pytest
+    with pytest.raises(ValueError):
+        client.app_module.dao_feedback.create(
+            tenant_id=None, actor_email="op@example.com",
+            body="invalid", source="bogus",
+        )
+
+
+def test_admin_queue_renders_mcp_source_pill(client, monkeypatch):
+    """The /admin feedback queue shows a source pill on rows that
+    came in via MCP so the operator can spot automated findings
+    at a glance.  ``user_widget`` rows render without a pill."""
+    client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id, actor_email="user@example.com",
+        body="real user complaint", source="user_widget",
+    )
+    client.app_module.dao_feedback.create(
+        tenant_id=None, actor_email="op@example.com",
+        body="sweep-flagged layout issue", source="mcp",
+    )
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    page = client.get("/admin").text
+    assert "real user complaint" in page
+    assert "sweep-flagged layout issue" in page
+    # The mcp row should carry the source pill; the user row shouldn't.
+    assert "pill-source-mcp" in page
+    assert "pill-source-user_widget" not in page

@@ -987,6 +987,62 @@ def test_admin_get_feedback_omits_attachments_by_default(tmp_path, monkeypatch):
     assert "page_html_text" not in fb
 
 
+def test_admin_create_feedback_tags_source_mcp(tmp_path, monkeypatch):
+    """The new MCP create tool inserts a feedback row with
+    ``source='mcp'`` so an operator viewing /admin can spot
+    automated findings (typically from a sweep walk).  Operator-
+    only — a non-operator token gets a tool error."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch,
+                              operator_email="ops@example.com")
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'ops@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint(app_mod, ids["t1"], "ops@example.com",
+                  name="ops-mcp-token")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(
+            c, _headers(token), "admin_create_feedback",
+            {
+                "body": "header overflows on /about/pricing @ iphone-se",
+                "source_url": "http://localhost:8000/about/pricing",
+                "viewport_w": 375,
+                "viewport_h": 667,
+            },
+        )
+    payload = _result_json(body)
+    assert payload["ok"] is True
+    fb_id = payload["feedback_id"]
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT source, body, source_url, viewport_w, tenant_id "
+            "FROM feedback WHERE id = ?",
+            (fb_id,),
+        ).fetchone()
+    assert row["source"] == "mcp"
+    assert row["body"].startswith("header overflows")
+    assert row["source_url"] == "http://localhost:8000/about/pricing"
+    assert row["viewport_w"] == 375
+    # Tenant_id defaults to NULL — sweep findings are platform-wide.
+    assert row["tenant_id"] is None
+
+
+def test_admin_create_feedback_blocked_for_non_operator(tmp_path, monkeypatch):
+    """Same operator-gate as the rest of the admin_* tools."""
+    app_mod, ids = _bootstrap(tmp_path, monkeypatch)
+    token = _mint(app_mod, ids["t1"], "me@t1.example")
+    with TestClient(app_mod.app) as c:
+        body = _tool_call(
+            c, _headers(token), "admin_create_feedback",
+            {"body": "shouldn't work"},
+        )
+    assert body["result"]["isError"] is True
+
+
 def test_admin_get_feedback_returns_attachments_when_requested(
     tmp_path, monkeypatch,
 ):
