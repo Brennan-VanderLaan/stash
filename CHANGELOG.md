@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.35.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.35.0...v1.35.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **floorplan:** make box-preview close + watchdog unconditional ([e59c778](https://github.com/Brennan-VanderLaan/stash/commit/e59c778ed541cca4dd908e004e9cc704543adea0))
+
 ## [1.35.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.34.0...v1.35.0) (2026-05-16)
 
 
