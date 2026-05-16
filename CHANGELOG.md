@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.32.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.32.0...v1.32.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **security:** gate dangerous maintenance controls behind operator role ([0aa7f81](https://github.com/Brennan-VanderLaan/stash/commit/0aa7f81a1af71de8d163440392a77e564fd270b9))
+
 ## [1.32.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.31.1...v1.32.0) (2026-05-16)
 
 
