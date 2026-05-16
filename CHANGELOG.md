@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.30.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.30.0...v1.30.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **public:** Discord preview leaked business name twice — split product vs entity ([f24077f](https://github.com/Brennan-VanderLaan/stash/commit/f24077fe542a239be4246247a167456c6f85f7e6))
+* **usage:** claim-handle input ate the row, pushed the button below ([58ec578](https://github.com/Brennan-VanderLaan/stash/commit/58ec578621ab76891abbb1a084a3363509055cc3))
+
 ## [1.30.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.29.0...v1.30.0) (2026-05-15)
 
 
