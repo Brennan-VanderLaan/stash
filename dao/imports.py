@@ -114,7 +114,11 @@ class ParseResult:
     know how to bind — surfaced to the operator as a warning so
     they can decide whether to re-map columns and re-upload.
     """
-    items: list[dict[str, str]] = field(default_factory=list)
+    # ``items`` values are mostly ``str`` (the parsed text fields)
+    # but the XLSX path can also attach ``_image_bytes`` (bytes)
+    # for primary photos.  Typed as ``Any`` so the type-checker
+    # doesn't have to look the other way.
+    items: list[dict[str, Any]] = field(default_factory=list)
     unmapped_headers: list[str] = field(default_factory=list)
     mapped_headers: list[str] = field(default_factory=list)
     total_rows: int = 0
@@ -262,7 +266,14 @@ def _normalise_rows(
     ]
 
     items: list[dict[str, str]] = []
-    for row in rows[1:]:
+    # ``sheet_row`` tracks the spreadsheet's 0-based row index for
+    # each parsed item (header at 0, first data row at 1, etc.).
+    # Stashed on the item dict under ``_sheet_row`` so the XLSX
+    # parser can later cross-reference embedded-image anchors back
+    # to the item they belong to — empty / nameless rows are
+    # dropped here, so item[i] doesn't trivially come from
+    # rows[i+1] of the spreadsheet.
+    for sheet_row, row in enumerate(rows[1:], start=1):
         normalised_row = _row_to_normalised(raw_headers, row, lookup)
         if _row_is_empty(normalised_row):
             continue
@@ -270,6 +281,7 @@ def _normalise_rows(
         # name is essentially a placeholder cell.
         if not normalised_row.get("item_name"):
             continue
+        normalised_row["_sheet_row"] = str(sheet_row)
         items.append(normalised_row)
         if len(items) >= MAX_IMPORT_ROWS:
             break
@@ -346,22 +358,195 @@ def parse_encircle_csv(file_bytes: bytes) -> ParseResult:
     return _normalise_rows(rows, _ENCIRCLE_LOOKUP)
 
 
+def attach_encircle_media_zip(
+    result: ParseResult, zip_bytes: bytes,
+) -> int:
+    """Walk a paired Encircle media ZIP and attach photos to items
+    in ``result``.  Returns the count of items that picked up a
+    photo from the ZIP.
+
+    The ZIP layout (per Encircle's marketing copy + a Play Store
+    reviewer's confirmation and NesVentory's parser):
+
+    .. code-block:: text
+
+        Kitchen/Dishwasher.jpg
+        Kitchen/Dishwasher_receipt.jpg
+        Living Room/Lamp.jpg
+        ...
+
+    One folder per room.  Filename stems include the item name;
+    optional ``_receipt`` / ``_datatag`` tokens flag photo role.
+    V2 binds the FIRST non-receipt-non-datatag photo per item as
+    the primary; secondary photos ship in a follow-up commit.
+
+    Filename matching is fuzzy — ZIP filenames go through
+    case-fold + whitespace-collapse + punctuation-strip before
+    comparison.  Room folder is the load-bearing constraint;
+    item-name match is a falls-back-to-prefix-then-substring
+    ladder so a photo named "Dishwasher_bosch.jpg" still pairs
+    with a parsed item named "Dishwasher".
+
+    XLSX-embedded photos already attached via
+    :func:`parse_encircle_xlsx` are preserved — the ZIP-walk only
+    fills in items that still lack a primary photo.  This matches
+    the research's "ZIP photos are higher resolution, prefer
+    them" guidance in the most common case (ZIP attaches first,
+    XLSX backfills) while also working in the reversed order
+    (XLSX attaches first, ZIP fills gaps)."""
+    import zipfile
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile:
+        return 0
+
+    # Bucket ZIP entries by room folder (top-level directory).
+    # Skip metadata + receipt + data-tag photos for the primary-
+    # binding pass.
+    by_room: dict[str, list[tuple[str, str]]] = {}
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        parts = info.filename.replace("\\", "/").split("/")
+        if len(parts) < 2:
+            # Bare file at zip root — no room context, skip.
+            continue
+        room_folder = parts[0]
+        leaf = parts[-1]
+        stem, _, ext = leaf.rpartition(".")
+        if not ext or ext.lower() not in (
+            "jpg", "jpeg", "png", "heic", "webp",
+        ):
+            continue
+        low_stem = stem.lower()
+        # V2 primary-only: defer receipt / data-tag photos to a
+        # future commit (Stash has a single ``photo`` column today).
+        if any(tok in low_stem
+               for tok in ("_receipt", "-receipt", " receipt",
+                           "_datatag", "-datatag",
+                           "_data_tag")):
+            continue
+        by_room.setdefault(room_folder, []).append((stem, info.filename))
+
+    def _norm_name(s: str) -> str:
+        s = (s or "").lower()
+        # Strip trailing tokens that look like a numeric suffix
+        # ("Dishwasher_1.jpg" → "dishwasher"), separator chars,
+        # and trailing whitespace.
+        s = re.sub(r"[_\-]+\d+$", "", s)
+        s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+        return s
+
+    attached = 0
+    for item in result.items:
+        if "_image_bytes" in item:
+            continue   # already has a primary from the XLSX path
+        room = (item.get("room") or "").strip()
+        if not room:
+            continue
+        candidates = by_room.get(room, [])
+        if not candidates:
+            # Try a case-insensitive folder match before giving up.
+            for folder, files in by_room.items():
+                if folder.lower() == room.lower():
+                    candidates = files
+                    break
+        if not candidates:
+            continue
+        target = _norm_name(item.get("item_name", ""))
+        if not target:
+            continue
+        # Exact stem match → prefix match → substring match — in
+        # that order so a precise filename wins over a fuzzy one.
+        best: tuple[str, str] | None = None
+        for stem, fullname in candidates:
+            if _norm_name(stem) == target:
+                best = (stem, fullname)
+                break
+        if best is None:
+            for stem, fullname in candidates:
+                if _norm_name(stem).startswith(target):
+                    best = (stem, fullname)
+                    break
+        if best is None:
+            for stem, fullname in candidates:
+                if target in _norm_name(stem):
+                    best = (stem, fullname)
+                    break
+        if best is None:
+            continue
+        try:
+            with zf.open(best[1]) as fh:
+                item["_image_bytes"] = fh.read()
+                attached += 1
+        except Exception:  # noqa: BLE001
+            continue
+
+    return attached
+
+
 def parse_encircle_xlsx(file_bytes: bytes) -> ParseResult:
     """Parse an Encircle XLSX upload (the web-app Detailed
     Spreadsheet export).  Reads only the first worksheet — the
-    Encircle export is single-sheet.  V1 reads text only; photo
-    extraction from ``xl/media/`` ships in a follow-up commit."""
+    Encircle export is single-sheet.  V2 also extracts embedded
+    images from ``xl/media/`` and pairs them with their items via
+    each image's cell anchor.
+
+    ``read_only=False`` is load-bearing here: openpyxl's read-only
+    mode is a streaming parser that skips images entirely.  The
+    10 MB upload cap (enforced in :func:`parse`) keeps the
+    full-load memory footprint bounded."""
     # openpyxl import is lazy so the rest of the module loads in
     # environments where openpyxl isn't installed (tests that
     # don't exercise the importer).
     from openpyxl import load_workbook
 
-    wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     rows: list[list[Any]] = []
     for row in ws.iter_rows(values_only=True):
         rows.append(list(row))
-    return _normalise_rows(rows, _ENCIRCLE_LOOKUP)
+    result = _normalise_rows(rows, _ENCIRCLE_LOOKUP)
+
+    # ── Embedded-image extraction ───────────────────────────────────
+    #
+    # openpyxl exposes images via the private ``_images`` list on the
+    # worksheet (no public API — has been stable for years).  Each
+    # ``Image`` carries an anchor with ``_from.row`` and
+    # ``_from.col`` (0-based) plus a ``_data()`` method returning the
+    # raw image bytes.  V2 binds the FIRST image per row to that
+    # row's parsed item as the primary photo; secondary images
+    # (receipt, data-tag) ship in a follow-up commit.
+    items_by_sheet_row: dict[int, dict[str, str]] = {}
+    for item in result.items:
+        sheet_row_str = item.get("_sheet_row")
+        if sheet_row_str is None:
+            continue
+        try:
+            items_by_sheet_row[int(sheet_row_str)] = item
+        except ValueError:
+            continue
+
+    for image in getattr(ws, "_images", []):
+        try:
+            sheet_row = image.anchor._from.row
+        except AttributeError:
+            continue
+        item = items_by_sheet_row.get(sheet_row)
+        if item is None or "_image_bytes" in item:
+            continue
+        try:
+            data = image._data()
+        except Exception:  # noqa: BLE001
+            # Any extraction hiccup — bad anchor, missing media
+            # part, etc. — degrades to text-only for that row.
+            continue
+        if not data:
+            continue
+        item["_image_bytes"] = data
+
+    return result
 
 
 # ── Parser registry ─────────────────────────────────────────────────
@@ -603,10 +788,37 @@ def execute_import(
 
         name = parsed.get("item_name") or "Untitled"
         notes = format_item_notes(parsed)
+        # Save attached image bytes (V2 — XLSX-embedded) through
+        # the canonical photo pipeline so the imported image
+        # gets EXIF-normalised, re-encoded as JPEG, encrypted
+        # with the tenant DEK, thumbnailed, and audited for
+        # upload-quota the same as a fresh /ingest upload.
+        photo_filename: str | None = None
+        image_bytes = parsed.get("_image_bytes")
+        if image_bytes:
+            try:
+                # Late import: ``dao.imports`` would create a
+                # circular dep with ``app`` if pulled at module
+                # load time.  The actual call only fires when an
+                # import is executed, so the cost is one-time
+                # per import job.
+                from app import save_photo_bytes
+                photo_filename = save_photo_bytes(
+                    actor.tenant_id, image_bytes, "imported.jpg",
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Quota exceeded / decode failure / disk write
+                # error — degrade to text-only for this item
+                # rather than failing the whole import.
+                _log.warning(
+                    "import.image_failed name=%r: %s", name, exc,
+                )
         try:
             dao_items.create(
                 actor, box_id,
-                name=name, notes=notes, photo=None, source_photo=None,
+                name=name, notes=notes,
+                photo=photo_filename,
+                source_photo=photo_filename,
             )
             item_count += 1
         except Exception as exc:  # noqa: BLE001

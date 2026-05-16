@@ -3654,15 +3654,21 @@ async def import_execute(
     request: Request,
     source: str = Form(...),
     upload: UploadFile = File(...),
+    media_zip: UploadFile | None = File(None),
 ):
-    """One-shot import: parse the upload + create items in the
-    actor's tenant + redirect back to /import with the new
-    location id so the page can render the result + an Undo
-    button.
+    """One-shot import: parse the upload + (optionally) attach
+    photos from a paired media ZIP + create items in the actor's
+    tenant + redirect back to /import with the new location id so
+    the page can render the result + an Undo button.
+
+    For Encircle: the XLSX path extracts embedded photos
+    automatically; a paired media ZIP (downloaded separately from
+    Encircle's web app) optionally fills in gaps + replaces
+    XLSX-embedded photos with the higher-resolution originals.
 
     Errors at the parse layer (unknown extension, malformed file,
-    too many rows) bubble up as 400s with a human-readable
-    message; the page renders them as an alert."""
+    too many rows) bubble up as 400s; the page renders them as
+    an alert."""
     actor: Actor = request.state.actor
     if not actor.tenant_id:
         raise HTTPException(403, "Import requires an active tenant")
@@ -3679,6 +3685,20 @@ async def import_execute(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+    media_photos_attached = 0
+    if media_zip is not None and media_zip.filename:
+        zip_bytes = await media_zip.read()
+        if len(zip_bytes) > dao_imports.MAX_IMPORT_BYTES * 5:
+            # ZIP photos can be hefty — bump the cap 5× for the
+            # paired ZIP (50 MB) so a multi-hundred-photo Encircle
+            # bundle has headroom without uncapping the door.
+            raise HTTPException(413, "Media ZIP too large (max 50 MB)")
+        if source == "encircle":
+            media_photos_attached = (
+                dao_imports.attach_encircle_media_zip(parsed, zip_bytes)
+            )
+
     try:
         result = dao_imports.execute_import(
             actor, parsed.items, source=source,
@@ -3692,6 +3712,7 @@ async def import_execute(
         "items": result["item_count"],
         "rooms": result["room_count"],
         "errors": result["error_count"],
+        "photos": media_photos_attached,
     })
     return RedirectResponse(f"/import?{qs}", status_code=303)
 

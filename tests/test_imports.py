@@ -404,3 +404,203 @@ def _make_actor(client):
         memberships=((client.test_tenant_id, "maintainer"),),
         shares=(),
     )
+
+
+# ── Image extraction (XLSX embedded + media ZIP) ────────────────────
+
+
+def _png_bytes(color: tuple = (255, 0, 0), size: tuple = (32, 32)) -> bytes:
+    """Make a tiny solid-colour PNG for embedding into test fixtures."""
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color=color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _xlsx_with_embedded_image(
+    rows: list[list[str]],
+    image_at: dict[int, bytes],
+) -> bytes:
+    """Build an XLSX fixture with rows of text + images anchored to
+    specific 0-based row indices.  Mirrors what an Encircle export
+    looks like: header at row 0, items + images at rows 1+.
+    Returns the bytes ready to feed to ``parse_encircle_xlsx``."""
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as XLImage
+
+    wb = Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    for row_idx, png in image_at.items():
+        # openpyxl needs the image data as a BytesIO + a cell anchor.
+        img = XLImage(io.BytesIO(png))
+        # Anchor at column A of the target row.  Spreadsheet rows are
+        # 1-based in Excel addressing, so row_idx (0-based) → "A{N+1}".
+        ws.add_image(img, f"A{row_idx + 1}")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_encircle_xlsx_extracts_embedded_images(client):
+    """XLSX path: an image anchored to a data row's first cell ends
+    up on the corresponding parsed item under ``_image_bytes``.
+    Other rows without images don't pick up phantom data."""
+    png = _png_bytes()
+    xlsx = _xlsx_with_embedded_image(
+        rows=[
+            ["Name", "Room"],          # row 0 — header
+            ["Dishwasher", "Kitchen"],  # row 1 — gets the image
+            ["Lamp", "Living Room"],    # row 2 — no image
+        ],
+        image_at={1: png},
+    )
+    result = client.app_module.dao_imports.parse_encircle_xlsx(xlsx)
+    assert len(result.items) == 2
+    by_name = {i["item_name"]: i for i in result.items}
+    assert "_image_bytes" in by_name["Dishwasher"]
+    assert by_name["Dishwasher"]["_image_bytes"] == png
+    assert "_image_bytes" not in by_name["Lamp"]
+
+
+def test_execute_import_saves_xlsx_embedded_image_via_photo_pipeline(client):
+    """End-to-end XLSX → execute: the embedded image lands on
+    disk as an encrypted blob with a real filename, and the
+    created item's ``photo`` column points at it."""
+    actor = _make_actor(client)
+    png = _png_bytes(color=(0, 200, 0))
+    xlsx = _xlsx_with_embedded_image(
+        rows=[
+            ["Name", "Room"],
+            ["Dishwasher", "Kitchen"],
+        ],
+        image_at={1: png},
+    )
+    result = client.app_module.dao_imports.parse_encircle_xlsx(xlsx)
+    client.app_module.dao_imports.execute_import(
+        actor, result.items, source="encircle",
+    )
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT photo FROM items WHERE name = 'Dishwasher'"
+        ).fetchone()
+    assert row["photo"], "item.photo not set"
+    assert row["photo"].endswith(".jpg")
+    blob = (client.app_module.UPLOAD_DIR
+            / str(actor.tenant_id) / row["photo"])
+    assert blob.exists()
+    # On-disk bytes are encrypted — must not equal the cleartext
+    # PNG (or the JPEG re-encode, but the simpler check is enough).
+    assert png not in blob.read_bytes()
+
+
+def test_encircle_media_zip_attaches_photos_by_room_and_name(client):
+    """ZIP companion path: a media ZIP with ``Kitchen/Dishwasher.jpg``
+    binds to the parsed item whose room is "Kitchen" and whose
+    item_name starts with "Dishwasher"."""
+    import zipfile
+    parsed_result = client.app_module.dao_imports.ParseResult(
+        items=[
+            {"item_name": "Dishwasher", "room": "Kitchen"},
+            {"item_name": "Lamp", "room": "Living Room"},
+            {"item_name": "Mystery item", "room": "Garage"},
+        ],
+    )
+    zip_buf = io.BytesIO()
+    dishwasher_png = _png_bytes(color=(255, 0, 0))
+    lamp_png = _png_bytes(color=(0, 0, 255))
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("Kitchen/Dishwasher.jpg", dishwasher_png)
+        zf.writestr("Kitchen/Dishwasher_receipt.jpg", b"ignored")
+        zf.writestr("Living Room/Lamp_bedside.jpg", lamp_png)
+        # Garage/* missing — Mystery item gets nothing.
+    attached = client.app_module.dao_imports.attach_encircle_media_zip(
+        parsed_result, zip_buf.getvalue(),
+    )
+    assert attached == 2
+    by_name = {i["item_name"]: i for i in parsed_result.items}
+    assert by_name["Dishwasher"]["_image_bytes"] == dishwasher_png
+    assert by_name["Lamp"]["_image_bytes"] == lamp_png
+    assert "_image_bytes" not in by_name["Mystery item"]
+
+
+def test_encircle_media_zip_does_not_overwrite_xlsx_embedded_photo(client):
+    """Items that already have a primary photo from the XLSX path
+    keep it — the ZIP only fills in gaps.  Preserves the "ZIP is
+    secondary, XLSX is primary" assumption when both are present
+    in the same upload."""
+    xlsx_png = _png_bytes(color=(100, 100, 100))
+    zip_png = _png_bytes(color=(200, 200, 200))
+    parsed_result = client.app_module.dao_imports.ParseResult(
+        items=[
+            {
+                "item_name": "Dishwasher", "room": "Kitchen",
+                "_image_bytes": xlsx_png,
+            },
+        ],
+    )
+    import zipfile
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("Kitchen/Dishwasher.jpg", zip_png)
+    attached = client.app_module.dao_imports.attach_encircle_media_zip(
+        parsed_result, zip_buf.getvalue(),
+    )
+    assert attached == 0  # no slot to fill — keep the XLSX one
+    assert parsed_result.items[0]["_image_bytes"] == xlsx_png
+
+
+def test_encircle_media_zip_skips_receipt_and_datatag_photos(client):
+    """``Kitchen/Dishwasher_receipt.jpg`` is not a primary photo —
+    Stash's current single-photo column shouldn't get the receipt
+    image bound as the item's hero shot.  Multi-photo support is
+    on the V3+ roadmap."""
+    parsed_result = client.app_module.dao_imports.ParseResult(
+        items=[{"item_name": "Dishwasher", "room": "Kitchen"}],
+    )
+    import zipfile
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("Kitchen/Dishwasher_receipt.jpg", _png_bytes())
+        zf.writestr("Kitchen/Dishwasher_datatag.jpg", _png_bytes())
+    attached = client.app_module.dao_imports.attach_encircle_media_zip(
+        parsed_result, zip_buf.getvalue(),
+    )
+    assert attached == 0
+    assert "_image_bytes" not in parsed_result.items[0]
+
+
+def test_import_post_accepts_media_zip_and_attaches_photos(client):
+    """End-to-end via the HTTP route: upload CSV + paired media ZIP,
+    verify the redirect carries ``photos=N`` and the created items
+    have their photos pointed at encrypted blobs on disk."""
+    import zipfile
+    data = _csv([
+        ["Name", "Room"],
+        ["Dishwasher", "Kitchen"],
+        ["Lamp", "Living Room"],
+    ])
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w") as zf:
+        zf.writestr("Kitchen/Dishwasher.jpg", _png_bytes(color=(10, 20, 30)))
+        zf.writestr("Living Room/Lamp.jpg", _png_bytes(color=(40, 50, 60)))
+    r = client.post(
+        "/import",
+        data={"source": "encircle"},
+        files={
+            "upload": ("export.csv", data, "text/csv"),
+            "media_zip": ("photos.zip", zip_buf.getvalue(),
+                          "application/zip"),
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "photos=2" in r.headers["location"]
+    # Both items have non-null photo filenames.
+    with client.app_module.db() as conn:
+        rows = conn.execute(
+            "SELECT name, photo FROM items "
+            "WHERE name IN ('Dishwasher', 'Lamp')"
+        ).fetchall()
+    assert all(row["photo"] for row in rows)

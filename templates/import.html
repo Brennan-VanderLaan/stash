@@ -26,7 +26,9 @@
   <strong>{{ request.query_params.get('items') }}</strong>
   items across
   <strong>{{ request.query_params.get('rooms') }}</strong>
-  rooms in <code>{{ last_location_name }}</code>.
+  rooms in <code>{{ last_location_name }}</code>{% if request.query_params.get('photos') and request.query_params.get('photos') != '0' %},
+  <strong>{{ request.query_params.get('photos') }}</strong>
+  photos attached from the media ZIP{% endif %}.
   {% endif %}
   <form method="post" action="/import/{{ last_location_id }}/undo" style="margin-top:0.6rem;">
     <button type="submit" class="btn btn-danger btn-sm"
@@ -60,13 +62,29 @@
       File
       <input type="file" name="upload" accept=".xlsx,.xlsm,.csv" required>
       <small class="text-muted">
-        .xlsx (preferred — Encircle's web-app export format)
-        or .csv (Save-As from Excel).
-        Photos in this format are coming in a follow-up — text
-        fields, rooms, brand/model/serial, warranty, purchase
-        info land today.
+        .xlsx (preferred — Encircle's web-app export format,
+        photos embedded in the spreadsheet are extracted
+        automatically) or .csv (Save-As from Excel; photos via
+        the media ZIP below).
       </small>
     </label>
+
+    <details class="mt-1">
+      <summary class="btn btn-secondary btn-sm">
+        + Add media ZIP (optional)
+      </summary>
+      <label class="mt-1">
+        Media ZIP
+        <input type="file" name="media_zip" accept=".zip">
+        <small class="text-muted">
+          Encircle's web-app "Download Photos & Videos" bundle.
+          Photos are matched to items by room folder + filename
+          (e.g. <code>Kitchen/Dishwasher.jpg</code>).
+          XLSX-embedded photos are kept where present; the ZIP
+          fills in gaps + the rest of your inventory.
+        </small>
+      </label>
+    </details>
 
     <button type="submit" class="btn btn-primary btn-block mt-1">
       Import
