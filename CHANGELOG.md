@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.39.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.38.0...v1.39.0) (2026-05-16)
+
+
+### Features
+
+* **quotas:** 100MB flat free tier + scaled cost-transparency ledger ([d21e37d](https://github.com/Brennan-VanderLaan/stash/commit/d21e37d0337d69486eebe0e649a543eeff10dd0f))
+
 ## [1.38.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.37.0...v1.38.0) (2026-05-16)
 
 
