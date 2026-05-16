@@ -115,20 +115,16 @@ services:
       # ``^/$`` is the public marketing landing — unauthenticated
       # visitors land here.  Authenticated dashboard moved to
       # ``/home`` so the bypass is targeted, not blanket.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/robots\.txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
-      # oauth2-proxy ships its own ``/robots.txt`` handler that
-      # intercepts the path BEFORE skip-auth-routes is consulted
-      # and returns a hardcoded ``User-agent: * / Disallow: /``
-      # to keep auth'd surfaces out of search.  That's the right
-      # default for most deploys, but we have our own friendlier
-      # robots.txt served by stash (which Allows the marketing
-      # surface and Disallows the tenant data — same effect, more
-      # context for crawlers).  Setting ``ROBOTS_PATH`` to a
-      # garbage path tells oauth2-proxy "never match real
-      # requests against my built-in handler", which is the
-      # idiomatic way to disable it (the docs say "set to empty"
-      # but the empty string falls through to the default).
-      OAUTH2_PROXY_ROBOTS_PATH: /__oauth2_proxy_robots_disabled__
+      # Note on /robots.txt: oauth2-proxy hard-codes a handler
+      # for the literal path ``/robots.txt`` that returns
+      # ``User-agent: *\nDisallow: /``.  The path is a Go const
+      # in their source, not an env-configurable setting.  We
+      # work around it at the Caddy layer (Caddyfile rewrites
+      # /robots.txt → /__stash_robots_txt before this proxy ever
+      # sees the request).  The skip-auth regex below carries
+      # the rewritten path so it forwards to stash without
+      # auth; stash serves the actual friendly content.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

@@ -215,6 +215,7 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         "/oauth/register",
         "/",
         "/robots.txt",
+        "/__stash_robots_txt",
     ))
     # /about/ added: Stripe + similar KYC partners require the
     # business name, refund policy, sub-processor list, etc. to be

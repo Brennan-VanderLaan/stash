@@ -574,7 +574,10 @@ _AUTH_BYPASS_EXACT = frozenset((
     "/",
     # robots.txt — crawlers fetch this before anything else and
     # MUST get a real response, not a Google-login redirect.
+    # Both the public path and the internal alias used by Caddy
+    # to dodge oauth2-proxy's hardcoded /robots.txt handler.
     "/robots.txt",
+    "/__stash_robots_txt",
 ))
 
 # Prefix-based bypass: RFC 9728 protected-resource metadata can
@@ -2463,11 +2466,25 @@ Crawl-delay: 2
 
 
 @app.get("/robots.txt", response_class=Response)
+@app.get("/__stash_robots_txt", response_class=Response)
 def robots_txt():
     """Public-pages-friendly robots.txt.  Bypasses the auth wall
     via _AUTH_BYPASS_EXACT so crawlers don't get bounced to
     Google login when they fetch this — a 30x or 401 here would
-    just confuse them.  Static content; cache for an hour."""
+    just confuse them.
+
+    Two paths bind the same handler:
+    * ``/robots.txt`` — the canonical path crawlers fetch.  In
+      a stand-alone stash deploy (no oauth2-proxy in front) this
+      serves directly.
+    * ``/__stash_robots_txt`` — internal alias used by the
+      production Caddy rewrite that dodges oauth2-proxy's
+      hardcoded /robots.txt handler (their path is a Go const,
+      not env-configurable).  Caddy rewrites the inbound
+      /robots.txt to this path; the response body is identical;
+      the client never sees the rewritten URL.
+
+    Static content; cache for an hour."""
     return Response(
         content=_ROBOTS_TXT,
         media_type="text/plain; charset=utf-8",

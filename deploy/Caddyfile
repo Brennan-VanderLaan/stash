@@ -48,6 +48,28 @@
 		max_size 50MB
 	}
 
+	# /robots.txt routing — oauth2-proxy intercepts the literal
+	# path ``/robots.txt`` with a HARDCODED handler (the path is
+	# a Go const in their source, not env-configurable) that
+	# returns ``User-agent: *\nDisallow: /``.  That's wrong for us
+	# because we have a public marketing surface we WANT crawlers
+	# to index.
+	#
+	# Workaround: Caddy rewrites the inbound path to an internal
+	# alias ``/__stash_robots_txt`` that oauth2-proxy's hardcoded
+	# handler doesn't recognise.  oauth2-proxy then falls through
+	# to its normal proxy path; the SKIP_AUTH_ROUTES regex for
+	# that alias forwards to stash without auth; stash serves the
+	# friendly file from its route handler.  Browser URL stays
+	# ``/robots.txt`` — this is an internal rewrite, not a
+	# redirect.
+	handle /robots.txt {
+		rewrite * /__stash_robots_txt
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
 	reverse_proxy oauth2-proxy:4180 {
 		header_up X-Real-IP {remote_host}
 	}
