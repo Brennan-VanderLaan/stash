@@ -578,6 +578,14 @@ _AUTH_BYPASS_EXACT = frozenset((
     # to dodge oauth2-proxy's hardcoded /robots.txt handler.
     "/robots.txt",
     "/__stash_robots_txt",
+    # Targeted ad-campaign landing for Encircle refugees.  No
+    # internal cross-links (deliberate — this is for paid traffic
+    # only, not organic discovery) and ``<meta name="robots"
+    # content="noindex">`` so Google won't index it even if a
+    # crawler stumbles in via an inbound link.  Bypass is needed
+    # so visitors land here without an oauth2-proxy redirect to
+    # Google sign-in.
+    "/encircle-alternative",
 ))
 
 # Prefix-based bypass: RFC 9728 protected-resource metadata can
@@ -2516,6 +2524,13 @@ Allow: /about/
 Allow: /static/
 Allow: /robots.txt
 
+# Paid-traffic landing pages — kept out of organic search because
+# they target a specific displaced-user audience via ad campaigns,
+# not general inventory-software shoppers.  Page also carries
+# ``<meta name="robots" content="noindex,nofollow">`` as a
+# belt-and-suspenders measure for crawlers that ignore robots.txt.
+Disallow: /encircle-alternative
+
 # Tenant data lives below.  Auth-gated server-side too; this is
 # just so we don't waste a crawler's bandwidth on responses it
 # can't read.
@@ -2594,6 +2609,32 @@ def public_landing(request: Request):
     /home where their tenant data lives."""
     return templates.TemplateResponse(
         request, "landing.html",
+        {
+            "business_name": _public_business_name(),
+            "product_name": _public_product_name(),
+            "contact_email": _public_contact_email(),
+            "pro_price_display": _pro_price_display(),
+            "public_url": PUBLIC_URL,
+            "hide_feedback_widget": True,
+        },
+    )
+
+
+@app.get("/encircle-alternative", response_class=HTMLResponse)
+def encircle_alternative(request: Request):
+    """Targeted landing page for displaced Encircle users — reached
+    only via paid traffic (Google Search Ads) + people who know
+    the URL.  Deliberately NOT linked from any other page (no
+    nav, no footer, no /about index) and carries
+    ``<meta name="robots" content="noindex,nofollow">`` so it
+    stays out of organic search results.
+
+    The visitor lands here from an ad, reads the targeted pitch,
+    and can then explore Stash normally via the standard public
+    chrome (brand link, /about nav, Sign in CTA).  No special
+    onboarding flow — they sign in like any other prospect."""
+    return templates.TemplateResponse(
+        request, "encircle_alternative.html",
         {
             "business_name": _public_business_name(),
             "product_name": _public_product_name(),

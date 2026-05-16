@@ -124,7 +124,7 @@ services:
       # sees the request).  The skip-auth regex below carries
       # the rewritten path so it forwards to stash without
       # auth; stash serves the actual friendly content.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/,^/encircle-alternative$
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

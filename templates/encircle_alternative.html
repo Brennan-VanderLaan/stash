@@ -1,0 +1,151 @@
+{# Targeted landing page for displaced Encircle users.  Reached only
+   by ad campaigns + people who know the URL — NOT linked from any
+   other page on the site, NOT in the public /about index, NOT in
+   the footer.  ``noindex,nofollow`` keeps it out of organic search
+   so a Google query for "stash inventory" doesn't surface it next
+   to /about/pricing.  Visitors who land here see the regular
+   public chrome (brand, nav, sign-in) so they can explore Stash
+   normally after the targeted message lands. #}
+{% extends "about/_layout.html" %}
+{% set page_title = "Encircle alternative" %}
+
+{% block head_meta %}
+{# Override the inherited default head_meta so we can pin the
+   noindex directive + an Encircle-targeted title/description.
+   Discord/Slack link previews will pick up the og: copy below
+   (we still want shares to look polished even though crawlers
+   shouldn't surface us organically). #}
+<title>Stash — a home for your inventory after Encircle</title>
+<meta name="description" content="Encircle exited the consumer market in late 2025. Stash is a transparent, no-dark-patterns inventory tool with a CSV importer for your Encircle export.">
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:title" content="Stash — a home for your inventory after Encircle">
+<meta property="og:description" content="An honest replacement for Encircle.  Pricing in public, your data exportable any time, no upsell traps.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Stash">
+<meta name="twitter:card" content="summary">
+{% endblock %}
+
+{% block content %}
+
+<section class="landing-hero">
+  <p class="landing-eyebrow">For displaced Encircle users</p>
+  <h1 class="landing-headline">
+    Encircle is gone.<br>Your inventory shouldn't be.
+  </h1>
+  <p class="landing-sub">
+    Encircle's consumer product shut down in late 2025.  Stash is a
+    real home for that inventory — with a CSV importer built for
+    your export, pricing transparent on a public ledger, and a
+    "download my data" button that actually works.
+  </p>
+  <div class="landing-cta-row">
+    <a href="/home" class="landing-cta-primary">Start free →</a>
+    <a href="#how-it-works" class="landing-cta-secondary">How it works</a>
+  </div>
+  <p class="landing-cta-note text-sm text-muted">
+    CSV importer ships this week ·
+    Free plan available ·
+    Pro is {{ pro_price_display }}/mo
+  </p>
+</section>
+
+<section class="landing-features" id="how-it-works">
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">📤</span> Bring your Encircle export</h2>
+    <p>
+      Drop the CSV.  We map columns to Stash boxes, rooms, and items
+      — preview before you commit.  Photos restore via the same
+      upload pipeline as a fresh ingest.
+      <em>Importer ships this week; early-bird signups get the
+      import flow first.</em>
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">💸</span> Pricing on the table</h2>
+    <p>
+      Every paid bill breaks into five lines that always sum to what
+      you pay: vendor passthrough, community backups, free-tier
+      subsidy, operator payout, margin.  The public
+      <a href="/about/transparency">cost ledger</a> reconciles with
+      what every tenant sees on their own bill.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">🚫</span> No dark patterns</h2>
+    <p>
+      No "free trial that quietly enrolls you in Pro."  No silent
+      price hikes on existing subscribers.  No mandatory consent
+      flows that trick you into opting in.  Refunds in policy,
+      cancellation in two clicks.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">📦</span> Photo-first cataloguing</h2>
+    <p>
+      Snap a pile, AI vision splits it into named items.  Print Avery
+      QR labels from the browser.  Walk a box twice a year with a
+      swipe-based audit.  The same inventory pattern Encircle taught
+      its users — without the platform-exit risk.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">🔑</span> Your keys, your data</h2>
+    <p>
+      Per-tenant encryption at rest.  CSV + decrypted-JPEG export at
+      any time (GDPR Article 20).  Delete the tenant and everything
+      goes with it.  No "premium-tier export" upsell.
+    </p>
+  </article>
+  <article class="landing-feature">
+    <h2><span aria-hidden="true">🧠</span> We show our work</h2>
+    <p>
+      The codebase is open-source.  The
+      <a href="/about/transparency">cost ledger</a> is public.  The
+      product spec describing every architectural decision is in the
+      repo.  An in-app feedback widget routes your reports through
+      a triage queue you can watch in real time.
+    </p>
+  </article>
+</section>
+
+<section class="landing-transparency">
+  <h2>How we compare</h2>
+  <p class="text-muted text-sm">
+    Honest, brief, updated as features land.
+  </p>
+  <ul>
+    <li>
+      <strong>vs Encircle:</strong> Stash is still here.  The
+      consumer tier shut down five months ago and that data is
+      currently homeless.  CSV importer + tenant per migration
+      means it can land here in an afternoon.
+    </li>
+    <li>
+      <strong>vs Sortly:</strong> Sortly's trial converts to paid
+      without an explicit consent step; Stash's Pro upgrade is a
+      separate, opt-in Stripe Checkout.  Sortly's per-item caps
+      drive forced upgrades; Stash's caps are documented on the
+      <a href="/about/pricing">pricing page</a> and explicitly
+      negotiable.
+    </li>
+    <li>
+      <strong>vs spreadsheets:</strong> Spreadsheets don't know
+      what's in your photos.  Stash does.  The rest — search,
+      audit, relocate, labels — is bolted onto a vision pipeline
+      you can't build yourself in a weekend.
+    </li>
+  </ul>
+</section>
+
+<section class="landing-final-cta">
+  <h2>The migration starts with one CSV.</h2>
+  <p>
+    Sign in with Google.  Drop your Encircle export.  Tell us
+    what's confusing and we'll fix it the same week.
+  </p>
+  <a href="/home" class="landing-cta-primary">
+    Open your stash →
+  </a>
+</section>
+
+{% endblock %}
