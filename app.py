@@ -2402,8 +2402,10 @@ def public_landing(request: Request):
         request, "landing.html",
         {
             "business_name": _public_business_name(),
+            "product_name": _public_product_name(),
             "contact_email": _public_contact_email(),
             "pro_price_display": _pro_price_display(),
+            "public_url": PUBLIC_URL,
             "hide_feedback_widget": True,
         },
     )
@@ -5267,7 +5269,26 @@ def _public_contact_email() -> str:
 
 
 def _public_business_name() -> str:
+    """Legal entity name that ships on Stripe pages + the /about
+    footer.  Set via ``STASH_PUBLIC_BUSINESS_NAME`` to your
+    actual business name (operators with a personal LLC put their
+    full name here for Stripe KYC).  Distinct from the product
+    name below — Stripe wants the entity, the marketing surface
+    wants the product."""
     return (os.environ.get("STASH_PUBLIC_BUSINESS_NAME") or "Stash").strip() or "Stash"
+
+
+def _public_product_name() -> str:
+    """Marketing / link-preview / page-title name.  Always
+    ``"Stash"`` unless an operator forks the brand and explicitly
+    overrides with ``STASH_PUBLIC_PRODUCT_NAME``.  Keeping this
+    separate from ``_public_business_name`` so a personal-LLC
+    operator doesn't end up with their own name as the title bar
+    on every public page + every social-card preview (the bug
+    that triggered this split: a shared link to ``/`` rendered as
+    'Brennan VanderLaan — Brennan VanderLaan household inventory'
+    in Discord's link preview)."""
+    return (os.environ.get("STASH_PUBLIC_PRODUCT_NAME") or "Stash").strip() or "Stash"
 
 
 def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
@@ -5284,6 +5305,7 @@ def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
         {
             "page_title": title,
             "business_name": _public_business_name(),
+            "product_name": _public_product_name(),
             "contact_email": _public_contact_email(),
             "public_url": PUBLIC_URL,
             "pro_price_display": _pro_price_display(),

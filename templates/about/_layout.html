@@ -22,13 +22,36 @@
       } catch (e) { /* private mode / storage blocked */ }
     })();
   </script>
+  {# Page metadata block — pages can override ``head_meta`` to
+     supply their own Open Graph / Twitter / description tags
+     when the defaults below would leak something the operator
+     doesn't want public (e.g. landing.html, which originally
+     rendered ``business_name`` in BOTH the title and the
+     description and resulted in social-card previews reading
+     "Brennan VanderLaan — Brennan VanderLaan household
+     inventory").  Default rendering is fine for /about/* pages
+     because those ARE the business-name-load-bearing surface
+     (Stripe KYC, terms of service, etc.). #}
+  {% block head_meta %}
   <title>{{ page_title }} · {{ business_name }}</title>
-  <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
   <meta name="description" content="{{ page_title }} — {{ business_name }} household inventory">
+  <meta property="og:title" content="{{ page_title }} · {{ business_name }}">
+  <meta property="og:description" content="{{ page_title }} — {{ business_name }} household inventory">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ product_name or 'Stash' }}">
+  <meta name="twitter:card" content="summary">
+  {% endblock %}
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
 </head>
 <body class="about-public">
   <header class="about-header">
-    <a href="/about" class="about-brand">{{ business_name }}</a>
+    {# Top-of-page brand is the PRODUCT name (universally
+       "Stash" unless an operator forked the marketing); the
+       legal-entity name still appears in the footer + on the
+       Stripe-facing pages where it's load-bearing.  This split
+       fixes the social-card / brand-at-top read of "Brennan
+       VanderLaan" — that's the legal entity, not the product. #}
+    <a href="/about" class="about-brand">{{ product_name or business_name }}</a>
     <nav class="about-nav">
       <a href="/about/pricing">Pricing</a>
       <a href="/about/transparency">Where your $ goes</a>

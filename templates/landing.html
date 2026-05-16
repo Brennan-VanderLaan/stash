@@ -4,7 +4,35 @@
    click through smoothly).  Authenticated users hitting ``/`` also
    see this — they click "Open your stash" to land at /home. #}
 {% extends "about/_layout.html" %}
-{% set page_title = business_name %}
+{% set page_title = product_name %}
+
+{# Override the layout's default head_meta block with stash-
+   branded copy.  The default in the layout uses ``business_name``
+   (your legal entity) which is the right call for Stripe's KYC
+   crawler on /about/terms but the wrong call for a Discord /
+   Slack / iMessage link preview — those should read the product
+   name + a punchy tagline, not the operator's full legal name
+   echoed twice. #}
+{% set _tagline = "Household inventory that doesn't hate you." %}
+{% set _description = "Snap a photo of a pile. Stash turns it into named, tagged, QR-labelled boxes you can find six months later when you're standing in the garage at 2am." %}
+{% block head_meta %}
+<title>{{ product_name }} — {{ _tagline }}</title>
+<meta name="description" content="{{ _description }}">
+{# Open Graph (Discord, Slack, iMessage, Facebook, LinkedIn). #}
+<meta property="og:title" content="{{ product_name }} — {{ _tagline }}">
+<meta property="og:description" content="{{ _description }}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ product_name }}">
+{% if public_url %}<meta property="og:url" content="{{ public_url }}/">{% endif %}
+{# Twitter cards (X, Bluesky's Twitter-card compat path).  Use
+   ``summary`` (no large image) since we don't ship an og:image
+   yet — the preview is text-only, which is the cleanest fallback
+   instead of a broken-image icon. #}
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{ product_name }} — {{ _tagline }}">
+<meta name="twitter:description" content="{{ _description }}">
+{% endblock %}
+
 {% block content %}
 
 <section class="landing-hero">
@@ -13,7 +41,7 @@
     Snap a pile, get a sorted&nbsp;catalogue.
   </h1>
   <p class="landing-sub">
-    {{ business_name }} turns a photo into named, tagged,
+    {{ product_name }} turns a photo into named, tagged,
     QR-labeled boxes.  Find anything six months later when
     you're standing in the garage at 2&nbsp;am.
   </p>
