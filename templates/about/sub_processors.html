@@ -3,7 +3,7 @@
 <section class="about-hero">
   <h1>Sub-processors</h1>
   <p class="about-lede">
-    Third parties {{ business_name }} relies on to deliver the
+    Third parties {{ product_name }} relies on to deliver the
     service.  Each row lists what they touch and why.  We don't
     ship your data to anyone not on this list.
   </p>
@@ -24,7 +24,7 @@
       <tr>
         <td><strong>Google</strong> (Gemini API)</td>
         <td>AI vision: item detection + bounding boxes; tag suggestions; floorplan-art generation.</td>
-        <td>Photos you submit for ingest, item names, notes.  Output is returned to {{ business_name }}; Google's API terms govern downstream training (we use Vertex / Gemini API endpoints that opt out of training by default).</td>
+        <td>Photos you submit for ingest, item names, notes.  Output is returned to {{ product_name }}; Google's API terms govern downstream training (we use Vertex / Gemini API endpoints that opt out of training by default).</td>
         <td>US / EU (region depends on the Gemini API endpoint).</td>
       </tr>
       <tr>
@@ -48,7 +48,7 @@
       <tr>
         <td><strong>Google</strong> (OAuth identity)</td>
         <td>Sign-in identity provider via oauth2-proxy.</td>
-        <td>Email + Google account ID, used to map you to a {{ business_name }} tenant membership.</td>
+        <td>Email + Google account ID, used to map you to a {{ product_name }} tenant membership.</td>
         <td>US / EU.</td>
       </tr>
     </tbody>
@@ -71,7 +71,7 @@
     This list is part of the operator surface — see the in-app
     /admin "Vendor cost (this month)" panel for live spend across
     these providers.  Cost numbers + sub-processor list never
-    leave {{ business_name }} operator hands and are not shown to
+    leave {{ product_name }} operator hands and are not shown to
     tenant maintainers.
   </p>
 </section>

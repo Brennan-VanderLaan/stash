@@ -83,16 +83,37 @@ def test_static_assets_bypass_auth_so_public_pages_render_styled(
 
 
 def test_about_pages_carry_business_name(tmp_path, monkeypatch):
-    """Stripe requires the business name to match what we registered
-    with them.  Env-var-configurable so prod can swap in a different
-    name without touching code."""
+    """The legal-entity / business name lands on the pages where
+    it's actually load-bearing (contracting party on /terms,
+    data controller on /privacy) — NOT on every public page.
+
+    Prior shape of this test asserted the business name appeared
+    on every /about/* page.  That was the load-bearing decision
+    that produced "Brennan VanderLaan — Brennan VanderLaan
+    household inventory" Discord previews.  Per the redesign,
+    most surfaces render ``product_name`` ("Stash") and only the
+    two legal pages carry the entity name in their contract /
+    data-controller clauses."""
     app_mod = _bootstrap_app(
         tmp_path, monkeypatch,
         STASH_PUBLIC_BUSINESS_NAME="Test Stash Co.",
     )
     with TestClient(app_mod.app) as c:
-        for path in _ALL_ABOUT_PATHS:
-            assert "Test Stash Co." in c.get(path).text
+        # Required: Terms (binding agreement party) + Privacy
+        # (data controller).
+        for path in ("/about/terms", "/about/privacy"):
+            assert "Test Stash Co." in c.get(path).text, (
+                f"{path} should surface the legal entity name in "
+                "its load-bearing clause"
+            )
+        # And NOT on the marketing surfaces — that's the privacy
+        # regression we just fixed.
+        for path in ("/", "/about", "/about/pricing",
+                     "/about/refunds", "/about/contact"):
+            assert "Test Stash Co." not in c.get(path).text, (
+                f"{path} leaked the legal entity name into a "
+                "marketing surface"
+            )
 
 
 def test_about_contact_includes_email(tmp_path, monkeypatch):

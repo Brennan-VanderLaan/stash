@@ -33,12 +33,17 @@
      because those ARE the business-name-load-bearing surface
      (Stripe KYC, terms of service, etc.). #}
   {% block head_meta %}
-  <title>{{ page_title }} · {{ business_name }}</title>
-  <meta name="description" content="{{ page_title }} — {{ business_name }} household inventory">
-  <meta property="og:title" content="{{ page_title }} · {{ business_name }}">
-  <meta property="og:description" content="{{ page_title }} — {{ business_name }} household inventory">
+  {# Title + description default to ``product_name`` (universally
+     "Stash") rather than the legal entity.  Sharing /about/terms
+     to Discord shouldn't print the operator's full legal name —
+     it's enough that the operator's identity appears in the
+     contracting-party clauses on the page itself. #}
+  <title>{{ page_title }} · {{ product_name }}</title>
+  <meta name="description" content="{{ page_title }} — {{ product_name }} household inventory">
+  <meta property="og:title" content="{{ page_title }} · {{ product_name }}">
+  <meta property="og:description" content="{{ page_title }} — {{ product_name }} household inventory">
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="{{ product_name or 'Stash' }}">
+  <meta property="og:site_name" content="{{ product_name }}">
   <meta name="twitter:card" content="summary">
   {% endblock %}
   <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
@@ -46,12 +51,12 @@
 <body class="about-public">
   <header class="about-header">
     {# Top-of-page brand is the PRODUCT name (universally
-       "Stash" unless an operator forked the marketing); the
-       legal-entity name still appears in the footer + on the
-       Stripe-facing pages where it's load-bearing.  This split
-       fixes the social-card / brand-at-top read of "Brennan
-       VanderLaan" — that's the legal entity, not the product. #}
-    <a href="/about" class="about-brand">{{ product_name or business_name }}</a>
+       "Stash" unless an operator forked the marketing).  The
+       legal-entity name is restricted to the specific clauses
+       on /about/terms + /about/privacy that name a contracting
+       party — that's the only place an operator's full legal
+       name is load-bearing for a sole-prop deploy. #}
+    <a href="/about" class="about-brand">{{ product_name }}</a>
     <nav class="about-nav">
       <a href="/about/pricing">Pricing</a>
       <a href="/about/transparency">Where your $ goes</a>
@@ -74,7 +79,7 @@
   </main>
   <footer class="about-footer">
     <p>
-      © {{ business_name }} ·
+      © {{ product_name }} ·
       <a href="/about/contact">{{ contact_email }}</a> ·
       <a href="/about/terms">Terms</a> ·
       <a href="/about/privacy">Privacy</a> ·
