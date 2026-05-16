@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.33.0...v1.34.0) (2026-05-16)
+
+
+### Features
+
+* **invites:** operator mints onboarding link; recipient names own tenant ([9359d1a](https://github.com/Brennan-VanderLaan/stash/commit/9359d1a0c55bcf16e34d4488d6a9cfaddf8bb930))
+
 ## [1.33.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.32.1...v1.33.0) (2026-05-16)
 
 
