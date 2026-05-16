@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.36.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.35.1...v1.36.0) (2026-05-16)
+
+
+### Features
+
+* **queue:** "just in a room (no box yet)" picker option ([879f16d](https://github.com/Brennan-VanderLaan/stash/commit/879f16dbba79717f8a306a44a84d06e7a44eba0f))
+
+
+### Bug Fixes
+
+* **queue:** move crop controls under the photo + scroll on mobile ([c7e0d63](https://github.com/Brennan-VanderLaan/stash/commit/c7e0d639477389ac4bff1716c3d0265032e816b7))
+
 ## [1.35.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.35.0...v1.35.1) (2026-05-16)
 
 
