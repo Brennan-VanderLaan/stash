@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.40.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.39.0...v1.40.0) (2026-05-16)
+
+
+### Features
+
+* **signup:** self-serve free-tier signup + operator-tunable pool ([e4092e4](https://github.com/Brennan-VanderLaan/stash/commit/e4092e4df9e45ade2afc1b1505cfd00b8357751c))
+
 ## [1.39.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.38.0...v1.39.0) (2026-05-16)
 
 
