@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.30.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.29.0...v1.30.0) (2026-05-15)
+
+
+### Features
+
+* **feedback:** opt-in handles — no more email leak on the public leaderboard ([d32e773](https://github.com/Brennan-VanderLaan/stash/commit/d32e773b622c8ce6b2d1756097d3bab684960407))
+
+
+### Bug Fixes
+
+* **usage:** "signed in as" email overflowed display box on narrow mobile ([d804140](https://github.com/Brennan-VanderLaan/stash/commit/d804140316c04a7f3a633d46bd5ab6dd2cfcbbce))
+
 ## [1.29.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.28.0...v1.29.0) (2026-05-15)
 
 
