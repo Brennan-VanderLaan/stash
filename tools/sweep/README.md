@@ -97,6 +97,14 @@ python tools/sweep/sweep.py \
 # A single viewport for fast iteration:
 python tools/sweep/sweep.py --viewports iphone-se
 
+# A preset of related viewports:
+python tools/sweep/sweep.py --viewports phones
+python tools/sweep/sweep.py --viewports desktops
+python tools/sweep/sweep.py --viewports all      # ~18 viewports!
+
+# Mix presets + individual nicknames:
+python tools/sweep/sweep.py --viewports phones,desktop-2k
+
 # Custom output directory:
 python tools/sweep/sweep.py --out-dir /tmp/sweep-now
 

@@ -140,10 +140,62 @@
   }
   main {
     padding: 1rem 1.2rem 3rem;
+  }
+  /* "Flat" view: one big grid of cards, no grouping. */
+  main.view-flat {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
     gap: 1.2rem;
   }
+  /* "By route" view: stacked sections, one per route.  Inside each
+     section the viewports flow side-by-side via an auto-fit grid
+     that shrinks each card on narrower windows.  On a 1920 px
+     desktop all 5 default viewports fit on one row; on a 1366 px
+     laptop they wrap to two; on a phone they stack vertically. */
+  main.view-route {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .route-group {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.015);
+    padding: 0.65rem 0.85rem 0.85rem;
+  }
+  .route-group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    margin-bottom: 0.55rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.95rem;
+  }
+  .route-group-head .route {
+    color: var(--accent);
+    font-weight: 700;
+    word-break: break-all;
+  }
+  .route-group-head .count {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .route-group-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.8rem;
+  }
+  /* Cards inside a group are compact — the route is already
+     printed in the section header, so the per-card head only
+     needs the viewport label. */
+  main.view-route .shot {
+    padding: 0.45rem 0.55rem 0.6rem;
+  }
+  main.view-route .shot-head .route { display: none; }
+  main.view-route .shot-head { margin-bottom: 0.35rem; }
+  main.view-route .findings-list { font-size: 0.75rem; }
   .shot {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -335,6 +387,10 @@
     <span id="status-text">connecting…</span>
   </span>
   <span class="spacer"></span>
+  <span class="filter" id="view-filter">
+    <button data-view="route" class="active">By route</button>
+    <button data-view="flat">Flat</button>
+  </span>
   <span class="filter" id="viewport-filter"></span>
   <span class="actions">
     <button id="copy-btn">Copy report</button>
@@ -384,6 +440,15 @@
   let totalExpected = 0;
   let runComplete = false;
   const knownSlugs = new Set();
+  // ``viewMode`` toggles between the grouped-by-route layout
+  // (default — pages side-by-side at every viewport) and the flat
+  // grid layout (all 45 shots in one auto-fill grid).
+  let viewMode = "route";
+  // Tracks routes as they first appear so the "by route" view keeps
+  // a stable ordering matching CLI --routes order rather than
+  // alphabetising or doing whatever the SSE events show up in.
+  const routeOrder = [];
+  const routeOrderSet = new Set();
 
   function persist() {
     try {
@@ -424,7 +489,13 @@
   }
   storageKey = "sweep:" + manifest.run_id;
   load();
-  manifest.shots.forEach(s => knownSlugs.add(s.slug));
+  manifest.shots.forEach(s => {
+    knownSlugs.add(s.slug);
+    if (!routeOrderSet.has(s.route)) {
+      routeOrderSet.add(s.route);
+      routeOrder.push(s.route);
+    }
+  });
   totalExpected = manifest.shots.length;
   runComplete = manifest.status === "complete";
   updateMeta();
@@ -683,35 +754,82 @@
     });
   }
 
+  function makeShotCard(shot) {
+    const card = document.createElement("article");
+    card.classList.add("shot");
+    card.dataset.slug = shot.slug;
+    card.innerHTML = `
+      <div class="shot-head">
+        <span class="route">${escapeHtml(shot.route)}</span>
+        <span class="viewport">${shot.viewport} · ${shot.width}×${shot.height}</span>
+      </div>
+      <div class="shot-canvas-wrap" data-slug="${shot.slug}">
+        <img src="${shot.image}" alt="${escapeHtml(shot.route)} ${shot.viewport}"
+             draggable="false">
+        <svg class="shot-svg" viewBox="0 0 100 100"
+             preserveAspectRatio="none"></svg>
+      </div>
+      <div class="findings-list"></div>`;
+    const wrap = card.querySelector(".shot-canvas-wrap");
+    const svg = card.querySelector("svg");
+    attachDrawing(wrap, svg, shot.slug);
+    return card;
+  }
+
+  function applyViewClass() {
+    grid.classList.remove("view-flat", "view-route");
+    grid.classList.add(viewMode === "flat" ? "view-flat" : "view-route");
+  }
+
   function renderGrid() {
     grid.innerHTML = "";
+    applyViewClass();
     const shots = manifest.shots.filter(s =>
       activeViewport === "all" || s.viewport === activeViewport);
     if (!shots.length) {
       grid.innerHTML = `<div class="empty">no shots match filter</div>`;
       return;
     }
-    shots.forEach(shot => {
-      const card = document.createElement("article");
-      card.classList.add("shot");
-      card.dataset.slug = shot.slug;
-      card.innerHTML = `
-        <div class="shot-head">
-          <span class="route">${escapeHtml(shot.route)}</span>
-          <span class="viewport">${shot.viewport} · ${shot.width}×${shot.height}</span>
-        </div>
-        <div class="shot-canvas-wrap" data-slug="${shot.slug}">
-          <img src="${shot.image}" alt="${escapeHtml(shot.route)} ${shot.viewport}"
-               draggable="false">
-          <svg class="shot-svg" viewBox="0 0 100 100"
-               preserveAspectRatio="none"></svg>
-        </div>
-        <div class="findings-list"></div>`;
-      grid.appendChild(card);
-      const wrap = card.querySelector(".shot-canvas-wrap");
-      const svg = card.querySelector("svg");
-      attachDrawing(wrap, svg, shot.slug);
-      renderShot(shot.slug);
+    if (viewMode === "flat") {
+      shots.forEach(shot => {
+        grid.appendChild(makeShotCard(shot));
+        renderShot(shot.slug);
+      });
+      return;
+    }
+    // "By route" view: one <section> per route, in first-seen order.
+    // Within each section, viewports sorted by width ascending so
+    // phones land left of laptops land left of desktops — reads as
+    // a responsive-design contact sheet.
+    const grouped = new Map();
+    shots.forEach(s => {
+      if (!grouped.has(s.route)) grouped.set(s.route, []);
+      grouped.get(s.route).push(s);
+    });
+    const orderedRoutes = routeOrder.filter(r => grouped.has(r));
+    // Sanity: any route in shots not yet tracked by routeOrder
+    // (shouldn't happen, but guard).
+    for (const r of grouped.keys()) {
+      if (!routeOrderSet.has(r)) orderedRoutes.push(r);
+    }
+    orderedRoutes.forEach(route => {
+      const group = grouped.get(route);
+      group.sort((a, b) => a.width - b.width);
+      const section = document.createElement("section");
+      section.classList.add("route-group");
+      section.dataset.route = route;
+      section.innerHTML = `
+        <header class="route-group-head">
+          <span class="route">${escapeHtml(route)}</span>
+          <span class="count">${group.length} viewport${group.length === 1 ? "" : "s"}</span>
+        </header>
+        <div class="route-group-row"></div>`;
+      const row = section.querySelector(".route-group-row");
+      group.forEach(shot => {
+        row.appendChild(makeShotCard(shot));
+      });
+      grid.appendChild(section);
+      group.forEach(shot => renderShot(shot.slug));
     });
   }
 
@@ -821,33 +939,81 @@
     // If the empty-state placeholder is showing, clear it first.
     const placeholder = grid.querySelector(".empty");
     if (placeholder) placeholder.remove();
-    const card = document.createElement("article");
-    card.classList.add("shot");
+    const card = makeShotCard(payload);
     if (animate) card.classList.add("fresh");
-    card.dataset.slug = payload.slug;
-    card.innerHTML = `
-      <div class="shot-head">
-        <span class="route">${escapeHtml(payload.route)}</span>
-        <span class="viewport">${payload.viewport} · ${payload.width}×${payload.height}</span>
-      </div>
-      <div class="shot-canvas-wrap" data-slug="${payload.slug}">
-        <img src="${payload.image}" alt="${escapeHtml(payload.route)} ${payload.viewport}"
-             draggable="false">
-        <svg class="shot-svg" viewBox="0 0 100 100"
-             preserveAspectRatio="none"></svg>
-      </div>
-      <div class="findings-list"></div>`;
-    grid.appendChild(card);
-    const wrap = card.querySelector(".shot-canvas-wrap");
-    const svg = card.querySelector("svg");
-    attachDrawing(wrap, svg, payload.slug);
+    if (viewMode === "flat") {
+      grid.appendChild(card);
+    } else {
+      // Group view: find (or create) the <section> for this route
+      // and insert the card sorted by width so phones stay left of
+      // laptops even when shots arrive in arbitrary SSE order.
+      let section = grid.querySelector(
+        `section.route-group[data-route="${cssEscape(payload.route)}"]`);
+      if (!section) {
+        section = document.createElement("section");
+        section.classList.add("route-group");
+        section.dataset.route = payload.route;
+        section.innerHTML = `
+          <header class="route-group-head">
+            <span class="route">${escapeHtml(payload.route)}</span>
+            <span class="count" data-count>1 viewport</span>
+          </header>
+          <div class="route-group-row"></div>`;
+        // Insert the new section in route-order position so
+        // the page stays in CLI-route-order even as routes
+        // stream in non-sequentially.
+        const targetIdx = routeOrder.indexOf(payload.route);
+        const existing = Array.from(grid.querySelectorAll(
+          "section.route-group"));
+        let inserted = false;
+        for (const sec of existing) {
+          const idx = routeOrder.indexOf(sec.dataset.route);
+          if (idx > targetIdx) {
+            grid.insertBefore(section, sec);
+            inserted = true;
+            break;
+          }
+        }
+        if (!inserted) grid.appendChild(section);
+      }
+      const row = section.querySelector(".route-group-row");
+      // Width-sorted insert: walk existing children, drop in
+      // before the first one with a larger width.
+      const siblings = Array.from(row.querySelectorAll(".shot"));
+      let placed = false;
+      for (const sib of siblings) {
+        const sibShot = manifest.shots.find(s => s.slug === sib.dataset.slug);
+        if (sibShot && sibShot.width > payload.width) {
+          row.insertBefore(card, sib);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) row.appendChild(card);
+      // Update the group's count badge.
+      const countEl = section.querySelector("[data-count]");
+      const n = row.children.length;
+      countEl.textContent = `${n} viewport${n === 1 ? "" : "s"}`;
+    }
     renderShot(payload.slug);
+  }
+
+  // Minimal CSS.escape polyfill for older browsers — the route
+  // strings can contain slashes which need escaping in selectors.
+  function cssEscape(s) {
+    if (window.CSS && window.CSS.escape) return CSS.escape(s);
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, c =>
+      "\\" + c.charCodeAt(0).toString(16) + " ");
   }
 
   // ── Streaming handlers ────────────────────────────────────────
   function onShotEvent(payload) {
     if (knownSlugs.has(payload.slug)) return;   // history replay
     knownSlugs.add(payload.slug);
+    if (!routeOrderSet.has(payload.route)) {
+      routeOrderSet.add(payload.route);
+      routeOrder.push(payload.route);
+    }
     manifest.shots.push({ ...payload, ai_findings: [] });
     rebuildFilter();
     appendShot(payload, /*animate*/ true);
@@ -893,6 +1059,16 @@
       `streaming · 0${totalExpected ? "/" + totalExpected : ""}`);
     updateMeta();
   }
+
+  // ── View toggle (route vs flat) ───────────────────────────────
+  document.querySelectorAll("#view-filter button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      viewMode = btn.dataset.view;
+      document.querySelectorAll("#view-filter button").forEach(b =>
+        b.classList.toggle("active", b.dataset.view === viewMode));
+      renderGrid();
+    });
+  });
 
   // ── Initial render ────────────────────────────────────────────
   renderGrid();

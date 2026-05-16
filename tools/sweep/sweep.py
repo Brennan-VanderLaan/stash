@@ -41,13 +41,50 @@ from typing import Any
 # ── Defaults ────────────────────────────────────────────────────────
 
 
-DEFAULT_VIEWPORTS: dict[str, tuple[int, int]] = {
-    "iphone-se":  (375, 667),
-    "iphone-pro": (393, 852),
-    "ipad":       (768, 1024),
-    "laptop":     (1366, 768),
-    "desktop":    (1920, 1080),
+# Viewport palette — CSS pixel dimensions for popular real devices
+# plus the common dev-monitor resolutions.  Add to this list freely;
+# unused entries cost nothing.  Sourced from manufacturer specs +
+# the chrome devtools device-emulation table.
+VIEWPORT_PALETTE: dict[str, tuple[int, int]] = {
+    # ── Phones ──────────────────────────────────────────────────
+    "galaxy-fold":        (280, 653),    # Galaxy Z Fold cover screen
+    "galaxy-s23":         (360, 780),    # Samsung Galaxy S23 / S24
+    "iphone-se":          (375, 667),    # iPhone SE 2/3
+    "iphone-pro":         (393, 852),    # iPhone 14/15/16 Pro
+    "pixel-8":            (412, 915),    # Pixel 7/8
+    "iphone-pro-max":     (430, 932),    # iPhone 14/15/16 Pro Max
+    "galaxy-s23-ultra":   (412, 915),    # Galaxy S23 Ultra (same as pixel-8)
+    # ── Tablets ─────────────────────────────────────────────────
+    "ipad-mini":          (744, 1133),   # iPad mini portrait
+    "ipad":               (768, 1024),   # iPad / iPad Air portrait
+    "galaxy-tab":         (800, 1280),   # Galaxy Tab S series portrait
+    "ipad-pro":           (1024, 1366),  # iPad Pro 12.9" portrait
+    # ── Laptops + desktops ──────────────────────────────────────
+    "laptop":             (1366, 768),   # entry-level / school laptop
+    "macbook-air":        (1440, 900),   # MacBook Air 13" default scaling
+    "laptop-16":          (1536, 960),   # 14"/16" laptop default scaling
+    "desktop":            (1920, 1080),  # 1080p — mass market
+    "desktop-2k":         (2560, 1440),  # QHD / 1440p — dev monitor mainstream
+    "ultrawide":          (3440, 1440),  # 21:9 ultrawide
+    "desktop-4k":         (3840, 2160),  # 4K (no OS scaling)
 }
+
+# Curated subsets — pass via ``--viewports <preset>`` or mix-and-match
+# with individual viewport nicknames (``--viewports phones,desktop-2k``).
+VIEWPORT_PRESETS: dict[str, list[str]] = {
+    "default":  ["iphone-se", "iphone-pro", "ipad", "laptop", "desktop"],
+    "phones":   ["galaxy-fold", "iphone-se", "galaxy-s23", "iphone-pro",
+                 "pixel-8", "iphone-pro-max"],
+    "tablets":  ["ipad-mini", "ipad", "galaxy-tab", "ipad-pro"],
+    "desktops": ["laptop", "macbook-air", "laptop-16", "desktop",
+                 "desktop-2k", "ultrawide", "desktop-4k"],
+    "all":      list(VIEWPORT_PALETTE.keys()),
+}
+
+# Backwards-compat alias — the original implementation used this
+# constant name.  Kept so external callers (the README, a future
+# wrapper script) don't break on rename.
+DEFAULT_VIEWPORTS = VIEWPORT_PALETTE
 
 DEFAULT_ROUTES: list[str] = [
     "/",
@@ -540,10 +577,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated list of routes to capture.",
     )
     p.add_argument(
-        "--viewports", default=",".join(DEFAULT_VIEWPORTS.keys()),
+        "--viewports", default="default",
         help=(
-            "Comma-separated viewport nicknames from the default "
-            f"palette: {', '.join(DEFAULT_VIEWPORTS.keys())}."
+            "Comma-separated viewport nicknames and/or preset names.  "
+            "Presets: " + ", ".join(VIEWPORT_PRESETS.keys()) + ".  "
+            "Individual nicknames: " + ", ".join(VIEWPORT_PALETTE.keys()) + ".  "
+            "Mix-and-match (e.g. ``--viewports phones,desktop-2k``).  "
+            "Default: the 5-viewport ``default`` preset."
         ),
     )
     p.add_argument(
@@ -598,7 +638,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--review-concurrency", type=int, default=DEFAULT_REVIEW_CONCURRENCY,
         help=(
             "Max parallel Gemini requests during AI review "
-            "(default: %(default)s).  Free-tier 15 RPM cap: keep ≤ 4."
+            "(default: %(default)s).  Free-tier 15 RPM cap: keep <= 4."
         ),
     )
     return p.parse_args(argv)
@@ -613,16 +653,37 @@ def resolve_out_dir(explicit: str) -> Path:
 
 
 def resolve_viewports(names: str) -> dict[str, tuple[int, int]]:
+    """Resolve the ``--viewports`` argument to a name → (w, h) dict.
+
+    Accepts a mix of:
+    * preset names (``default``, ``phones``, ``tablets``,
+      ``desktops``, ``all``) — expand to their member viewports.
+    * individual viewport nicknames — looked up directly in
+      :data:`VIEWPORT_PALETTE`.
+
+    A preset that names a viewport not in the palette is a config
+    bug (caught by the membership check below).  A name that's
+    neither a preset nor a known nickname is a CLI typo —
+    error + exit.  Order is preserved across the input string so
+    the gallery's by-route view renders viewports in user-meaningful
+    sequence."""
     out: dict[str, tuple[int, int]] = {}
     for raw in names.split(","):
         nick = raw.strip()
         if not nick:
             continue
-        if nick not in DEFAULT_VIEWPORTS:
-            print(f"  ! unknown viewport {nick!r}; known: "
-                  f"{', '.join(DEFAULT_VIEWPORTS)}", file=sys.stderr)
-            sys.exit(2)
-        out[nick] = DEFAULT_VIEWPORTS[nick]
+        if nick in VIEWPORT_PRESETS:
+            for member in VIEWPORT_PRESETS[nick]:
+                if member in VIEWPORT_PALETTE:
+                    out[member] = VIEWPORT_PALETTE[member]
+            continue
+        if nick in VIEWPORT_PALETTE:
+            out[nick] = VIEWPORT_PALETTE[nick]
+            continue
+        known = list(VIEWPORT_PRESETS) + list(VIEWPORT_PALETTE)
+        print(f"  ! unknown viewport or preset {nick!r}; known: "
+              f"{', '.join(known)}", file=sys.stderr)
+        sys.exit(2)
     if not out:
         print("  ! no viewports selected", file=sys.stderr)
         sys.exit(2)

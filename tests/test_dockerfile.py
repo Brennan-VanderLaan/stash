@@ -43,6 +43,10 @@ _EXEMPT_DIRS = {
     "deploy",    # docker-compose + Caddyfile, not runtime image.
     "locale",    # gettext catalogs, optional + small.
     "scripts",   # one-off ops scripts.
+    "tools",     # dev-side tools (e.g. tools/sweep — visual sweep
+                 # rig that drives chromium + Gemini against a
+                 # running dev server).  Not part of the prod image.
+    "tmp",       # dev runtime artefacts (sweep output, etc).
     ".venv", "venv", ".git", ".github", ".pytest_cache",
     "__pycache__", "uploads",
 }
