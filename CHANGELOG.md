@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.32.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.31.1...v1.32.0) (2026-05-16)
+
+
+### Features
+
+* **leaderboard:** 20-tier sassy-but-thankful star responses ([f72daa5](https://github.com/Brennan-VanderLaan/stash/commit/f72daa5ea49fe2b8715fd22eae03c67b6b800753))
+
+
+### Bug Fixes
+
+* **audit:** tab-bar covered actions on mobile + swipe direction was ambiguous ([fe25742](https://github.com/Brennan-VanderLaan/stash/commit/fe25742e16bb0e2ada47a1ff80ac2db6afe6f28b))
+* **deploy:** work around oauth2-proxy's hardcoded /robots.txt via Caddy rewrite ([3f8a1be](https://github.com/Brennan-VanderLaan/stash/commit/3f8a1be47b90e787949500f241ea5a71ef1331fc))
+* **labels:** printer-compat notice sat below the dropdown with empty space to the right ([ae73db6](https://github.com/Brennan-VanderLaan/stash/commit/ae73db6381bba0912f45c58156d7a8b1c2a77f18))
+* **leaderboard:** drop the flattery + the promises from star tier copy ([00b372d](https://github.com/Brennan-VanderLaan/stash/commit/00b372d4fe670db354eb44b69bf4d7b0418534a2))
+* **usage:** handle disclosure auto-opened on every load — collapse by default ([7905680](https://github.com/Brennan-VanderLaan/stash/commit/79056800eb93e435804bd0e2fc5222d2150cbfed))
+
 ## [1.31.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.31.0...v1.31.1) (2026-05-16)
 
 
