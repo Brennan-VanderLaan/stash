@@ -39,11 +39,13 @@
     "download my data" button that actually works.
   </p>
   <div class="landing-cta-row">
-    <a href="/home" class="landing-cta-primary">Start free →</a>
+    <a href="/import?source=encircle" class="landing-cta-primary">
+      Drop your Encircle export →
+    </a>
     <a href="#how-it-works" class="landing-cta-secondary">How it works</a>
   </div>
   <p class="landing-cta-note text-sm text-muted">
-    CSV importer ships this week ·
+    CSV + XLSX import live now ·
     Free plan available ·
     Pro is {{ pro_price_display }}/mo
   </p>
@@ -53,11 +55,14 @@
   <article class="landing-feature">
     <h2><span aria-hidden="true">📤</span> Bring your Encircle export</h2>
     <p>
-      Drop the CSV.  We map columns to Stash boxes, rooms, and items
-      — preview before you commit.  Photos restore via the same
-      upload pipeline as a fresh ingest.
-      <em>Importer ships this week; early-bird signups get the
-      import flow first.</em>
+      Drop your <code>.xlsx</code> (Encircle's web-app export) or
+      <code>.csv</code> (Save-As from Excel).  Photos embedded in
+      the spreadsheet get extracted automatically; if you also
+      downloaded the media ZIP, drop that in the same form for the
+      higher-resolution originals.  Items land in their Encircle
+      rooms with brand, model, serial, warranty, and purchase
+      metadata preserved.
+      <a href="/import?source=encircle">Try the importer →</a>
     </p>
   </article>
   <article class="landing-feature">
@@ -138,13 +143,13 @@
 </section>
 
 <section class="landing-final-cta">
-  <h2>The migration starts with one CSV.</h2>
+  <h2>The migration starts with one upload.</h2>
   <p>
     Sign in with Google.  Drop your Encircle export.  Tell us
     what's confusing and we'll fix it the same week.
   </p>
-  <a href="/home" class="landing-cta-primary">
-    Open your stash →
+  <a href="/import?source=encircle" class="landing-cta-primary">
+    Drop your Encircle export →
   </a>
 </section>
 
