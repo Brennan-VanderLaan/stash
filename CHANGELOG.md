@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.37.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.36.1...v1.37.0) (2026-05-16)
+
+
+### Features
+
+* **feedback:** operator-side urgent flag on feedback rows ([e7b0082](https://github.com/Brennan-VanderLaan/stash/commit/e7b008267a2fd26e440b46544f4bcd6835eff223))
+* **landing:** /encircle-alternative campaign page for displaced users ([99e3853](https://github.com/Brennan-VanderLaan/stash/commit/99e38531e826a53fc2726a06a9751e99a37fb8c8))
+
+
+### Bug Fixes
+
+* **floor-editor:** eraser paints over the image instead of refusing ([dabedb9](https://github.com/Brennan-VanderLaan/stash/commit/dabedb96492ec0f6804d81bfabc33d617714381e))
+* **queue:** preserve scroll position across Accept / Reject reloads ([22740de](https://github.com/Brennan-VanderLaan/stash/commit/22740de02f4ca6495ba0774e7526e572db0f0d3d))
+
 ## [1.36.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.36.0...v1.36.1) (2026-05-16)
 
 
