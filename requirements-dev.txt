@@ -1,0 +1,8 @@
+# Dev-only deps — never installed by the production Dockerfile.
+# Install with: ``pip install -r requirements-dev.txt``
+# Plus a one-time ``playwright install chromium`` for the UI test
+# runner.
+
+pytest
+pytest-playwright
+playwright

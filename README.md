@@ -156,7 +156,16 @@ Then on your phone, open `http://<host-lan-ip>:8000`. Data lives in
 `stash.db` (SQLite WAL mode) and `uploads/` alongside `app.py`.
 
 ```bash
-.venv/bin/pytest                   # 438 tests, ~2 minutes
+.venv/bin/pytest                   # full suite, ~5 minutes
+.venv/bin/pytest -m "not ui"       # skip browser tests, ~4 minutes
+```
+
+The UI test suite (under `tests/ui/`) drives a real Chromium via
+Playwright against a spawned uvicorn process — install with:
+
+```bash
+pip install -r requirements-dev.txt
+playwright install chromium
 ```
 
 Architecture and design lives in [`spec.md`](spec.md). The status
