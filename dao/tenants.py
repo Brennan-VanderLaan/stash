@@ -176,6 +176,57 @@ def create_tenant(
     return tenant_id
 
 
+def create_self_serve_tenant(
+    *,
+    name: str,
+    plan: str,
+    owner_email: str,
+    client_ip: str = "",
+) -> int:
+    """Self-serve tenant creation — called from the bootstrap-invite
+    redemption path so the operator doesn't have to pre-name the
+    tenant.  Returns the new id.
+
+    No ``Actor`` parameter because the caller is a fresh user with
+    no current memberships and ``require_operator`` would (correctly)
+    reject them.  The bootstrap-invite token *itself* is the
+    authority: ``dao.invites.redeem_bootstrap`` checks the token is
+    still un-consumed, locks the plan to whatever the operator
+    minted, then calls this helper to do the actual INSERT.
+
+    Audit-log records the owner_email as the actor for traceability
+    + ``action='tenant.self_create'`` to distinguish from the
+    operator-driven ``tenant.create`` path."""
+    name = name.strip()
+    if not name:
+        raise ValueError("tenant name required")
+    if plan not in ("free", "pro"):
+        raise ValueError(f"unknown plan {plan!r}")
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES (?, ?)",
+            (name, plan),
+        )
+        tenant_id = cur.lastrowid
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=owner_email,
+            action="tenant.self_create",
+            target_kind="tenant",
+            target_id=tenant_id,
+            metadata={
+                "name": name,
+                "plan": plan,
+                "ip": client_ip or "unknown",
+            },
+        )
+        conn.commit()
+    _log.info("tenant.self_create id=%s name=%r plan=%s ip=%s by=%s",
+              tenant_id, name, plan, client_ip or "unknown", owner_email)
+    return tenant_id
+
+
 # Soft-delete grace window before a hard-delete becomes the
 # default operator action.  30 days matches typical SaaS practice
 # (and the spec's GDPR posture) — the operator can still force

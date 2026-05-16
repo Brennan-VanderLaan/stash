@@ -302,31 +302,29 @@
   <header class="admin-section-head">
     <h2>Tenants ({{ active_tenants | length }})</h2>
     <details class="admin-quick-action">
-      <summary class="btn btn-primary btn-sm">+ Create tenant</summary>
-      <form method="post" action="/admin/tenants" class="admin-quick-action-form">
+      <summary class="btn btn-primary btn-sm">+ Mint onboarding link</summary>
+      <form method="post" action="/admin/onboarding-links"
+            class="admin-quick-action-form">
         <p class="text-sm text-muted">
-          Spins up an empty tenant + mints a one-time invite.  You stay
-          an operator (no membership); the invitee becomes the sole
-          maintainer when they accept.
+          Single-use magic link.  Recipient names their own stash and
+          becomes its sole maintainer on first click.  Plan + role are
+          locked at mint; the link can be redeemed exactly once.
         </p>
-        {% if invite_url %}
+        {% if onboarding_url %}
         <div class="notice notice-success">
-          <strong>Invite minted.</strong>
-          <input type="text" readonly value="{{ invite_url }}"
+          <strong>Link minted.</strong>
+          <input type="text" readonly value="{{ onboarding_url }}"
                  class="invite-url-input"
                  onclick="this.select()"
                  style="width:100%;margin-top:0.5rem;font-family:monospace;">
         </div>
         {% endif %}
         <label>
-          Tenant name
-          <input type="text" name="name" required placeholder="Sister"
-                 autocomplete="off">
-        </label>
-        <label>
-          Invitee email
-          <input type="email" name="invitee_email" required
-                 placeholder="them@example.com" autocomplete="off">
+          Plan
+          <select name="plan">
+            <option value="free" selected>Free</option>
+            <option value="pro">Pro</option>
+          </select>
         </label>
         <label>
           Role
@@ -336,17 +334,34 @@
           </select>
         </label>
         <label>
-          Plan
-          <select name="plan">
-            <option value="free" selected>Free</option>
-            <option value="pro">Pro</option>
-          </select>
+          Expires in (days)
+          <input type="number" name="expires_in_days" value="30"
+                 min="1" max="90">
         </label>
         <button type="submit" class="btn btn-primary btn-block">
-          Create + invite
+          Mint link
         </button>
       </form>
     </details>
+    {% if open_bootstrap_invites %}
+    <details class="admin-quick-action">
+      <summary class="text-sm text-muted">
+        {{ open_bootstrap_invites | length }} outstanding onboarding link(s)
+      </summary>
+      <ul class="admin-quick-action-list">
+        {% for inv in open_bootstrap_invites %}
+        <li>
+          <code style="word-break:break-all">{{ inv.url }}</code>
+          <span class="pill pill-plan-{{ inv.plan }}">{{ inv.plan }}</span>
+          <span class="text-sm text-muted">
+            minted {{ inv.created_at[:10] }} by {{ inv.created_by_email }};
+            expires {{ inv.expires_at[:10] }}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
   </header>
   {% if tenants %}
   <div class="admin-tenant-grid">

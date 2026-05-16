@@ -295,3 +295,204 @@ def revoke(actor: Actor, token: str) -> None:
         _audit(conn, tenant_id=actor.tenant_id, actor_email=actor.email,
                action="invite.revoke", metadata={"token_prefix": token[:8]})
         conn.commit()
+
+
+# ── Bootstrap invites (operator → self-onboarding) ─────────────────
+#
+# A bootstrap invite is a one-shot magic link an operator mints
+# WITHOUT specifying a tenant or recipient email.  The plan is locked
+# at mint time; the recipient names their own tenant on accept and
+# becomes its sole maintainer.  Distinct from the tenant_invites
+# table above: bootstrap rows have no tenant_id (the tenant doesn't
+# exist yet) and no email binding (anyone with the link is fair
+# game until it's consumed).
+
+
+def create_bootstrap(
+    actor: Actor,
+    *,
+    plan: str,
+    role: str = "maintainer",
+    expires_in_days: int = DEFAULT_EXPIRY_DAYS,
+) -> dict:
+    """Mint a new bootstrap invite.  Operator-only.  Returns
+    ``{"token": ..., "plan": ..., "role": ..., "expires_at": ...}``.
+
+    The recipient names the tenant on accept; we lock in the plan +
+    role here so the operator's intent survives even if the
+    recipient is a free-tier-pretender who'd otherwise downgrade."""
+    require_operator(actor)
+    if plan not in ("free", "pro"):
+        raise ValueError(f"unknown plan {plan!r}")
+    if role not in ("maintainer", "readonly"):
+        raise ValueError(f"unknown role {role!r}")
+    token = secrets.token_urlsafe(24)
+    expires_at = (_utcnow() + timedelta(days=expires_in_days)).isoformat()
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_bootstrap_invites "
+            "(token, plan, role, created_by_email, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (token, plan, role, actor.email, expires_at),
+        )
+        _audit(conn, tenant_id=None, actor_email=actor.email,
+               action="invite.bootstrap.send",
+               metadata={"plan": plan, "role": role,
+                         "expires_at": expires_at})
+        conn.commit()
+    return {
+        "token": token,
+        "plan": plan,
+        "role": role,
+        "expires_at": expires_at,
+    }
+
+
+def get_bootstrap_by_token(token: str) -> dict | None:
+    """Look up a bootstrap invite by its token, regardless of
+    consumed/expired state.  Mirrors :func:`get_by_token` for the
+    bootstrap table — returns None for unknown tokens, dict with
+    redeemability flags for known ones."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT token, plan, role, created_by_email, "
+            "       created_at, expires_at, consumed_at, "
+            "       consumed_by_email, consumed_tenant_id "
+            "FROM tenant_bootstrap_invites "
+            "WHERE token = ?",
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    now = _utcnow()
+    expired = bool(d["expires_at"]) and d["expires_at"] < now.isoformat()
+    consumed = d["consumed_at"] is not None
+    d["expired"] = expired
+    d["consumed"] = consumed
+    d["redeemable"] = not expired and not consumed
+    return d
+
+
+def any_token_exists(token: str) -> bool:
+    """Middleware bypass helper: returns True if ``token`` matches
+    either a member-invite or a bootstrap-invite, regardless of
+    redeemability.  The redemption page itself renders the
+    consumed/expired copy; the bypass just needs to let the
+    request through to that page."""
+    return (
+        get_by_token(token) is not None
+        or get_bootstrap_by_token(token) is not None
+    )
+
+
+def redeem_bootstrap(
+    token: str, *, actual_email: str, tenant_name: str,
+    client_ip: str = "",
+) -> dict:
+    """Atomic single-use consume + self-serve tenant create.
+
+    Race-safe: the ``UPDATE ... WHERE consumed_at IS NULL`` is the
+    serialization point.  Two simultaneous redeems → one wins, the
+    other sees ``rowcount=0`` and raises NotFoundError.
+
+    Creates a fresh tenant with the locked-in plan, adds the
+    redeeming email as the sole maintainer (or readonly, per the
+    minted role), and stamps the invite with both consumed_by_email
+    and consumed_tenant_id so the audit trail traces the link to
+    the resulting tenant.
+
+    Raises NotFoundError if the token is unknown / expired /
+    already consumed.  Raises ValueError if the tenant_name is
+    empty (let the route render a clean 400)."""
+    from dao import tenants as dao_tenants  # local import: avoid cycle
+    actual_email = actual_email.strip().lower()
+    if not actual_email:
+        raise ForbiddenError("sign-in email is missing")
+    tenant_name = (tenant_name or "").strip()
+    if not tenant_name:
+        raise ValueError("tenant name required")
+
+    invite = get_bootstrap_by_token(token)
+    if invite is None or not invite["redeemable"]:
+        raise NotFoundError(
+            "bootstrap invite unknown / expired / consumed"
+        )
+
+    # Create the tenant first (outside the consume UPDATE).  If two
+    # users race to redeem the same token, both will create their
+    # own tenant row — but only one will win the consume update;
+    # the loser's tenant becomes an orphan (zero members) that the
+    # operator can soft-delete.  The alternative (consume first,
+    # then create) means a tenant-create failure leaves the token
+    # burnt with no resulting tenant — strictly worse: irreversible
+    # for the recipient, who'd need a new link from the operator.
+    tenant_id = dao_tenants.create_self_serve_tenant(
+        name=tenant_name,
+        plan=invite["plan"],
+        owner_email=actual_email,
+        client_ip=client_ip,
+    )
+
+    with db() as conn:
+        # Race-safe consume.  rowcount==0 means another redeem just
+        # claimed this token; back out the tenant we just created.
+        cur = conn.execute(
+            "UPDATE tenant_bootstrap_invites "
+            "SET consumed_at = CURRENT_TIMESTAMP, "
+            "    consumed_by_email = ?, "
+            "    consumed_tenant_id = ? "
+            "WHERE token = ? AND consumed_at IS NULL",
+            (actual_email, tenant_id, token),
+        )
+        if cur.rowcount == 0:
+            # Lost the race — drop the just-created tenant so we
+            # don't leak an empty row.  No FK constraints are tied
+            # to it yet (no members, no items, etc.) so a straight
+            # DELETE is safe.
+            conn.execute(
+                "DELETE FROM tenants WHERE id = ?", (tenant_id,),
+            )
+            conn.commit()
+            raise NotFoundError("bootstrap invite already consumed")
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, invited_by_email, "
+            " invited_at, joined_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (tenant_id, actual_email, invite["role"],
+             invite["created_by_email"]),
+        )
+        _audit(conn, tenant_id=tenant_id, actor_email=actual_email,
+               action="invite.bootstrap.accept",
+               metadata={
+                   "plan": invite["plan"],
+                   "role": invite["role"],
+                   "tenant_name": tenant_name,
+                   "minted_by": invite["created_by_email"],
+               })
+        conn.commit()
+    return {
+        "tenant_id": tenant_id,
+        "role": invite["role"],
+        "plan": invite["plan"],
+    }
+
+
+def list_open_bootstrap_for_operator(actor: Actor) -> list[dict]:
+    """Every un-consumed un-expired bootstrap invite.  Operator-only.
+    /admin uses this to surface outstanding onboarding links so the
+    operator can re-copy the URL if they missed it on first mint."""
+    require_operator(actor)
+    now = _utcnow().isoformat()
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT token, plan, role, created_by_email, "
+            "       created_at, expires_at "
+            "FROM tenant_bootstrap_invites "
+            "WHERE consumed_at IS NULL "
+            "  AND (expires_at IS NULL OR expires_at > ?) "
+            "ORDER BY created_at DESC",
+            (now,),
+        ).fetchall()
+    return [dict(r) for r in rows]

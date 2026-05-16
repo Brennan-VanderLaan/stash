@@ -1,21 +1,25 @@
 """Phase 12 — operator dashboard.
 
-End-to-end coverage of the bootstrap-a-friend's-tenant flow:
+End-to-end coverage of the operator-mints-self-onboarding-link flow:
 
 1. An operator (email in ``STASH_OPERATOR_EMAILS``) opens ``/admin``,
    sees the deployment-wide tenant roster.
-2. Operator fills the create-tenant form with ``name=Sister`` +
-   ``invitee_email=sister@example.com``.
-3. POST creates the tenant, mints an invite, and redirects back to
-   ``/admin?invite_url=…``.  The page renders the link.
+2. Operator mints a self-onboarding link with just a ``plan`` +
+   ``role`` selected (no tenant name, no recipient email).
+3. POST mints a bootstrap-invite row, redirects to
+   ``/admin?onboarding_url=…``.  The page renders the link.
 4. Operator copies the link, sends it out-of-band.
-5. Sister signs in (oauth2-proxy lets her through), middleware
-   bypass routes her to the redemption page, she accepts, and is
-   the sole maintainer of the new tenant.
+5. Recipient signs in (oauth2-proxy lets them through), middleware
+   bypass routes them to the redemption page, they name their own
+   stash and accept, and are the sole maintainer of the new tenant.
 
 Hard rule (spec § "Operator surface"): non-operators must not see
 ``/admin`` exists at all.  We assert 404 (not 403) so a curious
 maintainer can't probe for the operator URL space.
+
+The old flow (operator pre-names the tenant + types the invitee
+email) lived at ``POST /admin/tenants`` and was replaced with this
+self-onboarding model in May 2026.
 """
 
 from __future__ import annotations
@@ -98,10 +102,11 @@ def test_admin_renders_for_operator(tmp_path, monkeypatch):
 # ── Tenant + invite bootstrap ───────────────────────────────────────
 
 
-def test_admin_create_tenant_and_invite_end_to_end(tmp_path, monkeypatch):
-    """The friend-onboarding walk-through, in test form:
-    operator creates Sister tenant + invite, copies the link,
-    sister signs in, accepts, becomes the sole maintainer."""
+def test_admin_onboarding_link_end_to_end(tmp_path, monkeypatch):
+    """The friend-onboarding walk-through:
+    operator mints a self-onboarding link, friend signs in, names
+    their own stash, becomes the sole maintainer.  No tenant exists
+    until the recipient clicks accept."""
     app_mod = _bootstrap_app(
         tmp_path, monkeypatch, operator_email="op@example.com",
     )
@@ -109,67 +114,84 @@ def test_admin_create_tenant_and_invite_end_to_end(tmp_path, monkeypatch):
     sis_headers = {"X-Forwarded-Email": "sister@example.com"}
 
     with TestClient(app_mod.app, headers=op_headers) as op_client:
-        # 1. Create tenant + mint invite in one shot.
+        # 1. Mint the link.  No tenant name, no recipient email
+        #    — just plan + role.
         r = op_client.post(
-            "/admin/tenants",
-            data={
-                "name": "Sister",
-                "invitee_email": "sister@example.com",
-                "role": "maintainer",
-            },
+            "/admin/onboarding-links",
+            data={"plan": "pro", "role": "maintainer"},
             follow_redirects=False,
         )
         assert r.status_code == 303
         assert "/admin" in r.headers["location"]
-        assert "invite_url=" in r.headers["location"]
+        assert "onboarding_url=" in r.headers["location"]
 
-        # 2. Tenant exists with zero members + one outstanding invite.
-        page = op_client.get("/admin").text
-        assert "Sister" in page
+        # 2. No tenant exists yet — the link is a promise of one.
         with app_mod.db() as conn:
-            row = conn.execute(
-                "SELECT id FROM tenants WHERE name = 'Sister'"
-            ).fetchone()
-            tid = row["id"]
-            members = conn.execute(
-                "SELECT COUNT(*) FROM tenant_members WHERE tenant_id = ?",
-                (tid,),
+            tcount = conn.execute(
+                "SELECT COUNT(*) FROM tenants"
             ).fetchone()[0]
-            invites = conn.execute(
-                "SELECT token FROM tenant_invites WHERE tenant_id = ?",
-                (tid,),
+            bootstrap_row = conn.execute(
+                "SELECT token, plan, role, consumed_at "
+                "FROM tenant_bootstrap_invites"
             ).fetchone()
-        assert members == 0
-        token = invites["token"]
+        assert tcount == 0
+        assert bootstrap_row["plan"] == "pro"
+        assert bootstrap_row["role"] == "maintainer"
+        assert bootstrap_row["consumed_at"] is None
+        token = bootstrap_row["token"]
 
-    # 3. Sister, with no membership, can land on the invite page
-    #    via the middleware bypass.
+    # 3. Sister, with no membership, lands on the invite page via
+    #    the middleware bypass.  The tier is intentionally NOT
+    #    surfaced — she just sees "name your stash".
     with TestClient(app_mod.app, headers=sis_headers) as sis:
         r = sis.get(f"/invite/{token}")
         assert r.status_code == 200
-        assert "Sister" in r.text
+        assert "name your stash" in r.text.lower()
+        # Tier hidden from accept page per design — the link's
+        # operator-chosen plan is opaque to the recipient.
+        assert "Pro" not in r.text
 
-        # 4. Accept → membership granted → next request works.
-        r = sis.post(f"/invite/{token}/accept", follow_redirects=False)
+        # 4. Accept with a self-chosen tenant name.
+        r = sis.post(
+            f"/invite/{token}/accept",
+            data={"tenant_name": "Sister's Stash"},
+            follow_redirects=False,
+        )
         assert r.status_code == 303
+        # Membership took effect; next request resolves to /home as
+        # a tenant member.
         r = sis.get("/home")
         assert r.status_code == 200
 
-    # 5. Operator's view confirms the membership landed.
+    # 5. The tenant exists with the locked-in plan, sister is
+    #    the sole maintainer, and the bootstrap row is consumed.
     with app_mod.db() as conn:
-        row = conn.execute(
+        tenant = conn.execute(
+            "SELECT id, name, plan FROM tenants"
+        ).fetchone()
+        members = conn.execute(
             "SELECT email, role FROM tenant_members "
             "WHERE tenant_id = ?",
-            (tid,),
+            (tenant["id"],),
+        ).fetchall()
+        consumed = conn.execute(
+            "SELECT consumed_at, consumed_by_email, consumed_tenant_id "
+            "FROM tenant_bootstrap_invites WHERE token = ?",
+            (token,),
         ).fetchone()
-    assert row["email"] == "sister@example.com"
-    assert row["role"] == "maintainer"
+    assert tenant["name"] == "Sister's Stash"
+    assert tenant["plan"] == "pro"
+    assert len(members) == 1
+    assert members[0]["email"] == "sister@example.com"
+    assert members[0]["role"] == "maintainer"
+    assert consumed["consumed_at"] is not None
+    assert consumed["consumed_by_email"] == "sister@example.com"
+    assert consumed["consumed_tenant_id"] == tenant["id"]
 
 
-def test_admin_post_404s_for_non_operator(tmp_path, monkeypatch):
-    """The POST surface is also operator-gated — not just the GET.
-    Otherwise a curious maintainer who guessed the URL could mint
-    cross-tenant invites."""
+def test_admin_onboarding_link_404s_for_non_operator(tmp_path, monkeypatch):
+    """The mint surface is operator-gated — non-operators can't
+    even probe whether the route exists (404, not 403)."""
     app_mod = _bootstrap_app(tmp_path, monkeypatch)
     with app_mod.db() as conn:
         cur = conn.execute(
@@ -184,13 +206,129 @@ def test_admin_post_404s_for_non_operator(tmp_path, monkeypatch):
             (tid,),
         )
         conn.commit()
-    with TestClient(app_mod.app, headers={"X-Forwarded-Email": "sneak@example.com"}) as c:
+    with TestClient(
+        app_mod.app,
+        headers={"X-Forwarded-Email": "sneak@example.com"},
+    ) as c:
         r = c.post(
-            "/admin/tenants",
-            data={"name": "Steal", "invitee_email": "x@example.com"},
+            "/admin/onboarding-links",
+            data={"plan": "free", "role": "maintainer"},
             follow_redirects=False,
         )
         assert r.status_code == 404
+
+
+def test_onboarding_link_is_single_use(tmp_path, monkeypatch):
+    """Once redeemed the link can never be redeemed again — even by
+    the same email.  Second click renders the 'already used' page
+    rather than minting a second tenant."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    op_headers = {"X-Forwarded-Email": "op@example.com"}
+    with TestClient(app_mod.app, headers=op_headers) as op_client:
+        op_client.post(
+            "/admin/onboarding-links",
+            data={"plan": "free", "role": "maintainer"},
+        )
+    with app_mod.db() as conn:
+        token = conn.execute(
+            "SELECT token FROM tenant_bootstrap_invites"
+        ).fetchone()["token"]
+
+    sis_headers = {"X-Forwarded-Email": "sister@example.com"}
+    with TestClient(app_mod.app, headers=sis_headers) as sis:
+        # First redemption — succeeds.
+        r = sis.post(
+            f"/invite/{token}/accept",
+            data={"tenant_name": "First"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        # Second redemption — 404, the token is consumed.
+        r = sis.post(
+            f"/invite/{token}/accept",
+            data={"tenant_name": "Second"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 404
+
+    # Only one tenant should exist; no leak from the failed second
+    # redeem.
+    with app_mod.db() as conn:
+        tcount = conn.execute(
+            "SELECT COUNT(*) FROM tenants"
+        ).fetchone()[0]
+    assert tcount == 1
+
+
+def test_onboarding_link_rejects_empty_tenant_name(tmp_path, monkeypatch):
+    """The accept form requires a non-empty stash name — empty input
+    returns 400 and doesn't burn the token.  The recipient can fix
+    the form and retry."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    op_headers = {"X-Forwarded-Email": "op@example.com"}
+    with TestClient(app_mod.app, headers=op_headers) as op_client:
+        op_client.post(
+            "/admin/onboarding-links",
+            data={"plan": "free", "role": "maintainer"},
+        )
+    with app_mod.db() as conn:
+        token = conn.execute(
+            "SELECT token FROM tenant_bootstrap_invites"
+        ).fetchone()["token"]
+
+    sis_headers = {"X-Forwarded-Email": "sister@example.com"}
+    with TestClient(app_mod.app, headers=sis_headers) as sis:
+        r = sis.post(
+            f"/invite/{token}/accept",
+            data={"tenant_name": "   "},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
+
+    # Token survives so the recipient can retry with a real name.
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT consumed_at FROM tenant_bootstrap_invites "
+            "WHERE token = ?", (token,),
+        ).fetchone()
+    assert row["consumed_at"] is None
+
+
+def test_onboarding_link_non_operator_cannot_mint_via_dao(tmp_path, monkeypatch):
+    """DAO-level guard: a regular maintainer calling
+    ``dao_invites.create_bootstrap`` directly hits a ForbiddenError
+    — operator gate is enforced in the DAO, not just the route."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    from dao import invites as dao_invites
+    from dao._base import Actor, ForbiddenError
+    non_op = Actor(
+        email="m@example.com", tenant_id=1, role="maintainer",
+        is_operator=False,
+        memberships=((1, "maintainer"),),
+        shares=(),
+    )
+    with pytest.raises(ForbiddenError):
+        dao_invites.create_bootstrap(non_op, plan="free")
+
+
+def test_onboarding_link_rejects_unknown_plan(tmp_path, monkeypatch):
+    """Off-palette plans (e.g. 'enterprise') get rejected at the
+    DAO so a typo can't mint a useless token."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    op_headers = {"X-Forwarded-Email": "op@example.com"}
+    with TestClient(app_mod.app, headers=op_headers) as op_client:
+        r = op_client.post(
+            "/admin/onboarding-links",
+            data={"plan": "enterprise", "role": "maintainer"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
 
 
 # ── DAO surface direct ──────────────────────────────────────────────

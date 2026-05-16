@@ -3,10 +3,56 @@
 {% block content %}
 
 <div class="card maintenance-card">
-  {% if not invite %}
+  {% if not invite and not bootstrap_invite %}
     {# Unknown token — neither expired nor consumed; just doesn't exist. #}
     <div class="card-title">{{ _("Invite not found") }}</div>
     <p>{{ _("This invite link is not valid. Ask the person who invited you to mint a fresh one.") }}</p>
+
+  {% elif bootstrap_invite %}
+    {# Operator-minted self-onboarding link.  Recipient names their
+       own stash.  Tier intentionally hidden — it's locked at the
+       link, the recipient just sees "name your stash". #}
+    {% if bootstrap_invite.consumed %}
+      <div class="card-title">{{ _("Invite already used") }}</div>
+      <p>
+        {{ _("This onboarding link was already redeemed on") }}
+        {{ bootstrap_invite.consumed_at[:10] }}.
+        {{ _("Ask for a fresh link if you need one.") }}
+      </p>
+    {% elif bootstrap_invite.expired %}
+      <div class="card-title">{{ _("Invite expired") }}</div>
+      <p>{{ _("This onboarding link expired on") }} {{ bootstrap_invite.expires_at[:10] }}.
+         {{ _("Ask for a fresh one.") }}</p>
+    {% else %}
+      <div class="card-title">{{ _("Welcome — name your stash") }}</div>
+      <p>
+        <code>{{ bootstrap_invite.created_by_email }}</code>
+        {{ _("set you up with a fresh stash. Pick a name and we'll create it for you.") }}
+      </p>
+
+      {% if not current_email %}
+        <p class="notice">
+          {{ _("You're not signed in. Sign in first, then revisit this link.") }}
+        </p>
+      {% else %}
+        <p class="text-sm text-muted">
+          {{ _("Signed in as") }} <code>{{ current_email }}</code>.
+          {{ _("You'll be the sole maintainer.") }}
+        </p>
+        <form method="post" action="/invite/{{ token }}/accept">
+          <label>
+            {{ _("Stash name") }}
+            <input type="text" name="tenant_name" required
+                   maxlength="100"
+                   placeholder="{{ _('e.g. Garage, Sister, Cabin') }}"
+                   autocomplete="off" autofocus>
+          </label>
+          <button type="submit" class="btn btn-primary btn-block">
+            {{ _("Create my stash") }}
+          </button>
+        </form>
+      {% endif %}
+    {% endif %}
 
   {% elif invite.consumed %}
     <div class="card-title">{{ _("Invite already used") }}</div>

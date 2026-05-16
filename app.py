@@ -801,7 +801,7 @@ async def current_actor(request: Request, call_next):
         # invite link".
         if not memberships and not is_operator and email and not shares:
             token = _invite_token_in_path(request.url.path)
-            if token and dao_invites.get_by_token(token) is not None:
+            if token and dao_invites.any_token_exists(token):
                 request.state.actor = Actor(
                     email=email, tenant_id=None, role=None,
                     is_operator=False, memberships=(), shares=(),
@@ -1075,6 +1075,25 @@ def init_db():
             consumed_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
+
+        -- Operator-minted self-onboarding link.  Unlike
+        -- ``tenant_invites`` (which binds to an existing tenant +
+        -- expected email), a bootstrap invite carries only the
+        -- *plan* the operator wants applied.  Whoever clicks the
+        -- link first names their stash and self-onboards as the
+        -- sole maintainer.  Single-use enforced atomically at
+        -- redeem time via the ``consumed_at`` sentinel.
+        CREATE TABLE IF NOT EXISTS tenant_bootstrap_invites (
+            token TEXT PRIMARY KEY,
+            plan TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'maintainer',
+            created_by_email TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at TEXT,
+            consumed_at TEXT,
+            consumed_by_email TEXT,
+            consumed_tenant_id INTEGER REFERENCES tenants(id) ON DELETE SET NULL
+        );
 
         -- Per-tenant API tokens (phase 11).  Bearer auth on /api/v1.
         -- ``token_hash`` is sha256(plaintext) — the plaintext is shown
@@ -6007,17 +6026,29 @@ def revoke_invite(request: Request, token: str):
 
 @app.get("/invite/{token}", response_class=HTMLResponse)
 def invite_accept_page(request: Request, token: str):
-    """Landing page after the recipient clicks the share link.  Shows
-    tenant name, role, who invited, and a one-button accept.  Reuses
-    the 4-state model from the DAO: redeemable / consumed / expired /
-    unknown — copy differs per state so the recipient knows whether
-    to ask the inviter for a fresh link."""
+    """Landing page after the recipient clicks a magic link.  Two
+    kinds of invite resolve here:
+
+    * **member invite** — operator pre-named the tenant + bound the
+      invitee email.  Recipient clicks one button to accept.
+    * **bootstrap invite** — operator minted a self-onboarding link
+      with only a plan + role.  Recipient names their own tenant
+      on the form before accepting.
+
+    Both kinds reuse the 4-state model (redeemable / consumed /
+    expired / unknown); the template renders different copy per
+    kind + state so the recipient knows what to do next."""
     actor: Actor = request.state.actor
-    invite = dao_invites.get_by_token(token)
+    member_invite = dao_invites.get_by_token(token)
+    bootstrap_invite = (
+        None if member_invite is not None
+        else dao_invites.get_bootstrap_by_token(token)
+    )
     return templates.TemplateResponse(
         request, "invite.html",
         {
-            "invite": invite,
+            "invite": member_invite,
+            "bootstrap_invite": bootstrap_invite,
             "current_email": actor.email,
             "token": token,
         },
@@ -6100,16 +6131,61 @@ def tenants_switch(
 
 
 @app.post("/invite/{token}/accept")
-def invite_accept(request: Request, token: str):
+def invite_accept(
+    request: Request, token: str,
+    tenant_name: str = Form(""),
+):
+    """Single redemption endpoint for both invite kinds.  Dispatches
+    on which table the token lives in:
+
+    * member invite → existing :func:`dao_invites.redeem` flow.
+    * bootstrap invite → :func:`dao_invites.redeem_bootstrap` which
+      atomically creates the tenant (with the locked-in plan),
+      stamps the consume, and adds the recipient as the sole
+      maintainer.  Throttled per-IP at the create_self_serve_tenant
+      step to defend against a stolen operator credential being
+      used to mint+immediately-redeem links in a loop."""
     actor: Actor = request.state.actor
+    # Try the bootstrap table first.  We can't fall through from
+    # member-redeem on NotFoundError because a *truly* unknown token
+    # would also raise NotFoundError; the existence check has to be
+    # explicit so the route picks the right handler.
+    bootstrap = dao_invites.get_bootstrap_by_token(token)
+    if bootstrap is not None:
+        client_ip = (
+            (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            or (request.client.host if request.client else "")
+        )
+        try:
+            dao_quotas.check_tenant_creation_rate(client_ip)
+        except dao_quotas.QuotaExceeded as exc:
+            raise HTTPException(
+                429,
+                f"Tenant creation rate limit hit ({exc.used} ≥ {exc.cap} "
+                "per hour from this IP).  Wait for the window reset.",
+            )
+        try:
+            dao_invites.redeem_bootstrap(
+                token,
+                actual_email=actor.email,
+                tenant_name=tenant_name,
+                client_ip=client_ip,
+            )
+        except NotFoundError:
+            raise HTTPException(404, "Invite is no longer valid")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except ForbiddenError as exc:
+            raise HTTPException(403, str(exc))
+        return RedirectResponse("/home", status_code=303)
+
+    # Member-invite path (unchanged behaviour).
     try:
-        result = dao_invites.redeem(token, actual_email=actor.email)
+        dao_invites.redeem(token, actual_email=actor.email)
     except NotFoundError:
         raise HTTPException(404, "Invite is no longer valid")
     except ForbiddenError as exc:
         raise HTTPException(403, str(exc))
-    # Newly-joined member needs a fresh request so the middleware
-    # picks up the membership; redirect to the authenticated home.
     return RedirectResponse("/home", status_code=303)
 
 
@@ -6835,12 +6911,15 @@ def _require_operator_route(actor: Actor) -> None:
 def admin_dashboard(
     request: Request,
     invite_url: str = "",
+    onboarding_url: str = "",
     backup_status: str = "",
 ):
     """Per-deployment tenant roster + cross-tenant token panel.
-    ``invite_url`` round-trips a freshly-minted invite link from
-    the create-tenant POST.  ``backup_status`` surfaces the result
-    of a manually-triggered B2 upload."""
+    ``onboarding_url`` round-trips a freshly-minted self-onboarding
+    link from the POST.  ``invite_url`` is the legacy per-tenant
+    member-invite path (still rendered by the per-tenant card).
+    ``backup_status`` surfaces the result of a manually-triggered
+    B2 upload."""
     actor: Actor = request.state.actor
     _require_operator_route(actor)
     tenants = dao_tenants.list_all(actor)
@@ -6865,6 +6944,10 @@ def admin_dashboard(
             {**inv, "url": f"{base}/invite/{inv['token']}"}
             for inv in open_invites_by_tenant.get(t["id"], [])
         ]
+    open_bootstrap_invites = [
+        {**inv, "url": f"{base}/invite/{inv['token']}"}
+        for inv in dao_invites.list_open_bootstrap_for_operator(actor)
+    ]
     handles = dao_handles.list_all_for_operator(actor)
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     oauth_client_groups = _group_oauth_tokens(api_tokens)
@@ -6892,6 +6975,8 @@ def admin_dashboard(
             "feedback_counts": feedback_counts,
             "current_email": actor.email,
             "invite_url": invite_url,
+            "onboarding_url": onboarding_url,
+            "open_bootstrap_invites": open_bootstrap_invites,
             "public_url": PUBLIC_URL,
             "b2_configured": b2_configured,
             "backup_status": backup_status,
@@ -7126,50 +7211,27 @@ def admin_revoke_oauth_client(request: Request, client_id: str):
     return RedirectResponse("/admin", status_code=303)
 
 
-@app.post("/admin/tenants")
-def admin_create_tenant_and_invite(
+@app.post("/admin/onboarding-links")
+def admin_mint_onboarding_link(
     request: Request,
-    name: str = Form(...),
-    invitee_email: str = Form(...),
-    role: str = Form("maintainer"),
     plan: str = Form("free"),
+    role: str = Form("maintainer"),
+    expires_in_days: int = Form(30),
 ):
-    """Bootstrap a fresh tenant + mint the first-maintainer invite
-    in one shot.  The operator never becomes a member; the invitee
-    will be the sole maintainer once they accept.  Until acceptance
-    the new tenant has zero members and shows ``open_invites=1``
-    on the dashboard."""
+    """Mint a single-use self-onboarding link.  The operator picks a
+    plan + role; whoever clicks the link first names the tenant
+    themselves and becomes its sole maintainer (or readonly).
+
+    Replaces the older ``POST /admin/tenants`` flow which forced the
+    operator to pre-name the tenant + type the invitee's email.
+    With the new flow the operator does neither — the recipient
+    names their own stash and the link's first click wins."""
     actor: Actor = request.state.actor
     _require_operator_route(actor)
-    name = name.strip()
-    if not name:
-        raise HTTPException(400, "Tenant name required")
-    # Per-IP throttle: 5/hour by default.  Defends against a
-    # stolen operator credential being scripted into mass
-    # tenant creation.  Caddy stamps the real client IP on
-    # ``X-Forwarded-For``; ``request.client.host`` is the
-    # fallback for direct deploys.
-    client_ip = (
-        (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-        or (request.client.host if request.client else "")
-    )
     try:
-        dao_quotas.check_tenant_creation_rate(client_ip)
-    except dao_quotas.QuotaExceeded as exc:
-        raise HTTPException(
-            429,
-            f"Tenant creation rate limit hit ({exc.used} ≥ {exc.cap} "
-            "per hour from this IP).  Wait for the window reset.",
-        )
-    try:
-        tenant_id = dao_tenants.create_tenant(
-            actor, name, plan=plan, client_ip=client_ip,
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    try:
-        invite = dao_invites.create(
-            actor, email=invitee_email, role=role, tenant_id=tenant_id,
+        invite = dao_invites.create_bootstrap(
+            actor, plan=plan, role=role,
+            expires_in_days=max(1, min(int(expires_in_days), 90)),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -7177,7 +7239,7 @@ def admin_create_tenant_and_invite(
     url = f"{base}/invite/{invite['token']}"
     from urllib.parse import urlencode
     return RedirectResponse(
-        f"/admin?{urlencode({'invite_url': url})}",
+        f"/admin?{urlencode({'onboarding_url': url})}",
         status_code=303,
     )
 

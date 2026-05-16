@@ -143,7 +143,7 @@ _PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("POST", "/admin/maintenance/cleanup", None),
     ("GET", "/admin/maintenance/export", None),
     ("GET", "/admin", None),
-    ("POST", "/admin/tenants", {"name": "x", "invitee_email": "x@example.com"}),
+    ("POST", "/admin/onboarding-links", {"plan": "free", "role": "maintainer"}),
     ("GET", "/api/v1/me", None),
     ("GET", "/api/v1/boxes", None),
     ("GET", "/api/v1/items", None),
@@ -360,7 +360,7 @@ _NON_OPERATOR_HEADERS = {"X-Forwarded-Email": "main@t1.example"}
 
 @pytest.mark.parametrize("method,path,body", [
     ("GET", "/admin", None),
-    ("POST", "/admin/tenants", {"name": "x", "invitee_email": "y@example.com"}),
+    ("POST", "/admin/onboarding-links", {"plan": "free", "role": "maintainer"}),
     ("POST", "/admin/tenants/1/backup", None),
     # Operator-only deployment controls.  Pre-RBAC-pass these
     # lived at /maintenance/* with no gate; any tenant member
