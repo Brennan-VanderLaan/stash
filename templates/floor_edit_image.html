@@ -35,7 +35,7 @@
       <span aria-hidden="true">T</span><span>Text</span>
     </button>
     <button type="button" class="floor-edit-tool"
-            data-tool="eraser" title="Eraser — click a shape to delete (E)">
+            data-tool="eraser" title="Eraser — paint over the image to erase (E)">
       <span aria-hidden="true">⌫</span><span>Eraser</span>
     </button>
   </div>
@@ -135,6 +135,8 @@
     toolBtns.forEach(b => b.classList.toggle(
       'is-active', b.dataset.tool === tool,
     ));
+    // Default: drop out of free-drawing mode (only the eraser uses
+    // it).  Each branch below flips it back on when needed.
     canvas.isDrawingMode = false;
     canvas.selection = (tool === 'select');
     // ``skipTargetFind`` is what stops Fabric from grabbing
@@ -144,17 +146,34 @@
     // also selecting + dragging that shape — feedback #17,
     // "if you try to draw a line on a box then you end up moving
     // the box around and selecting it while also drawing".  Off
-    // for select (need to find targets to click them) and for
-    // eraser (the eraser's whole job is to find the target).
+    // for select (need to find targets to click them); off for
+    // eraser because free-drawing mode handles its own input.
     canvas.skipTargetFind = (tool === 'rect' || tool === 'line');
-    if (tool === 'select') canvas.defaultCursor = 'default';
-    else if (tool === 'eraser') canvas.defaultCursor = 'not-allowed';
-    else canvas.defaultCursor = 'crosshair';
-    // Make the per-object hover cursor match the tool: in eraser
-    // mode hovering over a shape gives a 'not-allowed' cursor so
-    // the user knows the click will delete.
-    canvas.hoverCursor = (tool === 'eraser') ? 'not-allowed'
-                       : (tool === 'select' ? 'move' : 'crosshair');
+    if (tool === 'eraser') {
+      // Feedback #47: the eraser used to be a "click a vector
+      // shape to delete" tool — useful if you already knew that
+      // shapes were separate objects, useless (and presented a
+      // "not-allowed" cursor) when the user wanted to clean up
+      // marks on the underlying floorplan image itself.  Vector
+      // shape deletion is already covered by Select → Delete /
+      // the Delete button, so the eraser is now a paint-over
+      // tool: free-drawing white strokes that flatten into the
+      // saved PNG at export-time, visually erasing whatever was
+      // under them on the original image.  Crosshair cursor +
+      // friendly tooltip make the action read as "draw to erase".
+      canvas.isDrawingMode = true;
+      canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+      canvas.freeDrawingBrush.color = '#ffffff';
+      canvas.freeDrawingBrush.width = 24;
+      canvas.defaultCursor = 'crosshair';
+      canvas.hoverCursor = 'crosshair';
+    } else if (tool === 'select') {
+      canvas.defaultCursor = 'default';
+      canvas.hoverCursor = 'move';
+    } else {
+      canvas.defaultCursor = 'crosshair';
+      canvas.hoverCursor = 'crosshair';
+    }
     canvas.discardActiveObject().requestRenderAll();
   }
   function setColor(c) {
@@ -216,17 +235,9 @@
   // "stuck to the mouse" shape that never commits on release.
   // We restore skipTargetFind on mouse:up.
   canvas.on('mouse:down', (opt) => {
-    if (activeTool === 'eraser') {
-      // ``mouse:down`` carries the targeted object on opt.target
-      // when the user clicks a real shape.  Background image is
-      // selectable:false so we can't delete it accidentally.
-      const target = opt.target;
-      if (target && target !== canvas.backgroundImage) {
-        canvas.remove(target);
-        canvas.requestRenderAll();
-      }
-      return;
-    }
+    // Eraser is in free-drawing mode (paint-over white) — Fabric
+    // handles its mouse events internally; nothing to do here.
+    if (activeTool === 'eraser') return;
     if (activeTool === 'select') return;
     const p = canvas.getViewportPoint(opt.e);
     drawingStart = p;
@@ -328,6 +339,15 @@
   // shape commits even when the user releases off-canvas.
   window.addEventListener('mouseup', finishDrawing);
   window.addEventListener('touchend', finishDrawing);
+
+  // Eraser strokes complete via fabric's free-drawing pipeline,
+  // not the rect/line path above.  Hook ``path:created`` so each
+  // completed eraser stroke joins the undo history alongside
+  // shapes — feedback #47 wanted undoable erasing, and "I painted
+  // over the wrong corner" should be one Ctrl+Z away.
+  canvas.on('path:created', (opt) => {
+    if (opt.path) history.push(opt.path);
+  });
 
   // ── Undo / delete ─────────────────────────────────────────────
   function undoOne() {
