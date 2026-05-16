@@ -57,6 +57,19 @@
     Free plan available · Pro is {{ pro_price_display }}/mo ·
     <a href="/about/pricing">See pricing</a>
   </p>
+  {% if free_tier_capacity %}
+  <p class="landing-cta-note text-sm text-muted">
+    {% if free_tier_capacity.is_full %}
+      <strong>Free tier full right now.</strong>
+      <a href="/about/transparency">Why?</a>
+    {% else %}
+      <strong>{{ free_tier_capacity.available_slots }}</strong>
+      of {{ free_tier_capacity.total_slots }} free spots open
+      right now ·
+      <a href="/about/transparency">how the free tier is funded</a>
+    {% endif %}
+  </p>
+  {% endif %}
 </section>
 
 <section class="landing-features">

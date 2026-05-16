@@ -2629,6 +2629,47 @@ body.admin-hero-compact .admin-kpi-foot {
   border-color: rgba(96, 165, 250, 0.4);
 }
 
+/* Free-tier capacity card on /admin — at-a-glance number tiles
+   ("used / available / total slots") plus the bump-the-pool
+   form.  Operator scales storage on AWS, then comes here to
+   tell the platform there's more room. */
+.admin-subsection {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.015);
+}
+.admin-subsection h3 {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+.admin-capacity-stats {
+  display: flex;
+  gap: 1.25rem;
+  margin: 0.4rem 0 0.5rem;
+  flex-wrap: wrap;
+}
+.admin-capacity-stat-num {
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.admin-capacity-stat-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.admin-capacity-form {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 /* Feedback queue rows — replaces the old simple-grid layout with
    a "card per row" look so each entry has visible structure
    (status + meta + body + actions). */

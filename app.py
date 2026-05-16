@@ -31,6 +31,7 @@ from dao import locations as dao_locations
 from dao import oauth as dao_oauth
 from dao import pending_items as dao_pending
 from dao import quotas as dao_quotas
+from dao import settings as dao_settings
 from dao import rooms as dao_rooms
 from dao import shares as dao_shares
 from dao import tags as dao_tags
@@ -822,6 +823,26 @@ async def current_actor(request: Request, call_next):
                 response = await call_next(request)
                 return response
 
+        # Self-serve signup: an authenticated email with no membership
+        # gets a one-shot pass through the actor middleware when they
+        # hit /signup (GET form or POST handler).  Without this they'd
+        # bounce off the no-tenant 403 below and never reach the
+        # tenant-creation flow.  Tenant_id stays None; the POST
+        # handler creates the membership which unblocks every
+        # subsequent request.
+        if not memberships and not is_operator and email:
+            if request.url.path == "/signup":
+                request.state.actor = Actor(
+                    email=email, tenant_id=None, role=None,
+                    is_operator=False, memberships=(), shares=(),
+                )
+                actor_tokens = obs.bind_actor(email, None)
+                _LOG_ROUTE.info(
+                    "auth.signup_bypass path=%s", request.url.path,
+                )
+                response = await call_next(request)
+                return response
+
         # Share-only access: an email with no membership but at least
         # one active share is allowed in.  Their actor has tenant_id
         # + role None; the routes that handle share-target pages
@@ -832,35 +853,16 @@ async def current_actor(request: Request, call_next):
                 "auth.denied email=%r path=%s",
                 email or "<missing>", request.url.path,
             )
-            # If the request looks like a browser (HTML in Accept),
-            # serve the friendly no_tenant.html page that explains
-            # what happened + how to redeem an invite.  This used
-            # to be a plain-text "Forbidden" response; the friendly
-            # version matters more now that oauth2-proxy lets every
-            # Google account through and this page is what randos
-            # see if they happen to sign in.  JSON / API callers
-            # keep the terse text response so they have a clean
-            # error message to relay.
+            # If the request looks like a browser, send them to the
+            # self-serve signup page.  The middleware bypass above
+            # lets /signup itself through with a tenant-less actor,
+            # so this redirect is the loop-closing piece: every
+            # authed-but-tenantless visit becomes a chance to sign
+            # up.  JSON / API callers keep the terse 403 so they
+            # have a clean error message to relay.
             accept = (request.headers.get("accept") or "").lower()
             if email and "text/html" in accept:
-                try:
-                    response = templates.TemplateResponse(
-                        request, "no_tenant.html",
-                        {
-                            "email": email,
-                            "business_name": _public_business_name(),
-                            "contact_email": _public_contact_email(),
-                            "public_url": PUBLIC_URL,
-                        },
-                        status_code=403,
-                    )
-                    return response
-                except Exception:
-                    # Template-render failure must not lock the
-                    # user out of the explanation; fall through
-                    # to the plain-text response so the 403 still
-                    # ships SOMETHING they can read.
-                    pass
+                return RedirectResponse("/signup", status_code=303)
             response = Response(
                 "Forbidden — your email is not a member of any "
                 "tenant on this stash.",
@@ -1072,6 +1074,22 @@ def init_db():
             PRIMARY KEY (tenant_id, email)
         );
         CREATE INDEX IF NOT EXISTS idx_tenant_members_email ON tenant_members(email);
+
+        -- Operator-tunable deployment settings.  Key-value store
+        -- for values that should be editable from /admin without a
+        -- code deploy or env-var change.  Today's load-bearing
+        -- entry: ``free_tier_bytes_total`` — the disk allocation
+        -- the operator has carved out for free tenants.  Operator
+        -- bumps this from the admin tab when they scale up EBS.
+        -- Used by ``dao_settings.get_int`` + the signup-capacity
+        -- helpers; surfaced on /admin + the public landing pages
+        -- as "N free slots available right now."
+        CREATE TABLE IF NOT EXISTS deployment_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by_email TEXT
+        );
 
         CREATE TABLE IF NOT EXISTS tenant_invites (
             token TEXT PRIMARY KEY,
@@ -2646,8 +2664,140 @@ def public_landing(request: Request):
             "pro_price_display": _pro_price_display(),
             "public_url": PUBLIC_URL,
             "hide_feedback_widget": True,
+            "free_tier_capacity": dao_quotas.free_tier_capacity(),
         },
     )
+
+
+@app.get("/signup", response_class=HTMLResponse)
+def signup_page(request: Request, name_error: str = ""):
+    """Self-serve tenant creation for a signed-in user with no
+    existing membership.  Reached via the middleware's
+    redirect-to-/signup when an authed-but-tenantless user hits
+    anything in the app, OR directly from the public landing's
+    sign-up CTA.
+
+    Renders one of three states based on free-tier capacity:
+
+    * **Capacity available** → tenant-name form.
+    * **Capacity full** → "free tier full, upgrade to Pro
+      or wait for room to open up" copy.
+    * **Already signed up** → shouldn't normally hit this page,
+      but if they do, redirect to /home.
+    """
+    actor: Actor = request.state.actor
+    if actor.tenant_id is not None:
+        # User is already in a tenant — middleware bypass let them
+        # through; bounce them home.
+        return RedirectResponse("/home", status_code=303)
+    capacity = dao_quotas.free_tier_capacity()
+    return templates.TemplateResponse(
+        request, "signup.html",
+        {
+            "email": actor.email,
+            "capacity": capacity,
+            "name_error": name_error,
+            "product_name": _public_product_name(),
+            "contact_email": _public_contact_email(),
+            "pro_price_display": _pro_price_display(),
+            "public_url": PUBLIC_URL,
+            "hide_feedback_widget": True,
+        },
+    )
+
+
+@app.post("/signup")
+def signup_submit(
+    request: Request,
+    tenant_name: str = Form(""),
+):
+    """Create a free tenant for the signed-in user.
+
+    Refuses if:
+
+    * Free-tier pool has no slots available (graceful "full" copy).
+    * Tenant name is empty or whitespace-only.
+    * Per-IP tenant-creation rate is exceeded (anti-abuse).
+
+    On success: creates the tenant, adds the user as the sole
+    maintainer, redirects to /home where the just-created
+    membership lights up the rest of the app."""
+    actor: Actor = request.state.actor
+    if actor.tenant_id is not None:
+        return RedirectResponse("/home", status_code=303)
+    if not actor.email:
+        raise HTTPException(403, "Sign in first")
+
+    capacity = dao_quotas.free_tier_capacity()
+    if capacity["is_full"]:
+        # Re-render the page with the full-tier copy.  Don't
+        # silently create — the operator's allocation is the
+        # constraint and we honour it strictly.
+        return templates.TemplateResponse(
+            request, "signup.html",
+            {
+                "email": actor.email,
+                "capacity": capacity,
+                "name_error": "",
+                "full_attempt": True,
+                "product_name": _public_product_name(),
+                "contact_email": _public_contact_email(),
+                "pro_price_display": _pro_price_display(),
+                "public_url": PUBLIC_URL,
+                "hide_feedback_widget": True,
+            },
+            status_code=409,
+        )
+
+    name = (tenant_name or "").strip()
+    if not name:
+        from urllib.parse import urlencode
+        return RedirectResponse(
+            f"/signup?{urlencode({'name_error': 'required'})}",
+            status_code=303,
+        )
+
+    client_ip = (
+        (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
+    try:
+        dao_quotas.check_tenant_creation_rate(client_ip)
+    except dao_quotas.QuotaExceeded as exc:
+        raise HTTPException(
+            429,
+            f"Tenant creation rate limit hit ({exc.used} ≥ {exc.cap} "
+            "per hour from this IP).  Wait for the window reset.",
+        )
+
+    try:
+        tenant_id = dao_tenants.create_self_serve_tenant(
+            name=name,
+            plan="free",
+            owner_email=actor.email,
+            client_ip=client_ip,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (tenant_id, actor.email),
+        )
+        obs.write_audit(
+            conn,
+            tenant_id=tenant_id,
+            actor_email=actor.email,
+            action="signup.self_serve",
+            target_kind="tenant",
+            target_id=tenant_id,
+            metadata={"tenant_name": name, "ip": client_ip},
+        )
+        conn.commit()
+    return RedirectResponse("/home", status_code=303)
 
 
 @app.get("/encircle-alternative", response_class=HTMLResponse)
@@ -2672,6 +2822,7 @@ def encircle_alternative(request: Request):
             "pro_price_display": _pro_price_display(),
             "public_url": PUBLIC_URL,
             "hide_feedback_widget": True,
+            "free_tier_capacity": dao_quotas.free_tier_capacity(),
         },
     )
 
@@ -7253,6 +7404,7 @@ def admin_dashboard(
         {**inv, "url": f"{base}/invite/{inv['token']}"}
         for inv in dao_invites.list_open_bootstrap_for_operator(actor)
     ]
+    free_tier_capacity = dao_quotas.free_tier_capacity()
     handles = dao_handles.list_all_for_operator(actor)
     api_tokens = dao_api_tokens.list_all_for_operator(actor)
     oauth_client_groups = _group_oauth_tokens(api_tokens)
@@ -7282,6 +7434,7 @@ def admin_dashboard(
             "invite_url": invite_url,
             "onboarding_url": onboarding_url,
             "open_bootstrap_invites": open_bootstrap_invites,
+            "free_tier_capacity": free_tier_capacity,
             "public_url": PUBLIC_URL,
             "b2_configured": b2_configured,
             "backup_status": backup_status,
@@ -7514,6 +7667,34 @@ def admin_revoke_oauth_client(request: Request, client_id: str):
     except NotFoundError:
         raise HTTPException(404)
     return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/free-tier-capacity")
+def admin_set_free_tier_capacity(
+    request: Request,
+    total_bytes: int = Form(...),
+):
+    """Operator bumps the free-tier disk allocation.  ``total_bytes``
+    is the new pool size; the platform divides by the free plan's
+    per-tenant cap (100 MB today) to derive slot count.
+
+    Negative or zero values are refused — the free tier always
+    has SOME allocation; closing it entirely requires editing the
+    code (deliberate friction, since "no free tier" is a meaningful
+    product decision)."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    if total_bytes < 1_000_000:
+        # 1 MB floor — anything smaller is almost certainly a
+        # mistyped value (operator meant MB but typed bytes).
+        raise HTTPException(
+            400,
+            "Free-tier total must be at least 1 MB (1,000,000 bytes). "
+            "Operator override is intentional — to close the free "
+            "tier entirely, set the plan default in dao/quotas.py.",
+        )
+    dao_settings.set_value(actor, "free_tier_bytes_total", str(total_bytes))
+    return RedirectResponse("/admin#capacity", status_code=303)
 
 
 @app.post("/admin/onboarding-links")

@@ -344,6 +344,57 @@ def check_or_raise(
     # core / backup surfaces are uncapped today.
 
 
+# ── Free-tier capacity ──────────────────────────────────────────────
+
+
+def free_tier_capacity() -> dict:
+    """Compute the current free-tier capacity picture for the
+    deployment.  Returns:
+
+    .. code-block:: python
+
+        {
+            "total_bytes": int,    # operator-set pool size
+            "per_slot_bytes": int, # free plan's storage_bytes cap
+            "total_slots": int,    # how many fit in total
+            "used_slots": int,     # count of active free tenants
+            "available_slots": int,
+            "is_full": bool,
+        }
+
+    Surfaced on /admin (operator-side meter + bump-the-pool form)
+    and on the public landing pages ("N free slots available
+    right now") so the size of the free tier is legible to
+    prospects + scales with the operator's hosting budget.
+
+    Uses :func:`dao.settings.get_int` for the tunable pool size
+    so an operator bump on /admin takes effect on the next read
+    — no restart needed."""
+    # Late import to keep dao.settings → dao.quotas decoupled
+    # from the module-load graph (some test fixtures load these
+    # in surprising orders).
+    from dao import settings as dao_settings
+    total = dao_settings.get_int("free_tier_bytes_total")
+    per_slot = int(_PLAN_DEFAULTS["free"]["storage_bytes"])
+    total_slots = total // per_slot if per_slot > 0 else 0
+    with db() as conn:
+        used = conn.execute(
+            "SELECT COUNT(*) AS n FROM tenants "
+            "WHERE plan = 'free' "
+            "  AND COALESCE(deleted_at, '') = ''"
+        ).fetchone()["n"]
+    used_slots = int(used)
+    available = max(0, total_slots - used_slots)
+    return {
+        "total_bytes": total,
+        "per_slot_bytes": per_slot,
+        "total_slots": total_slots,
+        "used_slots": used_slots,
+        "available_slots": available,
+        "is_full": available <= 0,
+    }
+
+
 # ── Tenant-creation throttle ────────────────────────────────────────
 
 

@@ -34,7 +34,7 @@ from pathlib import Path
 # DDL + index in init_db (onboarding-tour persistence).  Schema
 # migrations are explicitly called out in the ratchet docstring as
 # a legit reason to lift the ceiling.
-APP_CONN_EXECUTE_CEILING = 68  # +1 — migration: ALTER quotas rename column
+APP_CONN_EXECUTE_CEILING = 69  # +1 — POST /signup tenant_members INSERT
 
 
 def test_app_py_conn_execute_ratchet():

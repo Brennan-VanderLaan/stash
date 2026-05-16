@@ -378,6 +378,59 @@
     </details>
     {% endif %}
   </header>
+
+  {# ── Free-tier capacity ─────────────────────────────────────── #}
+  {# Operator-tunable disk allocation for the free tier.  Used /
+     available / total slot counts derived from this allocation
+     and the free plan's per-tenant cap (100 MB).  Bumping the
+     pool here immediately opens more signup slots — no restart
+     needed.  Surfaced publicly on /signup so prospective free
+     users see the live availability. #}
+  {% if free_tier_capacity %}
+  <section class="admin-subsection" id="capacity">
+    <h3>Free-tier capacity</h3>
+    {% set cap = free_tier_capacity %}
+    {% set total_gb = (cap.total_bytes / (1024 * 1024 * 1024)) | round(2) %}
+    {% set per_slot_mb = (cap.per_slot_bytes / (1024 * 1024)) | round | int %}
+    <div class="admin-capacity-stats">
+      <div>
+        <div class="admin-capacity-stat-num">{{ cap.used_slots }}</div>
+        <div class="admin-capacity-stat-label">used</div>
+      </div>
+      <div>
+        <div class="admin-capacity-stat-num">{{ cap.available_slots }}</div>
+        <div class="admin-capacity-stat-label">available</div>
+      </div>
+      <div>
+        <div class="admin-capacity-stat-num">{{ cap.total_slots }}</div>
+        <div class="admin-capacity-stat-label">total slots</div>
+      </div>
+    </div>
+    <p class="text-sm text-muted">
+      Pool: <strong>{{ total_gb }} GB</strong> ÷
+      {{ per_slot_mb }} MB/free-tenant = {{ cap.total_slots }} slots.
+      Bumping the pool below opens slots immediately — no restart.
+      Used count = active (not soft-deleted) free-plan tenants.
+    </p>
+    <form method="post" action="/admin/free-tier-capacity"
+          class="admin-capacity-form">
+      <label>
+        New pool total (bytes)
+        <input type="number" name="total_bytes" min="1000000"
+               value="{{ cap.total_bytes }}" required>
+        <small class="text-muted">
+          Current: {{ cap.total_bytes }} bytes ({{ total_gb }} GB).
+          E.g.: 10 GB = 10737418240; 50 GB = 53687091200;
+          100 GB = 107374182400.
+        </small>
+      </label>
+      <button type="submit" class="btn btn-primary btn-sm">
+        Update pool
+      </button>
+    </form>
+  </section>
+  {% endif %}
+
   {% if tenants %}
   <div class="admin-tenant-grid">
     {% for t in tenants %}

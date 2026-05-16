@@ -1,0 +1,124 @@
+{# Self-serve signup landing.  Reached via the middleware's
+   redirect when an authed-but-tenantless user hits anything, or
+   directly from a landing-page CTA.  Renders three branches:
+
+   1. Capacity available → tenant-name form, "create your stash"
+      flow.
+   2. Capacity full → graceful "free tier full, try Pro or wait"
+      copy.  Operator can bump the pool from /admin to open more
+      slots when they scale storage.
+   3. POST attempt against a full pool → same as (2) but with a
+      pointed "tried to sign up after the pool filled" notice. #}
+{% extends "about/_layout.html" %}
+{% set page_title = "Create your stash" %}
+{% block content %}
+
+<section class="about-hero">
+  {% if capacity.is_full %}
+  <h1>Free tier is full right now.</h1>
+  <p class="about-lede">
+    {{ capacity.total_slots }} free spots, {{ capacity.used_slots }}
+    in use.  We don't silently absorb growth costs — the free tier
+    expands only when the operator has the disk headroom to support
+    it.  Two ways forward:
+  </p>
+  {% else %}
+  <h1>Welcome.  Let's set up your stash.</h1>
+  <p class="about-lede">
+    You're signed in as <code>{{ email }}</code>.  Pick a name for
+    your stash and we'll create a fresh, private tenant — yours
+    alone, free tier, no card needed.
+  </p>
+  {% endif %}
+</section>
+
+{% if full_attempt %}
+<div class="notice notice-warning">
+  <strong>Just missed it.</strong>  The free pool filled while you
+  were typing.  Your tenant wasn't created.  Try again later or
+  upgrade to Pro to skip the queue.
+</div>
+{% endif %}
+
+{% if capacity.is_full %}
+<section class="about-section">
+  <h2>Upgrade to Pro</h2>
+  <p>
+    {{ pro_price_display }}/mo — same Stash, bigger storage,
+    skips the free-tier queue.  Pro subscriptions are what fund
+    the free tier; see
+    <a href="/about/transparency">where your $ goes</a> for the
+    full economic picture.
+  </p>
+  <p class="text-sm text-muted">
+    The free pool re-opens when an existing free tenant deletes
+    their data or when the operator bumps the allocation (which
+    happens whenever there's disk headroom to support it).
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>Or join the waitlist</h2>
+  <p>
+    Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+    and we'll ping you when a slot opens up.  Mention you tried
+    to sign in with <code>{{ email or "your address" }}</code>.
+  </p>
+</section>
+{% else %}
+<section class="about-section">
+  <form method="post" action="/signup">
+    <label>
+      Stash name
+      <input type="text" name="tenant_name" required
+             maxlength="80" autocomplete="off" autofocus
+             placeholder="e.g. Garage, Sister's House, Cabin">
+      {% if name_error %}
+      <small class="notice notice-warning">
+        Pick a name to continue.
+      </small>
+      {% endif %}
+    </label>
+    <p class="text-sm text-muted">
+      You'll be the sole maintainer.  Free plan defaults:
+      <strong>100 MB total storage</strong> (flat — not per-month),
+      100 AI calls per month, full feature set.
+      Upgrade to Pro from <code>/usage</code> whenever you want
+      bigger caps.
+    </p>
+    <button type="submit" class="btn btn-primary btn-block">
+      Create my stash →
+    </button>
+  </form>
+</section>
+
+<section class="about-section">
+  <h2>Free-tier availability</h2>
+  <p class="text-sm text-muted">
+    <strong>{{ capacity.available_slots }}</strong> of
+    {{ capacity.total_slots }} free spots open right now
+    ({{ capacity.used_slots }} in use).  The free pool grows as
+    the operator scales storage; the numbers above update live
+    when they do.  See
+    <a href="/about/transparency">how the free tier is funded</a>
+    for the economic model.
+  </p>
+</section>
+{% endif %}
+
+<section class="about-section">
+  <h2>Signed in as the wrong account?</h2>
+  <p>
+    <a href="/oauth2/sign_out" class="btn btn-secondary">
+      Sign out
+    </a>
+    — clears the session so you can sign back in with a different
+    address.
+  </p>
+</section>
+
+{% endblock %}
+
+{% block header_action %}
+<a href="/oauth2/sign_out" class="about-signin">Sign out</a>
+{% endblock %}
