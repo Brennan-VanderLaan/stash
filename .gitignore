@@ -6,4 +6,7 @@ deploy/emails.txt
 __pycache__/
 *.pyc
 stash.db
+stash.db-shm
+stash.db-wal
 uploads/
+tmp/

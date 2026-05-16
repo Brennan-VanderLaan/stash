@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual sweep · annotation gallery</title>
+<style>
+  :root {
+    --bg: #0f1f14;
+    --panel: #16331f;
+    --border: #2a5a3a;
+    --text: #e6f4ea;
+    --muted: #9bbfa6;
+    --accent: #4ade80;
+    --warn: #facc15;
+    --danger: #f87171;
+    --user-circle: #60a5fa;
+    --ai-circle-high: #f87171;
+    --ai-circle-medium: #facc15;
+    --ai-circle-low: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0.8rem 1.2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
+    align-items: center;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  header .meta { font-size: 0.8rem; color: var(--muted); }
+  header .spacer { flex: 1; }
+  header .filter {
+    display: flex; gap: 0.3rem; flex-wrap: wrap;
+  }
+  header .filter button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.35rem 0.7rem;
+    font-size: 0.85rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  header .filter button.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  header .actions { display: flex; gap: 0.4rem; }
+  header .actions button {
+    background: var(--accent);
+    color: var(--bg);
+    border: 0;
+    padding: 0.45rem 0.85rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  header .actions button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  header .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .status-dot.live {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: status-pulse 1.4s ease-in-out infinite;
+  }
+  .status-dot.done {
+    background: var(--accent);
+  }
+  .status-dot.error {
+    background: var(--danger);
+  }
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .shot.fresh {
+    animation: card-pop 0.4s ease-out;
+  }
+  @keyframes card-pop {
+    from { opacity: 0; transform: scale(0.96) translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .shot-svg .ai-circle.fresh {
+    animation: circle-pulse 0.8s ease-out;
+  }
+  @keyframes circle-pulse {
+    0%   { opacity: 0; stroke-width: 6; }
+    100% { opacity: 1; stroke-width: 2; }
+  }
+  .empty.skeleton {
+    color: var(--muted);
+  }
+  .empty.skeleton::after {
+    content: "·";
+    animation: ellipsis 1.4s steps(4, end) infinite;
+  }
+  @keyframes ellipsis {
+    0%   { content: "·"; }
+    33%  { content: "··"; }
+    66%  { content: "···"; }
+    100% { content: "·"; }
+  }
+  main {
+    padding: 1rem 1.2rem 3rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 1.2rem;
+  }
+  .shot {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem 0.8rem;
+  }
+  .shot-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .shot-head .route {
+    color: var(--accent);
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .shot-head .viewport {
+    color: var(--muted);
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.78rem;
+  }
+  .shot-canvas-wrap {
+    position: relative;
+    background: #000;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: crosshair;
+    user-select: none;
+  }
+  .shot-canvas-wrap img {
+    display: block;
+    width: 100%;
+    height: auto;
+    pointer-events: none;
+  }
+  .shot-svg {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .shot-svg .ai-circle {
+    fill: none;
+    stroke-dasharray: 6 4;
+    stroke-width: 2;
+    cursor: pointer;
+    pointer-events: auto;
+    transition: opacity 0.15s;
+  }
+  .shot-svg .ai-circle.dismissed { opacity: 0.15; }
+  .shot-svg .user-circle {
+    fill: rgba(96, 165, 250, 0.15);
+    stroke: var(--user-circle);
+    stroke-width: 3;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .ai-tip, .user-tip {
+    position: absolute;
+    background: rgba(20, 30, 24, 0.96);
+    color: var(--text);
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 0.75rem;
+    max-width: 280px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .findings-list {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+  }
+  .findings-list .group { margin-top: 0.4rem; }
+  .findings-list .label {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.7rem;
+  }
+  .findings-list ul { list-style: none; padding: 0; margin: 0.2rem 0 0; }
+  .findings-list li {
+    padding: 0.25rem 0;
+    display: flex;
+    gap: 0.4rem;
+    align-items: flex-start;
+  }
+  .findings-list li .sev {
+    flex-shrink: 0;
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    color: var(--bg);
+    font-weight: 700;
+  }
+  .findings-list li .sev.high { background: var(--ai-circle-high); }
+  .findings-list li .sev.medium { background: var(--ai-circle-medium); }
+  .findings-list li .sev.low { background: var(--ai-circle-low); }
+  .findings-list li .sev.user { background: var(--user-circle); }
+  .findings-list li .text { flex: 1; }
+  .findings-list li .text.dismissed { text-decoration: line-through; opacity: 0.4; }
+  .findings-list li button {
+    flex-shrink: 0;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0 0.3rem;
+    line-height: 1;
+  }
+  .findings-list li button:hover { color: var(--danger); }
+  dialog.tag-dialog {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    min-width: 320px;
+  }
+  dialog.tag-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  dialog.tag-dialog textarea {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 80px;
+  }
+  dialog.tag-dialog .btn-row {
+    margin-top: 0.7rem;
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+  dialog.tag-dialog button {
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  dialog.tag-dialog button.primary {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    background: var(--accent);
+    color: var(--bg);
+    padding: 0.7rem 1.1rem;
+    border-radius: 8px;
+    font-weight: 600;
+    z-index: 100;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.15s, transform 0.15s;
+  }
+  .toast.visible { opacity: 1; transform: translateY(0); }
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--muted);
+    padding: 3rem 1rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Visual sweep</h1>
+  <span class="meta" id="meta">loading…</span>
+  <span class="status" id="status">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-text">connecting…</span>
+  </span>
+  <span class="spacer"></span>
+  <span class="filter" id="viewport-filter"></span>
+  <span class="actions">
+    <button id="copy-btn">Copy report</button>
+    <button id="export-btn" class="secondary">Export JSON</button>
+    <button id="clear-btn" class="secondary">Clear annotations</button>
+  </span>
+</header>
+
+<main id="grid">
+  <div class="empty">loading manifest…</div>
+</main>
+<!-- MANIFEST_INLINE_MARKER -->
+
+<dialog id="tag-dialog" class="tag-dialog">
+  <form method="dialog">
+    <label>
+      Note (optional)
+      <textarea id="tag-text" placeholder="What's wrong here?"></textarea>
+    </label>
+    <div class="btn-row">
+      <button value="cancel">Cancel</button>
+      <button value="save" class="primary" id="tag-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast">copied</div>
+
+<script>
+(async function() {
+  // ── State ─────────────────────────────────────────────────────
+  // ``annotations`` is keyed by shot.slug; entries:
+  //   { user: [{x,y,w,h,text}], ai_dismissed: [findingIdx, ...] }
+  // Persisted to localStorage under ``sweep:<run_id>`` so a page
+  // reload mid-review doesn't lose work.  Each run has its own
+  // namespace so multiple sweeps coexist without overwriting.
+  let manifest = null;
+  let annotations = {};
+  let storageKey = "";
+  let activeViewport = "all";
+  // Streaming state ───────────────────────────────────────────────
+  // ``totalExpected`` set by the run_started SSE event; lets the
+  // header show "5/45" progress.  ``knownSlugs`` dedupes a replay
+  // history against the inline manifest so we don't render the
+  // same card twice when SSE replays back the events that the
+  // inline manifest already captured.
+  let totalExpected = 0;
+  let runComplete = false;
+  const knownSlugs = new Set();
+
+  function persist() {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(annotations));
+    } catch (e) { console.warn("persist failed", e); }
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      annotations = raw ? JSON.parse(raw) : {};
+    } catch (e) { annotations = {}; }
+  }
+  function annoFor(slug) {
+    if (!annotations[slug]) annotations[slug] = { user: [], ai_dismissed: [] };
+    return annotations[slug];
+  }
+
+  // ── Load manifest ─────────────────────────────────────────────
+  // Read from an inlined <script type="application/json"> block.
+  // ``fetch('manifest.json')`` would be cleaner but browsers block
+  // cross-resource fetch from file:// origins, and we want this
+  // page to work via double-click (no server).
+  try {
+    const el = document.getElementById("sweep-manifest");
+    if (!el) throw new Error("manifest <script> element missing");
+    manifest = JSON.parse(el.textContent);
+  } catch (e) {
+    document.getElementById("grid").innerHTML =
+      `<div class="empty">failed to load manifest — ${escapeHtmlSafe(e.message)}.
+       Re-run <code>python tools/sweep/sweep.py</code> to regenerate.</div>`;
+    return;
+  }
+  function escapeHtmlSafe(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      "\"": "&quot;", "'": "&#39;",
+    }[c]));
+  }
+  storageKey = "sweep:" + manifest.run_id;
+  load();
+  manifest.shots.forEach(s => knownSlugs.add(s.slug));
+  totalExpected = manifest.shots.length;
+  runComplete = manifest.status === "complete";
+  updateMeta();
+
+  function updateMeta() {
+    const n = manifest.shots.length;
+    const tgt = Math.max(totalExpected, n);
+    document.getElementById("meta").textContent =
+      `${manifest.run_id} · ${n}${tgt > n ? "/" + tgt : ""} shots`
+      + ` · ${manifest.base_url}`;
+  }
+
+  function setStatus(state, text) {
+    const dot = document.getElementById("status-dot");
+    dot.classList.remove("live", "done", "error");
+    if (state) dot.classList.add(state);
+    document.getElementById("status-text").textContent = text;
+  }
+
+  // ── Viewport filter ───────────────────────────────────────────
+  // Rebuilt as new viewports stream in (some runs send only one,
+  // some send five — the filter chips need to grow with the data).
+  let renderedViewports = new Set();
+  const filterEl = document.getElementById("viewport-filter");
+  function rebuildFilter() {
+    const viewportSet = new Set(manifest.shots.map(s => s.viewport));
+    if (viewportSet.size === renderedViewports.size
+        && [...viewportSet].every(v => renderedViewports.has(v))) {
+      return;
+    }
+    renderedViewports = viewportSet;
+    const ordered = ["all", ...Array.from(viewportSet)];
+    filterEl.innerHTML = "";
+    ordered.forEach(vp => {
+      const btn = document.createElement("button");
+      btn.textContent = vp;
+      if (vp === activeViewport) btn.classList.add("active");
+      btn.addEventListener("click", () => {
+        activeViewport = vp;
+        filterEl.querySelectorAll("button").forEach(b =>
+          b.classList.toggle("active", b.textContent === vp));
+        renderGrid();
+      });
+      filterEl.appendChild(btn);
+    });
+  }
+  rebuildFilter();
+
+  // ── Tag dialog (single instance reused) ───────────────────────
+  const tagDialog = document.getElementById("tag-dialog");
+  const tagText = document.getElementById("tag-text");
+  let pendingAnno = null;  // { slug, x, y, w, h } awaiting text
+
+  function openTagDialog(slug, x, y, w, h, existingText = "") {
+    pendingAnno = { slug, x, y, w, h };
+    tagText.value = existingText;
+    tagDialog.showModal();
+    tagText.focus();
+  }
+  tagDialog.addEventListener("close", () => {
+    if (tagDialog.returnValue !== "save" || !pendingAnno) {
+      pendingAnno = null;
+      return;
+    }
+    const { slug, x, y, w, h } = pendingAnno;
+    const text = tagText.value.trim();
+    const a = annoFor(slug);
+    a.user.push({ x, y, w, h, text });
+    persist();
+    pendingAnno = null;
+    renderShot(slug);
+  });
+
+  // ── Drawing state ─────────────────────────────────────────────
+  // One drag at a time across the page; tracking the start point
+  // in viewport-relative percentages keeps the drawing accurate
+  // regardless of the displayed scale of each shot.
+  let dragState = null;
+
+  function pctFromEvent(wrap, e) {
+    const r = wrap.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * 100;
+    const y = ((e.clientY - r.top) / r.height) * 100;
+    return { x: Math.max(0, Math.min(100, x)),
+             y: Math.max(0, Math.min(100, y)) };
+  }
+
+  function attachDrawing(wrap, svg, slug) {
+    wrap.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      // Ignore clicks on existing circles — those have their own
+      // handler and shouldn't start a fresh draw.
+      if (e.target.tagName === "rect" || e.target.tagName === "ellipse") return;
+      const start = pctFromEvent(wrap, e);
+      const draftRect = document.createElementNS(
+        "http://www.w3.org/2000/svg", "rect");
+      draftRect.setAttribute("fill", "rgba(96, 165, 250, 0.15)");
+      draftRect.setAttribute("stroke", "var(--user-circle)");
+      draftRect.setAttribute("stroke-width", "3");
+      draftRect.setAttribute("stroke-dasharray", "4 3");
+      draftRect.setAttribute("x", start.x);
+      draftRect.setAttribute("y", start.y);
+      draftRect.setAttribute("width", 0);
+      draftRect.setAttribute("height", 0);
+      svg.appendChild(draftRect);
+      dragState = { wrap, svg, slug, start, draftRect };
+      wrap.setPointerCapture(e.pointerId);
+    });
+    wrap.addEventListener("pointermove", (e) => {
+      if (!dragState || dragState.wrap !== wrap) return;
+      const cur = pctFromEvent(wrap, e);
+      const x = Math.min(dragState.start.x, cur.x);
+      const y = Math.min(dragState.start.y, cur.y);
+      const w = Math.abs(cur.x - dragState.start.x);
+      const h = Math.abs(cur.y - dragState.start.y);
+      dragState.draftRect.setAttribute("x", x);
+      dragState.draftRect.setAttribute("y", y);
+      dragState.draftRect.setAttribute("width", w);
+      dragState.draftRect.setAttribute("height", h);
+    });
+    wrap.addEventListener("pointerup", (e) => {
+      if (!dragState || dragState.wrap !== wrap) return;
+      const ds = dragState;
+      dragState = null;
+      const r = ds.draftRect;
+      const x = parseFloat(r.getAttribute("x"));
+      const y = parseFloat(r.getAttribute("y"));
+      const w = parseFloat(r.getAttribute("width"));
+      const h = parseFloat(r.getAttribute("height"));
+      r.remove();
+      // Skip accidental near-zero drags — easy to land one when
+      // tapping to inspect an AI circle.
+      if (w < 1 || h < 1) return;
+      openTagDialog(ds.slug, x, y, w, h);
+    });
+  }
+
+  // ── Render ────────────────────────────────────────────────────
+  const grid = document.getElementById("grid");
+
+  function severityColor(sev) {
+    if (sev === "high") return "var(--ai-circle-high)";
+    if (sev === "medium") return "var(--ai-circle-medium)";
+    return "var(--ai-circle-low)";
+  }
+
+  function renderShot(slug) {
+    const card = grid.querySelector(`[data-slug="${slug}"]`);
+    if (!card) return;
+    const shot = manifest.shots.find(s => s.slug === slug);
+    const anno = annoFor(slug);
+    const svg = card.querySelector("svg");
+    // Clear all existing overlay shapes (we re-render from state
+    // every time — saves us from tracking which DOM node maps to
+    // which annotation index).
+    svg.innerHTML = "";
+
+    // AI findings.
+    (shot.ai_findings || []).forEach((f, i) => {
+      const rect = document.createElementNS(
+        "http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", f.x);
+      rect.setAttribute("y", f.y);
+      rect.setAttribute("width", f.w);
+      rect.setAttribute("height", f.h);
+      rect.classList.add("ai-circle");
+      rect.setAttribute("stroke", severityColor(f.severity));
+      if (anno.ai_dismissed.includes(i)) rect.classList.add("dismissed");
+      rect.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = anno.ai_dismissed.indexOf(i);
+        if (idx === -1) anno.ai_dismissed.push(i);
+        else anno.ai_dismissed.splice(idx, 1);
+        persist();
+        renderShot(slug);
+      });
+      svg.appendChild(rect);
+    });
+
+    // User annotations.
+    anno.user.forEach((u, i) => {
+      const rect = document.createElementNS(
+        "http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", u.x);
+      rect.setAttribute("y", u.y);
+      rect.setAttribute("width", u.w);
+      rect.setAttribute("height", u.h);
+      rect.classList.add("user-circle");
+      rect.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openTagDialog(slug, u.x, u.y, u.w, u.h, u.text);
+        // Drop the existing entry — the dialog "save" handler will
+        // re-add with the new text.  Cancel restores nothing; the
+        // user can re-draw if they meant Cancel.
+        anno.user.splice(i, 1);
+        persist();
+      });
+      svg.appendChild(rect);
+    });
+
+    // Re-render the findings list under the canvas.
+    const listHTML = renderFindingsList(shot, anno);
+    card.querySelector(".findings-list").innerHTML = listHTML;
+    bindFindingControls(card, shot, anno);
+  }
+
+  function renderFindingsList(shot, anno) {
+    const aiItems = (shot.ai_findings || []).map((f, i) => {
+      const dismissed = anno.ai_dismissed.includes(i) ? " dismissed" : "";
+      return `<li>
+        <span class="sev ${f.severity}">${f.severity}</span>
+        <span class="text${dismissed}">${escapeHtml(f.issue)}</span>
+        <button data-act="toggle-ai" data-idx="${i}" title="Toggle dismiss">
+          ${dismissed ? "↺" : "✕"}
+        </button>
+      </li>`;
+    });
+    const userItems = anno.user.map((u, i) => `<li>
+      <span class="sev user">you</span>
+      <span class="text">${escapeHtml(u.text || "(no note)")}</span>
+      <button data-act="delete-user" data-idx="${i}" title="Delete">✕</button>
+    </li>`);
+    let html = "";
+    if (aiItems.length) {
+      html += `<div class="group"><div class="label">AI findings</div>
+               <ul>${aiItems.join("")}</ul></div>`;
+    }
+    if (userItems.length) {
+      html += `<div class="group"><div class="label">Yours</div>
+               <ul>${userItems.join("")}</ul></div>`;
+    }
+    if (!html) {
+      html = `<div class="group"><div class="label">No findings.  Click+drag on the screenshot to add one.</div></div>`;
+    }
+    return html;
+  }
+
+  function bindFindingControls(card, shot, anno) {
+    card.querySelectorAll('[data-act="toggle-ai"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        const i = parseInt(btn.dataset.idx, 10);
+        const at = anno.ai_dismissed.indexOf(i);
+        if (at === -1) anno.ai_dismissed.push(i);
+        else anno.ai_dismissed.splice(at, 1);
+        persist();
+        renderShot(shot.slug);
+      });
+    });
+    card.querySelectorAll('[data-act="delete-user"]').forEach(btn => {
+      btn.addEventListener("click", () => {
+        const i = parseInt(btn.dataset.idx, 10);
+        anno.user.splice(i, 1);
+        persist();
+        renderShot(shot.slug);
+      });
+    });
+  }
+
+  function renderGrid() {
+    grid.innerHTML = "";
+    const shots = manifest.shots.filter(s =>
+      activeViewport === "all" || s.viewport === activeViewport);
+    if (!shots.length) {
+      grid.innerHTML = `<div class="empty">no shots match filter</div>`;
+      return;
+    }
+    shots.forEach(shot => {
+      const card = document.createElement("article");
+      card.classList.add("shot");
+      card.dataset.slug = shot.slug;
+      card.innerHTML = `
+        <div class="shot-head">
+          <span class="route">${escapeHtml(shot.route)}</span>
+          <span class="viewport">${shot.viewport} · ${shot.width}×${shot.height}</span>
+        </div>
+        <div class="shot-canvas-wrap" data-slug="${shot.slug}">
+          <img src="${shot.image}" alt="${escapeHtml(shot.route)} ${shot.viewport}"
+               draggable="false">
+          <svg class="shot-svg" viewBox="0 0 100 100"
+               preserveAspectRatio="none"></svg>
+        </div>
+        <div class="findings-list"></div>`;
+      grid.appendChild(card);
+      const wrap = card.querySelector(".shot-canvas-wrap");
+      const svg = card.querySelector("svg");
+      attachDrawing(wrap, svg, shot.slug);
+      renderShot(shot.slug);
+    });
+  }
+
+  // ── Header actions ────────────────────────────────────────────
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      "\"": "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("visible");
+    setTimeout(() => t.classList.remove("visible"), 1500);
+  }
+
+  function buildReport() {
+    const lines = [
+      `# Visual sweep — ${manifest.run_id}`,
+      ``,
+      `Base URL: \`${manifest.base_url}\``,
+      ``,
+    ];
+    let total = 0;
+    manifest.shots.forEach(shot => {
+      const anno = annoFor(shot.slug);
+      const keptAi = (shot.ai_findings || [])
+        .map((f, i) => ({ f, i }))
+        .filter(({ i }) => !anno.ai_dismissed.includes(i));
+      if (!anno.user.length && !keptAi.length) return;
+      total += anno.user.length + keptAi.length;
+      lines.push(`## \`${shot.route}\` @ ${shot.viewport} (${shot.width}×${shot.height})`);
+      lines.push(``);
+      lines.push(`Screenshot: \`shots/${shot.image.split("/").pop()}\``);
+      lines.push(``);
+      if (anno.user.length) {
+        lines.push(`**User-flagged:**`);
+        anno.user.forEach(u => {
+          const box = `(x=${u.x.toFixed(1)}%, y=${u.y.toFixed(1)}%, w=${u.w.toFixed(1)}%, h=${u.h.toFixed(1)}%)`;
+          lines.push(`- ${box} ${u.text || "(no note)"}`);
+        });
+        lines.push(``);
+      }
+      if (keptAi.length) {
+        lines.push(`**AI-confirmed:**`);
+        keptAi.forEach(({ f }) => {
+          const box = `(x=${f.x.toFixed(1)}%, y=${f.y.toFixed(1)}%, w=${f.w.toFixed(1)}%, h=${f.h.toFixed(1)}%)`;
+          lines.push(`- ${box} [${f.severity}] ${f.issue}`);
+        });
+        lines.push(``);
+      }
+    });
+    if (!total) {
+      lines.push(`(no issues recorded yet — click+drag a screenshot to add a finding)`);
+    }
+    return lines.join("\n");
+  }
+
+  document.getElementById("copy-btn").addEventListener("click", async () => {
+    const report = buildReport();
+    try {
+      await navigator.clipboard.writeText(report);
+      showToast("copied report to clipboard");
+    } catch (e) {
+      // Fallback: download as a file when clipboard isn't allowed
+      // (file:// origins on some browsers block writeText).
+      const blob = new Blob([report], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sweep-report-${manifest.run_id}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("clipboard blocked — downloaded instead");
+    }
+  });
+
+  document.getElementById("export-btn").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(annotations, null, 2)],
+                          { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sweep-annotations-${manifest.run_id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    if (!confirm("Wipe every annotation for this run?")) return;
+    annotations = {};
+    persist();
+    renderGrid();
+  });
+
+  // ── Incremental append ────────────────────────────────────────
+  // Single-card append for the streaming path.  ``renderGrid()``
+  // wipes + rebuilds (used on filter changes + initial bootstrap);
+  // ``appendShot()`` is the live-update sibling that adds one card
+  // without disturbing already-rendered cards or in-flight drags.
+  function appendShot(payload, animate) {
+    if (!(activeViewport === "all" || payload.viewport === activeViewport)) {
+      return;
+    }
+    // If the empty-state placeholder is showing, clear it first.
+    const placeholder = grid.querySelector(".empty");
+    if (placeholder) placeholder.remove();
+    const card = document.createElement("article");
+    card.classList.add("shot");
+    if (animate) card.classList.add("fresh");
+    card.dataset.slug = payload.slug;
+    card.innerHTML = `
+      <div class="shot-head">
+        <span class="route">${escapeHtml(payload.route)}</span>
+        <span class="viewport">${payload.viewport} · ${payload.width}×${payload.height}</span>
+      </div>
+      <div class="shot-canvas-wrap" data-slug="${payload.slug}">
+        <img src="${payload.image}" alt="${escapeHtml(payload.route)} ${payload.viewport}"
+             draggable="false">
+        <svg class="shot-svg" viewBox="0 0 100 100"
+             preserveAspectRatio="none"></svg>
+      </div>
+      <div class="findings-list"></div>`;
+    grid.appendChild(card);
+    const wrap = card.querySelector(".shot-canvas-wrap");
+    const svg = card.querySelector("svg");
+    attachDrawing(wrap, svg, payload.slug);
+    renderShot(payload.slug);
+  }
+
+  // ── Streaming handlers ────────────────────────────────────────
+  function onShotEvent(payload) {
+    if (knownSlugs.has(payload.slug)) return;   // history replay
+    knownSlugs.add(payload.slug);
+    manifest.shots.push({ ...payload, ai_findings: [] });
+    rebuildFilter();
+    appendShot(payload, /*animate*/ true);
+    updateMeta();
+    if (!runComplete) {
+      setStatus("live",
+        `streaming · ${manifest.shots.length}${totalExpected ? "/" + totalExpected : ""}`);
+    }
+  }
+
+  function onReviewEvent(slug, findings) {
+    const shot = manifest.shots.find(s => s.slug === slug);
+    if (!shot) return;
+    // Animate any newly-arrived AI circles for visual confirmation.
+    const prevLen = (shot.ai_findings || []).length;
+    shot.ai_findings = findings || [];
+    renderShot(slug);
+    if (findings && findings.length > prevLen) {
+      const card = grid.querySelector(`[data-slug="${slug}"]`);
+      if (card) {
+        card.querySelectorAll(".ai-circle").forEach(c =>
+          c.classList.add("fresh"));
+        setTimeout(() => {
+          card.querySelectorAll(".ai-circle.fresh").forEach(c =>
+            c.classList.remove("fresh"));
+        }, 800);
+      }
+    }
+  }
+
+  function onDoneEvent(evt) {
+    runComplete = true;
+    const s = evt.status === "interrupted"
+      ? `stopped early · ${manifest.shots.length} shots`
+      : `complete · ${manifest.shots.length} shots`
+        + (evt.elapsed_seconds ? ` · ${evt.elapsed_seconds}s` : "");
+    setStatus(evt.status === "interrupted" ? "error" : "done", s);
+  }
+
+  function onRunStartedEvent(evt) {
+    totalExpected = evt.total_shots || totalExpected;
+    setStatus("live",
+      `streaming · 0${totalExpected ? "/" + totalExpected : ""}`);
+    updateMeta();
+  }
+
+  // ── Initial render ────────────────────────────────────────────
+  renderGrid();
+  if (runComplete) {
+    setStatus("done", `complete · ${manifest.shots.length} shots`);
+  } else if (manifest.shots.length) {
+    setStatus("live", `${manifest.shots.length} loaded · awaiting more…`);
+  } else {
+    setStatus(null, "waiting for first shot…");
+    grid.innerHTML = `<div class="empty skeleton">waiting for first shot</div>`;
+  }
+
+  // ── SSE subscription ──────────────────────────────────────────
+  // Best-effort: if the gallery was opened as a static file (no
+  // server) the EventSource will fail silently and the page falls
+  // back to whatever state the inlined manifest had.  Catch the
+  // error event so the status indicator reflects it.
+  let es = null;
+  try {
+    es = new EventSource("/events");
+  } catch (e) {
+    setStatus("error", "no server — viewing snapshot only");
+  }
+  if (es) {
+    es.onmessage = (e) => {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch (_) { return; }
+      switch (evt.type) {
+        case "run_started": onRunStartedEvent(evt); break;
+        case "shot":        onShotEvent(evt.shot);  break;
+        case "review":      onReviewEvent(evt.slug, evt.findings); break;
+        case "capture_error":
+          // Non-fatal; just note in console for now.
+          console.warn("capture error", evt);
+          break;
+        case "done":        onDoneEvent(evt); break;
+      }
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects unless we close it; only mark
+      // status when truly dead (readyState === CLOSED).
+      if (es.readyState === EventSource.CLOSED) {
+        if (!runComplete) setStatus("error", "server disconnected");
+      }
+    };
+  }
+})();
+</script>
+</body>
+</html>
