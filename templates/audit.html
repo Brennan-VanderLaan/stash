@@ -111,6 +111,14 @@
       <span class="audit-stamp audit-stamp-found">FOUND</span>
       <span class="audit-stamp audit-stamp-missing">MISSING</span>
     </div>
+    {# Persistent direction guides so the user knows which side
+       is which BEFORE they swipe.  Faint when idle, brighten
+       on intent.  Feedback #34: brennan swiped the wrong
+       direction and emptied a box thinking he was accepting. #}
+    <span class="audit-edge-guide audit-edge-guide-missing"
+          aria-hidden="true">← Missing</span>
+    <span class="audit-edge-guide audit-edge-guide-found"
+          aria-hidden="true">Found →</span>
   </article>
   {% endfor %}
 </div>
@@ -333,9 +341,13 @@
     drag.lastT = performance.now();
     drag.card.style.transform =
       `translate(${dx}px, ${dy * 0.3}px) rotate(${dx / 12}deg)`;
+    // Lower threshold (0.25 instead of 0.4) so the edge-guide
+    // colour-shift fires earlier in the swipe — the user sees
+    // which direction is committed before they release.
+    // Feedback #34 — accidental opposite-direction commits.
     const intent = Math.max(-1, Math.min(1, dx / SWIPE_THRESHOLD));
-    drag.card.classList.toggle('intent-right', intent > 0.4);
-    drag.card.classList.toggle('intent-left', intent < -0.4);
+    drag.card.classList.toggle('intent-right', intent > 0.25);
+    drag.card.classList.toggle('intent-left', intent < -0.25);
   }
 
   function onUp(e) {
