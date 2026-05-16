@@ -184,7 +184,11 @@ def test_leaderboard_renders_tier_copy_inline(client):
             conn.commit()
     page = client.get("/leaderboard").text
     assert "1 star" in page
-    assert "first one" in page.lower()
+    # The 1-star tier copy carries "first blood" — pin it
+    # specifically so a future copy edit that drops the marker
+    # entirely surfaces here, but don't pin the exact sentence
+    # since the tone is intentionally tweaked over time.
+    assert "first blood" in page.lower()
 
 
 def test_usage_renders_your_contributions_card(client):

@@ -5146,91 +5146,77 @@ def _star_tier(stars: int) -> dict:
     walks the table top-down and stops at the first ``stars >=
     threshold`` match — order matters."""
     tiers = (
-        # (min_stars, title, body)
-        (150, "{n} stars. We can't keep up with you.",
-            "Look.  At this point you've filed more shipped feedback "
-            "than most people file across every product they use, "
-            "ever.  This is genuinely rare.  Stay weird."),
-        (100, "{n} stars. Co-founder energy.",
-            "We don't have equity to give you (sole prop, no shares "
-            "to issue) but we have very, very deep gratitude and an "
-            "open invitation: tell us what to build next, and we'll "
-            "build it."),
-        (75,  "{n} stars. The operator wants to know your day job.",
-            "Seventy-five.  You have spent more attention on this app "
-            "than most QA contractors.  If you have a LinkedIn, please "
-            "drop it on the feedback form — we'd like to read it."),
-        (50,  "{n} stars. Wait, who built this?",
-            "Fifty.  At this point the operator is genuinely unsure if "
-            "they built Stash or if Stash got built around you.  "
-            "Sincere, slightly-overwhelmed thanks."),
-        (30,  "{n} stars. Are you OK?",
-            "Thirty pieces of feedback that became real changes.  At "
-            "this point we have to ask: is the app at fault, or are "
-            "you just gifted at finding the seams in things?  Either "
-            "way: thank you."),
-        (25,  "{n} stars. The rest of us look bad.",
-            "Twenty-five.  You are single-handedly making everyone "
-            "else's contribution count look modest.  This is, somehow, "
-            "both the kindest and most competitive thing happening "
-            "on the leaderboard."),
-        (20,  "{n} stars. Please touch grass.",
-            "Twenty shipped pieces of feedback.  We are concerned "
-            "about your free time but also extremely grateful for it.  "
-            "Please go outside.  But also, keep filing things."),
-        (15,  "{n} stars. You might be co-running this place.",
-            "Fifteen.  At this rate the operator should probably just "
-            "give you commit access — except this is a one-person shop "
-            "and that would be weird.  Genuine, deep, warm thanks."),
-        (12,  "{n} stars. A dozen — you can taste it.",
-            "Twelve shipped contributions.  This number sounds round "
-            "because it is round.  We promise the next milestone is "
-            "weirder."),
-        (10,  "{n} stars. Officially on the masthead.",
-            "Ten shipped contributions.  If Stash had a masthead, "
-            "you'd be on it.  Stash doesn't have a masthead.  But if "
-            "it did.  (Maybe we should make one?  Tell us via "
-            "feedback.)"),
-        (9,   "{n} stars. Closing in on double digits.",
-            "One more and you hit ten.  Which, frankly, is unhinged "
-            "behavior for what is technically a household-inventory "
-            "app.  We love it.  Keep going."),
-        (8,   "{n} stars. The operator owes you a beer.",
-            "If we ever ship a 'buy the operator a beer' button, "
-            "you get the discount.  Until then: deep, sincere thanks."),
-        (7,   "{n} stars. The lucky number — and earned.",
-            "There's a version of this app that doesn't exist because "
-            "you didn't catch the bug seven different times.  We're "
-            "glad we're not in that timeline."),
-        (6,   "{n} stars. The operator is making mental notes.",
-            "Half a dozen shipped contributions.  You see the same "
-            "friction we see.  The roadmap, quietly, is partly yours."),
-        (5,   "{n} stars. You're on the inside.",
-            "Five things shipped because you said so.  At this point "
-            "we should probably let you pick which feature is next.  "
-            "Tell us, via the feedback widget — what's annoying you "
-            "today?"),
-        (4,   "{n} stars. Officially a regular.",
-            "The operator knows your handle.  Four ships in is the "
-            "territory where 'maintenance' starts to feel like "
-            "'collaboration'.  Genuinely — thank you."),
-        (3,   "{n} stars. The pattern is real.",
-            "Three shipped fixes / features from one person is not "
-            "luck.  You're paying attention to this app the way we "
-            "wish we could.  Cardboard salutes you."),
-        (2,   "{n} stars. Wasn't a fluke.",
-            "Twice now, you noticed something off and bothered to "
-            "write it up.  The operator notices.  Stash is shaped a "
-            "little bit by your taste."),
-        (1,   "{n} star. The first one's the hardest.",
-            "Thanks for filing the thing that became your first ship.  "
-            "That counts.  We're already a little better because you "
-            "paid attention.  Keep going."),
+        # (min_stars, title, body) — bias toward jokes, away
+        # from sincerity + promises.  Nothing here pledges a
+        # feature, a perk, or future engagement.  This is for fun.
+        (150, "{n} stars. The cardboard knows your name.",
+            "We genuinely don't know what to put here.  Most software "
+            "products go their entire run without one person filing "
+            "this many shipped contributions.  You are doing something "
+            "rare.  Keep doing it.  Or don't.  We'd understand."),
+        (100, "{n} stars. Triple digits, baby.",
+            "We checked: nobody else on the leaderboard has more than "
+            "ten.  You are an outlier.  Outliers either get studied or "
+            "get a Wikipedia page.  Probably neither, in your case.  "
+            "But still."),
+        (75,  "{n} stars. The operator is googling you.",
+            "Seventy-five.  Just to make sure you're a real person.  "
+            "(You appear to be.  Concerning.)"),
+        (50,  "{n} stars. Half a century.",
+            "If feedback were currency you could buy a small sandwich "
+            "with this much.  Sadly it is not currency.  Sadlier "
+            "still: you keep filing more."),
+        (30,  "{n} stars. Approaching escape velocity.",
+            "The Stash operator briefly considered whether you live "
+            "in the codebase.  You don't, right?  We checked the "
+            "audit log.  Just making sure."),
+        (25,  "{n} stars. Quarter century.",
+            "In some jurisdictions you can now rent a car off your "
+            "feedback record alone.  In none of those jurisdictions, "
+            "actually."),
+        (20,  "{n} stars. Touch a single blade of grass for us.",
+            "We're not saying go outside.  We're saying touch ONE "
+            "blade of grass.  Then come back."),
+        (15,  "{n} stars. Operator suspects you're an alt account.",
+            "Operator has investigated and concluded: no, this is one "
+            "person.  Concerning."),
+        (12,  "{n} stars. A dozen, like eggs.",
+            "But more useful, and you don't have to refrigerate them."),
+        (10,  "{n} stars. Double-digits unlocked.",
+            "There is, statistically, a non-zero chance you read this "
+            "page more often than the operator does at this point."),
+        (9,   "{n} stars. Almost double-digits.",
+            "One more and we have to print the leaderboard out and "
+            "frame it.  Probably we won't.  But maybe."),
+        (8,   "{n} stars. Octa-noticer.",
+            "We made up the word 'octa-noticer' just now.  It is not "
+            "a real thing.  Neither is half of what you've helped us "
+            "fix."),
+        (7,   "{n} stars. Lucky number, scraped from the bottom of the box.",
+            "Most people don't tell us when something's broken; you "
+            "keep telling us anyway.  The operator finds this both "
+            "useful and mildly alarming."),
+        (6,   "{n} stars. Operator's mental list has your name on it.",
+            "The list is short.  Most of it is just yours."),
+        (5,   "{n} stars. Hand on the wheel.",
+            "Five shipped contributions.  You are aware of how this "
+            "place handles.  The operator can feel you steering."),
+        (4,   "{n} stars. The operator can pick you out of a lineup.",
+            "Of feedback-submitters.  The lineup is small.  But "
+            "still."),
+        (3,   "{n} stars. Statistically not a coincidence.",
+            "Three shipped fixes from one person.  Either the app is "
+            "meaningfully broken or you are meaningfully observant.  "
+            "Probably both."),
+        (2,   "{n} stars. The pattern has a witness.",
+            "Twice you've made the operator say 'huh, yeah, fair'.  "
+            "That's a measurable rate of correctness."),
+        (1,   "{n} star. First blood.",
+            "You filed something we shipped.  Now we're entangled in "
+            "the cosmic ledger of cardboard.  No take-backs."),
         (0,   "On the bench.",
-            "Hit the Feedback button on any page when you spot a bug "
-            "or have an idea.  If we ship a fix or a feature you "
-            "sent in, you earn a star here — fake currency, real "
-            "warm feelings."),
+            "No stars yet.  Send a feedback if you spot something off.  "
+            "Or don't.  We're not your boss."),
     )
     for threshold, title, body in tiers:
         if stars >= threshold:
