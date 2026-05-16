@@ -4,5 +4,6 @@
 # runner.
 
 pytest
+pytest-xdist
 pytest-playwright
 playwright

@@ -156,9 +156,15 @@ Then on your phone, open `http://<host-lan-ip>:8000`. Data lives in
 `stash.db` (SQLite WAL mode) and `uploads/` alongside `app.py`.
 
 ```bash
-.venv/bin/pytest                   # full suite, ~5 minutes
-.venv/bin/pytest -m "not ui"       # skip browser tests, ~4 minutes
+.venv/bin/pytest                   # full suite, ~1 minute on 16 cores
+.venv/bin/pytest -m "not ui"       # skip browser tests
+.venv/bin/pytest -n0               # serial run (use when debugging with pdb)
 ```
+
+The default runs `pytest-xdist` parallel — `-n auto --dist=loadscope`.
+Tests are isolated (per-test SQLite under `tmp_path`, module reload
+each test), so the speedup is near-linear in core count: a 5-minute
+serial suite finishes in under a minute on a 16-core box.
 
 The UI test suite (under `tests/ui/`) drives a real Chromium via
 Playwright against a spawned uvicorn process — install with:
