@@ -82,6 +82,28 @@ def test_static_assets_bypass_auth_so_public_pages_render_styled(
         assert "text/css" in r.headers.get("content-type", "").lower()
 
 
+def test_robots_txt_serves_publicly(tmp_path, monkeypatch):
+    """/robots.txt must be reachable without sign-in (crawlers
+    can't authenticate) and must allow the public marketing
+    surface while disallowing tenant-data paths."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        r = c.get("/robots.txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    # Public surface allowed.
+    assert "Allow: /$" in body
+    assert "Allow: /about" in body
+    # Tenant-data surfaces denied.
+    assert "Disallow: /home" in body
+    assert "Disallow: /uploads" in body
+    assert "Disallow: /api/" in body
+    # The friendly + AI-aware comment is part of the deal.
+    assert "AI crawler" in body
+    assert "kind crawler" in body.lower()
+
+
 def test_about_pages_carry_business_name(tmp_path, monkeypatch):
     """The legal-entity / business name lands on the pages where
     it's actually load-bearing (contracting party on /terms,

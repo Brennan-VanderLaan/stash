@@ -115,7 +115,7 @@ services:
       # ``^/$`` is the public marketing landing — unauthenticated
       # visitors land here.  Authenticated dashboard moved to
       # ``/home`` so the bypass is targeted, not blanket.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/robots\.txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
