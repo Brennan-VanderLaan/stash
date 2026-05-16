@@ -137,6 +137,17 @@
             changes — and so it's the most predictable line
             in the ledger.</td>
       </tr>
+      <tr>
+        <td>Archived-tenant storage (B2, separate budget)</td>
+        <td>$0.001–$0.005 / mo per archived tenant</td>
+        <td>Free accounts inactive for 180 days get zipped + moved
+            to B2 cold storage and the local EBS slot freed up
+            (see "Free-tier archive" below).  Same $6/TB-month
+            rate as the live-backup line but with a separate
+            operator budget — archive growth doesn't cannibalise
+            active-backup headroom.  Stays cheap because the
+            zips compress + don't need fast access.</td>
+      </tr>
       <tr class="about-cost-row-tax">
         <td>State business taxes (MA)</td>
         <td>≈ −$0.20 to −$0.40</td>
@@ -249,13 +260,25 @@
     Trade-off is yours.
   </p>
   <p class="text-sm">
-    <strong>Existing free accounts stay grandfathered.</strong>
-    If the operator has to shrink the per-tenant cap for NEW
-    signups (because vendor costs moved, or the paying base
-    shrank below what current cap supports), existing free
-    accounts keep their original cap for as long as the
-    platform stays up.  Once you're in, you're in.  The pool
-    we squeeze is the new-signup pool, not yours.
+    <strong>Existing free accounts stay grandfathered — as long
+    as they stay active.</strong>  If the operator has to shrink
+    the per-tenant cap for NEW signups (because vendor costs
+    moved, or the paying base shrank below what current cap
+    supports), existing free accounts keep their original cap.
+    The pool the operator squeezes is the new-signup pool, not
+    yours.
+  </p>
+  <p class="text-sm">
+    <strong>The one inactivity trade.</strong>  Free accounts
+    inactive for <strong>180 days</strong> get archived: the
+    tenant's data is zipped + uploaded to B2 cold storage (on
+    a separate budget from the active-tier EBS line above) and
+    the local slot freed for new signups.  Archived accounts
+    are <em>recoverable</em> — sign back in, the operator
+    triggers restore, your data comes back exactly as you left
+    it.  Pro accounts are never archived for inactivity.  This
+    is how the free pool stays a real resource rather than
+    silently calcifying into accounts no one's used in years.
   </p>
   <p class="text-sm text-muted">
     If a free user wants more storage, the right answer is Pro.

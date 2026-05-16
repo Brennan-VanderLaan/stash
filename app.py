@@ -1527,6 +1527,16 @@ def migrate_db():
         # the upgrade flow handles "no Stripe state yet" implicitly.
         _add_column_if_missing(conn, "tenants", "stripe_customer_id", "TEXT")
         _add_column_if_missing(conn, "tenants", "stripe_subscription_id", "TEXT")
+        # Archived-tenant marker.  A free tenant that's been inactive
+        # for 180 days gets zipped + uploaded to B2 (separate budget
+        # from active-tier storage) + local data dropped.  Recovery
+        # is operator-driven: pull the zip from B2 and rehydrate.
+        # The B2 object key is stamped on the row so we know where
+        # to fetch from later.  Last-activity is computed from
+        # audit_log (see dao_tenants.list_all) so no stored column
+        # needed — the 180-day check just reads that watermark.
+        _add_column_if_missing(conn, "tenants", "archived_at", "TEXT")
+        _add_column_if_missing(conn, "tenants", "archive_b2_key", "TEXT")
         _add_column_if_missing(conn, "tenants", "subscription_status", "TEXT")
         _add_column_if_missing(
             conn, "tenants", "subscription_current_period_end", "TEXT",
