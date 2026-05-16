@@ -757,6 +757,26 @@
     // Click → modal preview. Skipped when a drag just finished — the
     // browser fires this click synchronously after pointerup even for
     // gestures we consumed as a drag.
+    //
+    // The `<form method="dialog">` close button is the spec-correct
+    // way to dismiss a <dialog>, but feedback #37 documented a case
+    // where it became a no-op — fetch hangs at Loading…, X click
+    // does nothing, dialog can't be dismissed.  Belt-and-suspenders
+    // below: an explicit JS click handler on the close button, plus
+    // an AbortController on the fetch so it can't loiter past the
+    // dialog itself, plus a 15 s hard timeout so a wedged server
+    // doesn't leave the user stuck at Loading… forever.
+    let _previewAbort = null;
+    const closeBtn = boxDialog.querySelector('.item-dialog-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => boxDialog.close());
+    }
+    boxDialog.addEventListener('close', () => {
+      if (_previewAbort) {
+        _previewAbort.abort();
+        _previewAbort = null;
+      }
+    });
     overlay.addEventListener('click', async (e) => {
       if (recentlyDragged) {
         e.preventDefault();
@@ -770,14 +790,29 @@
       const boxId = tile.dataset.boxId;
       boxBody.innerHTML = '<div class="empty">Loading…</div>';
       boxDialog.showModal();
+      // Abort any prior in-flight fetch from an unconsumed dialog.
+      if (_previewAbort) _previewAbort.abort();
+      _previewAbort = new AbortController();
+      const ac = _previewAbort;
+      const timer = setTimeout(() => ac.abort(), 15000);
       try {
         const r = await fetch(`/boxes/${boxId}/preview`, {
           headers: { 'Accept': 'text/html' },
+          signal: ac.signal,
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         boxBody.innerHTML = await r.text();
       } catch (err) {
-        boxBody.innerHTML = `<div class="empty">Couldn't load: ${(err.message || err)}</div>`;
+        // Don't paint an error message into a dialog the user
+        // already closed — they aborted on purpose.
+        if (ac.signal.aborted && boxDialog.open === false) return;
+        const msg = (err && err.name === 'AbortError')
+          ? "Timed out — try again."
+          : (err.message || err);
+        boxBody.innerHTML = `<div class="empty">Couldn't load: ${msg}</div>`;
+      } finally {
+        clearTimeout(timer);
+        if (_previewAbort === ac) _previewAbort = null;
       }
     });
     boxDialog.addEventListener('click', (e) => {

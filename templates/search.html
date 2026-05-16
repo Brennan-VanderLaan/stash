@@ -470,8 +470,23 @@
   // Click a result → fetch the item detail partial and show it in a
   // modal. Keeps the user on the search page so they can keep browsing
   // — the modal carries a "Go to box" link for users who want to leave.
+  //
+  // Belt-and-suspenders close path + fetch timeout per feedback #37
+  // (the floorplan flavour of this same modal got stuck at Loading…
+  // when the fetch hung; the X close button became a no-op).
   const itemDialog = document.getElementById('search-item-dialog');
   const itemBody = document.getElementById('search-item-body');
+  let _itemAbort = null;
+  const itemCloseBtn = itemDialog && itemDialog.querySelector('.item-dialog-close');
+  if (itemCloseBtn) {
+    itemCloseBtn.addEventListener('click', () => itemDialog.close());
+  }
+  itemDialog.addEventListener('close', () => {
+    if (_itemAbort) {
+      _itemAbort.abort();
+      _itemAbort = null;
+    }
+  });
 
   resultsEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('.search-result');
@@ -480,14 +495,26 @@
     if (!itemId) return;
     itemBody.innerHTML = '<div class="empty">Loading…</div>';
     itemDialog.showModal();
+    if (_itemAbort) _itemAbort.abort();
+    _itemAbort = new AbortController();
+    const ac = _itemAbort;
+    const timer = setTimeout(() => ac.abort(), 15000);
     try {
       const r = await fetch(`/items/${itemId}/preview`, {
         headers: { 'Accept': 'text/html' },
+        signal: ac.signal,
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       itemBody.innerHTML = await r.text();
     } catch (err) {
-      itemBody.innerHTML = `<div class="empty">Couldn't load: ${escapeHtml(err.message || err)}</div>`;
+      if (ac.signal.aborted && itemDialog.open === false) return;
+      const msg = (err && err.name === 'AbortError')
+        ? "Timed out — try again."
+        : escapeHtml(err.message || err);
+      itemBody.innerHTML = `<div class="empty">Couldn't load: ${msg}</div>`;
+    } finally {
+      clearTimeout(timer);
+      if (_itemAbort === ac) _itemAbort = null;
     }
   });
 
