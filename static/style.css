@@ -5344,8 +5344,25 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
      looks "cut off" — feedback #18. */
   padding: 0;
   overflow: hidden;
-  display: flex;
   flex-direction: column;
+}
+/* THE bug from feedback #37/#41/#46: the rule above used to set
+   ``display: flex`` unconditionally on this dialog, which beats
+   the UA stylesheet's ``dialog:not([open]) { display: none }``
+   on specificity and made the dialog visible AT ALL TIMES,
+   regardless of the ``[open]`` attribute.  The initial
+   ``<div class="empty">Loading…</div>`` placeholder content
+   then sat permanently on the page.  Clicking the X did nothing
+   because ``<form method="dialog">`` only closes a dialog that
+   was actually opened — without ``[open]``, submitting the form
+   just posts to the current URL and the page reload produces
+   the same broken state.  Hoisting ``display: flex`` into an
+   ``[open]`` selector restores the UA gate.  ``display: none``
+   when closed wins; ``display: flex`` when open wins.  X works
+   again because the dialog is now actually open when the user
+   sees it. */
+#floorplan-box-dialog[open] {
+  display: flex;
 }
 .floorplan-box-preview {
   padding: 0.8rem 0.85rem 0.95rem;
