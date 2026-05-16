@@ -305,7 +305,7 @@ def summary(actor: Actor, *, since: str | None = None) -> dict:
     from dao import quotas as dao_quotas
     caps = dao_quotas.get_caps(tenant_id)
     today_usage = dao_quotas.usage_for_tenant(tenant_id)
-    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+    for key in ("monthly_ai_calls", "storage_bytes",
                 "daily_ai_cost_micros"):
         cap = caps.get(key)
         used = today_usage.get(key, 0)
@@ -534,7 +534,7 @@ def _empty_summary() -> dict:
         "storage_bytes": 0,
         "storage_files": 0,
     }
-    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+    for key in ("monthly_ai_calls", "storage_bytes",
                 "daily_ai_cost_micros"):
         out[f"{key}_cap"] = None
         out[f"{key}_used"] = 0

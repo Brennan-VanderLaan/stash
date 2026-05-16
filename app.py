@@ -944,7 +944,7 @@ def _stamp_quota_warning_header(tenant_id: int, response: Response) -> None:
     except Exception:  # noqa: BLE001 — telemetry never fails the response
         return
     warnings: list[str] = []
-    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+    for key in ("monthly_ai_calls", "storage_bytes",
                 "daily_ai_cost_micros"):
         cap = caps.get(key)
         if not cap:
@@ -1266,7 +1266,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS quotas (
             tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
             monthly_ai_calls INTEGER,
-            monthly_upload_bytes INTEGER,
+            -- Flat on-disk storage cap.  Renamed from
+            -- ``monthly_upload_bytes`` (which was a per-month
+            -- upload-event sum) to reflect the post-2026-05
+            -- product pivot: free tier is a fixed footprint
+            -- (100 MB) funded by active subscribers, not a
+            -- monthly accumulation budget.
+            storage_bytes INTEGER,
             backup_storage_bytes INTEGER,
             -- JSON blob for plan-specific overrides; NULL = inherit plan defaults.
             overrides_json TEXT
@@ -1514,6 +1520,29 @@ def migrate_db():
         # "Start audit"; cleared on "Finish".  No separate audit
         # session table needed.
         _add_column_if_missing(conn, "boxes", "last_audit_started_at", "TEXT")
+        # Rename the legacy ``monthly_upload_bytes`` cap column on
+        # ``quotas`` to ``storage_bytes`` (added 2026-05).  The
+        # semantic shift: cap used to mean "max bytes uploaded per
+        # calendar month"; now means "max bytes on disk at any
+        # time".  Existing per-tenant override values carry over
+        # 1:1 — the column hold the same datatype, only the
+        # interpretation changes (operators with manual overrides
+        # were already setting these to total-footprint values in
+        # practice).  Idempotent: skip if storage_bytes already
+        # exists OR if monthly_upload_bytes is already gone.
+        cols = [r[1] for r in conn.execute(
+            "PRAGMA table_info(quotas)"
+        ).fetchall()]
+        if "monthly_upload_bytes" in cols and "storage_bytes" not in cols:
+            conn.execute(
+                "ALTER TABLE quotas "
+                "RENAME COLUMN monthly_upload_bytes TO storage_bytes"
+            )
+        elif "storage_bytes" not in cols:
+            _add_column_if_missing(
+                conn, "quotas", "storage_bytes", "INTEGER",
+            )
+
         # Per-room "Loose items" container for the feedback #39 flow
         # ("I would like to add this item to just a room vs in a box in
         # a room — I'm not ready to pack it fully yet").  When the user
@@ -7321,7 +7350,7 @@ def admin_set_quotas(
     request: Request,
     tenant_id: int,
     monthly_ai_calls: str = Form(""),
-    monthly_upload_bytes: str = Form(""),
+    storage_bytes: str = Form(""),
     daily_ai_cost_micros: str = Form(""),
 ):
     """Operator quota override editor.  Empty form fields leave
@@ -7344,7 +7373,7 @@ def admin_set_quotas(
         dao_quotas.set_overrides(
             actor, tenant_id,
             monthly_ai_calls=_parse(monthly_ai_calls),
-            monthly_upload_bytes=_parse(monthly_upload_bytes),
+            storage_bytes=_parse(storage_bytes),
             daily_ai_cost_micros=_parse(daily_ai_cost_micros),
         )
     except ForbiddenError:

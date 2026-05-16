@@ -10,8 +10,16 @@
   </p>
   <p class="text-sm text-muted">
     All figures below are illustrative typical-month estimates,
-    not contractual.  Individual months vary based on how much
-    each tenant actually uses the AI surfaces.
+    not contractual.  AWS line items are total fixed costs
+    (compute + storage are shared across every active user), so
+    per-tenant cost depends on how many of you there are.  AI +
+    B2 lines vary by how much each tenant actually uses the AI
+    surfaces and how much they store.
+    <strong>Each row carries today's small-scale floor and a
+    generous upper bound for the next growth tier</strong> —
+    "what we'd be paying once we need to scale out before
+    revenue catches up."  See "What changes as we grow" below
+    for the full scale-up arc.
   </p>
 </section>
 
@@ -46,31 +54,88 @@
             can't run away with your budget.</td>
       </tr>
       <tr>
-        <td>Compute (AWS EC2 + EBS)</td>
-        <td>≈ −$0.10 to −$0.30</td>
-        <td>Per-tenant slice of the shared instance + the EBS
-            volume that holds your photos.  Drops as user count
-            grows — a t3.small at $0.0208/hr split across 100
-            users is around $0.15/user/mo before storage.</td>
+        <td>Compute — prod EC2</td>
+        <td>$15 today → $50–$300 / mo at scale</td>
+        <td>The production instance.  Today: a t3.small at
+            $0.0208/hr ($15.20/mo) handles a small user base.
+            Mid-scale path: t3.medium / t3.large ($30–$60/mo),
+            then an ALB ($22/mo) in front of a small fleet
+            ($60–$150/mo across 2–3 instances).  This line
+            grows in steps, not smoothly — each scale-out moves
+            us to a new floor.</td>
+      </tr>
+      <tr>
+        <td>Compute — staging EC2</td>
+        <td>$7.60 today → $25–$50 / mo at scale</td>
+        <td>Staging instance for cutting releases before they
+            hit prod (currently t3.micro).  Bumps when prod
+            does — staging needs enough headroom to actually
+            mirror prod load tests.  Not directly user-facing
+            but it's the difference between "we ship safely"
+            and "we ship a crash to every tenant on Sunday."</td>
+      </tr>
+      <tr>
+        <td>Database</td>
+        <td>$0 today → $50–$300 / mo at scale</td>
+        <td>Today the SQLite DB lives on the prod EBS volume
+            — zero incremental cost.  Once concurrency hurts or
+            we need point-in-time restore, we move to RDS
+            Postgres (db.t3.small ≈ $25/mo single-AZ; Multi-AZ
+            doubles it; db.t3.medium with read replicas
+            $100–$300/mo).  This is the biggest single jump
+            in the scaling arc.</td>
+      </tr>
+      <tr>
+        <td>Storage (EBS gp3)</td>
+        <td>$5 today → $40–$150 / mo at scale</td>
+        <td>The disk both instances live on plus your photos.
+            $0.08/GB-month at the gp3 baseline; provisioned
+            IOPS extra if we ever need them.
+            <strong>This is the line that defines how big the
+            free tier can be.</strong>  Every free user holding
+            100 MB adds $0.008/mo; cumulative free-tier
+            storage has to stay well inside what the Pro
+            remainder can absorb — see "How the free tier is
+            funded" below.</td>
+      </tr>
+      <tr>
+        <td>Static IPs (Elastic IP)</td>
+        <td>$0 today → $0–$15 / mo at scale</td>
+        <td>One Elastic IP per instance.  Free while attached,
+            ~$3.60/mo each when detached.  ALB in front (when
+            we scale out) needs its own EIP per AZ.</td>
       </tr>
       <tr>
         <td>Bandwidth (AWS egress)</td>
-        <td>≈ −$0.00 to −$0.50</td>
-        <td>Serving thumbs + photos to your browser on every
-            grid view.  AWS gives the first 100 GB/month per
-            account free, then charges $0.09/GB.  At small scale
-            this rounds to zero; for a heavy Pro user it can
-            reach a few tens of cents.</td>
+        <td>$5 today → $30–$200 / mo at scale</td>
+        <td>Serving thumbs + photos on every grid view, plus
+            container pulls.  AWS gives the first 100 GB/month
+            free, then $0.09/GB.  Heavy-photo Pro users + crawl
+            traffic push this line; at scale we'll likely move
+            static asset delivery to CloudFront ($0.085/GB +
+            request fees), which trades raw egress for
+            distribution + cache hit rates.</td>
+      </tr>
+      <tr>
+        <td>Notifications (AWS SES)</td>
+        <td>$0 today → $1–$30 / mo at scale</td>
+        <td>Invite emails, share notifications, quota warnings,
+            backup-failure alerts.  $0.10 per 1,000 emails — a
+            rounding error at current scale.  At thousands of
+            users sending invites + receiving daily quota
+            digests, this becomes a real line item but stays
+            cheap compared to the rest.</td>
       </tr>
       <tr>
         <td>Off-site backup (Backblaze B2)</td>
-        <td>≈ −$0.02 to −$0.10</td>
+        <td>$0.02–$0.10 / mo per tenant (linear)</td>
         <td>Nightly encrypted DR uploads of each tenant's
             database + photos.  B2 storage is $6/TB-month for
             hot storage; we accumulate, so heavy long-time
-            tenants cost more than fresh ones.  Egress only
-            fires on the rare DR restore so it's not in this
-            line.</td>
+            tenants cost more than fresh ones.  This line
+            scales linearly with paying user count — no step
+            changes — and so it's the most predictable line
+            in the ledger.</td>
       </tr>
       <tr class="about-cost-row-tax">
         <td>State business taxes (MA)</td>
@@ -107,6 +172,140 @@
     checkout, collected from you, and remitted directly by Stripe
     to your state.  It doesn't show up in our cost ledger because
     we never see the money — pass-through.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>How the free tier is funded</h2>
+  <p>
+    The free tier <strong>is not magic.</strong>  Every free user
+    occupies disk + serves bandwidth + costs the same B2 backup
+    pennies as a Pro user.  That cost has to come from somewhere —
+    and the only "somewhere" is active subscribers.
+  </p>
+  <p>The math:</p>
+  <ul>
+    <li>
+      A free user can hold <strong>100 MB of storage total</strong>
+      (flat, not per-month).  At EBS gp3's $0.08/GB-month plus
+      that user's B2 backup slice, that's roughly
+      <strong>$0.01–$0.05 per free user per month</strong>.
+      Cheap individually; adds up linearly.
+    </li>
+    <li>
+      The fixed AWS hosting overhead today is about
+      <strong>$30–$50 / month total</strong> (prod t3.small +
+      staging t3.micro + EBS + bandwidth).  Pro subscriptions
+      have to clear this collectively before anything else
+      funds.  At the next scale tier (RDS, ALB, bigger
+      instances) it jumps to <strong>$80–$300+ / month</strong>
+      — see "What changes as we grow" below for the full arc.
+    </li>
+    <li>
+      Each Pro subscription leaves a remainder of about
+      <strong>$0.50–$1.00</strong> after vendor + AI + tax +
+      labor.  After the fixed hosting overhead is amortised
+      across the paying base, that remainder is what funds
+      free-tier storage + reinvestment buffer.
+    </li>
+    <li>
+      So at low subscriber counts the free tier is genuinely
+      tight: <strong>5–10 Pro subs cover today's fixed hosting
+      + maybe 20–50 free users</strong>.  When we cross the
+      scale-out threshold and need RDS + a bigger instance,
+      that ratio resets — we'll need more Pros covering a
+      bigger fixed cost before free-tier capacity expands
+      again.  Per-user marginal cost stays low; the steps
+      happen at the fixed-overhead line.
+    </li>
+    <li>
+      As paid membership grows past those step boundaries, the
+      per-Pro fixed-cost slice drops sharply and free-tier
+      capacity grows with it.  As paid membership shrinks, the
+      free tier has to shrink too.  We will not silently absorb
+      the cost — that's how products end up shutting down their
+      free tier with two weeks' notice (Encircle, December
+      2025).  Every change to the free-tier caps gets posted
+      here first with the math.
+    </li>
+  </ul>
+  <p>
+    If we ever need to change the free-tier numbers, we'll post
+    the new math here first.  If a vendor cost moves (B2 raises
+    storage pricing, Anthropic changes a tier), you'll see it
+    reflected in this table before it's reflected in the cap.
+  </p>
+  <p class="text-sm text-muted">
+    The 100 MB number isn't a teaser — it's enough to inventory
+    a closet or two with real photos.  Most casual users never
+    hit it.  If a free user wants more, the right answer is Pro.
+    If a free user can't pay, the answer is to delete older
+    photos to make room — same model as a phone's photo library.
+  </p>
+</section>
+
+<section class="about-section">
+  <h2>What changes as we grow</h2>
+  <p>
+    The ledger above describes today's small-scale deployment.
+    Each step in the user-count arc forces another piece of
+    infrastructure to scale out, and the cost line item for
+    that piece moves up to a new floor.  We post the math here
+    so you can see WHY the free tier shifts (or has to shift)
+    as that happens, not just THAT it shifts.
+  </p>
+  <table class="about-table">
+    <thead>
+      <tr>
+        <th>Stage</th>
+        <th>What we add</th>
+        <th>Cost impact</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Today (small)</td>
+        <td>Single t3.small + t3.micro staging; SQLite on EBS;
+            B2 for off-site DR; SES for notifications.</td>
+        <td><strong>$30–$50 fixed / mo</strong> + per-user
+            B2 + storage marginal cost.  Free tier funded out
+            of the Pro remainder once fixed overhead is
+            cleared.</td>
+      </tr>
+      <tr>
+        <td>Mid (~100s of users)</td>
+        <td>Bigger prod instance (t3.medium / t3.large);
+            larger EBS volumes; ALB if we go multi-instance;
+            CloudFront for static assets to keep egress flat.</td>
+        <td><strong>$80–$200 fixed / mo</strong>.  Free tier
+            stays the same per-user (100 MB × $0.008) but
+            cumulative free-tier storage starts pressing on
+            the EBS line.  May need to re-balance.</td>
+      </tr>
+      <tr>
+        <td>Scale (~1000s of users)</td>
+        <td>Dedicated DB (RDS Postgres, single-AZ → Multi-AZ →
+            with read replicas as load demands).  Multiple
+            backend instances behind ALB.  Larger storage
+            footprint, possibly tiered (hot EBS + cold S3
+            for old photos).  Caching layer (ElastiCache) if
+            quota-check pressure shows up.</td>
+        <td><strong>$300–$800+ fixed / mo</strong>.  Per-Pro
+            fixed-cost slice drops as the paying base grows
+            (good); free-tier capacity grows with it because
+            more Pro subs are funding it.  We never silently
+            absorb scaling costs — the ledger gets updated and
+            posted here first.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="text-sm text-muted">
+    The numbers above are intentionally generous on the upper
+    bound.  We'd rather quote a ceiling that turns out to be
+    too high than promise a floor that turns out to be too
+    low.  Scale-out tends to happen in steps, not smoothly —
+    each step lands on a new floor and we update the ledger
+    when it does.
   </p>
 </section>
 

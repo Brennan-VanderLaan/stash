@@ -54,9 +54,25 @@ def test_plan_default_caps_apply_with_no_overrides(client):
     caps = dao_quotas.get_caps(client.test_tenant_id)
     # Conftest creates the test tenant with plan='pro'.
     assert caps["monthly_ai_calls"] == 1_000
-    assert caps["monthly_upload_bytes"] == 5 * 1024 * 1024 * 1024
+    # Flat storage cap (post-2026-05 pivot from monthly upload cap).
+    assert caps["storage_bytes"] == 5 * 1024 * 1024 * 1024
     assert caps["daily_ai_cost_micros"] == 2_000_000
     assert caps["monthly_ai_art_calls"] == 30
+
+
+def test_free_plan_storage_cap_is_100mb_flat(client):
+    """Free-tier storage is a 100 MB FLAT cap, not a monthly
+    upload allowance.  This is the load-bearing free-tier number;
+    bumping it requires re-balancing against the per-active-sub
+    funding model on /about/transparency."""
+    from dao import quotas as dao_quotas
+    # Re-tag the test tenant as 'free' for this assertion.
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE tenants SET plan = 'free' WHERE id = ?",
+                     (client.test_tenant_id,))
+        conn.commit()
+    caps = dao_quotas.get_caps(client.test_tenant_id)
+    assert caps["storage_bytes"] == 100 * 1024 * 1024
 
 
 def test_overrides_replace_defaults(client):
@@ -67,7 +83,7 @@ def test_overrides_replace_defaults(client):
     caps = dao_quotas.get_caps(client.test_tenant_id)
     assert caps["monthly_ai_calls"] == 42
     # Untouched fields still come from plan defaults.
-    assert caps["monthly_upload_bytes"] == 5 * 1024 * 1024 * 1024
+    assert caps["storage_bytes"] == 5 * 1024 * 1024 * 1024
 
 
 def test_override_with_negative_clears_cap(client):
@@ -93,16 +109,18 @@ def test_daily_ai_cost_override_lives_in_json_blob(client):
 
 
 def test_upload_quota_exceeded_returns_429(client):
-    """Pre-flight upload quota check rejects an over-cap upload
-    before save_photo_bytes does the encode pass."""
-    _set_cap(client, monthly_upload_bytes=1024)  # 1 KB
-    # Land an existing usage_event that uses 900 bytes so a fresh
-    # 200-byte upload would push us over.
-    _seed_usage(client, surface="upload", kind="upload_bytes",
-                units=900)
+    """Flat storage cap rejects an upload that would push the
+    tenant's CURRENT footprint past the cap.  Unlike the previous
+    monthly-cumulative behaviour, this looks at what's on disk
+    *now* — delete to free space, then upload."""
+    _set_cap(client, storage_bytes=1024)  # 1 KB cap
+    # Land 900 bytes of pre-existing tenant files so a fresh
+    # 200-byte upload would push the on-disk footprint over.
+    tenant_dir = (client.app_module.UPLOAD_DIR
+                  / str(client.test_tenant_id))
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    (tenant_dir / "existing.bin").write_bytes(b"x" * 900)
     raw = b"\xff\xd8\xff\xe0" + b"x" * 200 + b"\xff\xd9"
-    # Drive through save_photo_bytes directly — same path the
-    # ingest + add-item routes use.
     import pytest
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
@@ -147,23 +165,29 @@ def test_uncapped_with_negative_cap(client):
 
 
 def test_x_quota_warning_header_at_80_percent(client):
-    """Browsing /usage with 80% upload usage gets an
+    """Browsing /usage with 80% on-disk usage gets an
     ``X-Quota-Warning`` header; under 80% gets nothing."""
-    _set_cap(client, monthly_upload_bytes=100)
-    _seed_usage(client, surface="upload", kind="upload_bytes",
-                units=85)
+    _set_cap(client, storage_bytes=100)
+    # Land 85 bytes of pre-existing tenant files so the storage
+    # footprint sits at 85% of the 100-byte cap.
+    tenant_dir = (client.app_module.UPLOAD_DIR
+                  / str(client.test_tenant_id))
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    (tenant_dir / "fill.bin").write_bytes(b"x" * 85)
     r = client.get("/usage")
     warning = r.headers.get("X-Quota-Warning")
     assert warning is not None
-    assert "monthly_upload_bytes" in warning
+    assert "storage_bytes" in warning
 
 
 def test_no_x_quota_warning_under_80_percent(client):
     """Quiet path: the header doesn't get stamped on responses
     where every cap is well under 80%."""
-    _set_cap(client, monthly_upload_bytes=1024 * 1024 * 1024)
-    _seed_usage(client, surface="upload", kind="upload_bytes",
-                units=1024)  # ~0% of 1 GB
+    _set_cap(client, storage_bytes=1024 * 1024 * 1024)
+    tenant_dir = (client.app_module.UPLOAD_DIR
+                  / str(client.test_tenant_id))
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    (tenant_dir / "tiny.bin").write_bytes(b"x" * 1024)  # ~0% of 1 GB
     r = client.get("/usage")
     assert "X-Quota-Warning" not in r.headers
 

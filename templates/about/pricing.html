@@ -10,8 +10,8 @@
 
 {% set free_ai = free_caps.monthly_ai_calls %}
 {% set pro_ai = pro_caps.monthly_ai_calls %}
-{% set free_mb = (free_caps.monthly_upload_bytes / (1024 * 1024)) | round | int %}
-{% set pro_gb = (pro_caps.monthly_upload_bytes / (1024 * 1024 * 1024)) | round(1) %}
+{% set free_mb = (free_caps.storage_bytes / (1024 * 1024)) | round | int %}
+{% set pro_gb = (pro_caps.storage_bytes / (1024 * 1024 * 1024)) | round(1) %}
 
 <section class="about-plans-grid">
   <article class="about-plan">
@@ -19,13 +19,17 @@
     <p class="about-plan-price">$0 / month</p>
     <ul>
       <li>{{ "{:,}".format(free_ai) }} AI calls per month</li>
-      <li>{{ free_mb }} MB photo uploads per month</li>
+      <li>{{ free_mb }} MB total photo storage</li>
       <li>Single tenant</li>
       <li>All features available — only the quotas differ</li>
     </ul>
     <p class="text-sm text-muted">
       Right for kicking the tires and inventorying a closet or
-      two.  Most casual users never hit these caps.
+      two.  The {{ free_mb }} MB is a <em>total</em> footprint cap,
+      not a monthly allowance — delete what you don't need to
+      free space.  The free tier is funded by active paying
+      members; see <a href="/about/transparency">where your $
+      goes</a>.
     </p>
   </article>
 
@@ -42,9 +46,11 @@
         below.
       </li>
       <li>
-        <strong>{{ pro_gb }} GB of photo storage.</strong>  Covers
-        a full household inventoried in detail — every item, every
-        side, every serial number you actually want a picture of.
+        <strong>{{ pro_gb }} GB total photo storage.</strong>
+        Covers a full household inventoried in detail — every
+        item, every side, every serial number you actually want
+        a picture of.  Flat cap on what's on disk; doesn't reset
+        monthly.
       </li>
       <li>
         <strong>30 AI label-art generations per month.</strong>

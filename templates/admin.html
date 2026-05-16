@@ -802,7 +802,7 @@
         <strong>{{ t.name }}</strong>
         <span class="text-muted text-sm">
           AI {{ t.usage.monthly_ai_calls }}/{{ t.caps.monthly_ai_calls or '∞' }}
-          · upload {{ "%.0f" | format(t.usage.monthly_upload_bytes / 1048576) }}MB / {{ (t.caps.monthly_upload_bytes / 1048576) | round | int if t.caps.monthly_upload_bytes else '∞' }}MB
+          · storage {{ "%.0f" | format(t.usage.storage_bytes / 1048576) }}MB / {{ (t.caps.storage_bytes / 1048576) | round | int if t.caps.storage_bytes else '∞' }}MB
           · today ${{ "%.2f" | format(t.usage.daily_ai_cost_micros / 1000000) }} / ${{ "%.2f" | format(t.caps.daily_ai_cost_micros / 1000000) if t.caps.daily_ai_cost_micros else '∞' }}
         </span>
       </summary>
@@ -814,9 +814,9 @@
                  autocomplete="off">
         </label>
         <label>
-          Monthly upload bytes
-          <input type="text" name="monthly_upload_bytes"
-                 placeholder="{{ t.caps.monthly_upload_bytes }}"
+          Storage cap (bytes, flat — not per-month)
+          <input type="text" name="storage_bytes"
+                 placeholder="{{ t.caps.storage_bytes }}"
                  autocomplete="off">
         </label>
         <label>

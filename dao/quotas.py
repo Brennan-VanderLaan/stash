@@ -4,8 +4,11 @@ Spec § "Telemetry & quotas".  Three caps per tenant:
 
 * ``monthly_ai_calls`` — total AI surface calls in the calendar
   month (Gemini detect, Gemini art, Anthropic match).
-* ``monthly_upload_bytes`` — total post-encode bytes written to
-  the tenant's upload directory in the calendar month.
+* ``storage_bytes`` — flat cap on total on-disk usage at any
+  time (post-2026-05 product pivot from a monthly cumulative
+  upload cap; see the storage-bytes commit message for context).
+  Free tier = 100 MB; the size is what active subscribers
+  collectively fund.
 * ``daily_ai_cost_micros`` — *daily* hard ceiling on AI cost in
   micro-dollars.  Separate from the monthly call count because a
   single Gemini-art call costs ~30x a detect call; an MCP agent
@@ -58,7 +61,13 @@ _log = obs.get_logger("dao.quotas")
 _PLAN_DEFAULTS = {
     "free": {
         "monthly_ai_calls": 100,
-        "monthly_upload_bytes": 500 * 1024 * 1024,         # 500 MB
+        # Flat on-disk cap, not a monthly upload allowance.  Free
+        # tier is funded by active subscribers — its size is
+        # whatever the current paying base will collectively
+        # cover.  100 MB is the long-stated spec value and the
+        # right number to hold steady against per-user storage
+        # cost at the current Pro price.
+        "storage_bytes": 100 * 1024 * 1024,                 # 100 MB
         "daily_ai_cost_micros": 100_000,                    # $0.10
         # AI label-art is the most expensive surface
         # (gemini_art ≈ $0.04/call vs detect ≈ $0.0007).
@@ -68,7 +77,11 @@ _PLAN_DEFAULTS = {
     },
     "pro": {
         "monthly_ai_calls": 1_000,
-        "monthly_upload_bytes": 5 * 1024 * 1024 * 1024,    # 5 GB
+        # Pro storage is also flat — same semantic shift.  5 GB
+        # comfortably covers a real household inventory (a
+        # 500-item move averages ~2.5 GB at typical phone-photo
+        # sizes; insurance-grade inventories run higher).
+        "storage_bytes": 5 * 1024 * 1024 * 1024,            # 5 GB
         # Daily cost cap sized so a single moving-day session
         # can generate up-to-the-monthly-art-cap without bumping
         # into the day cap before finishing.  30 × $0.04 = $1.20;
@@ -134,13 +147,13 @@ def get_caps(tenant_id: int) -> dict:
         plan = plan_row["plan"] if plan_row else "free"
         defaults = _PLAN_DEFAULTS.get(plan, _PLAN_DEFAULTS["free"]).copy()
         override_row = conn.execute(
-            "SELECT monthly_ai_calls, monthly_upload_bytes, "
+            "SELECT monthly_ai_calls, storage_bytes, "
             "       backup_storage_bytes, overrides_json "
             "FROM quotas WHERE tenant_id = ?",
             (tenant_id,),
         ).fetchone()
     if override_row is not None:
-        for col in ("monthly_ai_calls", "monthly_upload_bytes"):
+        for col in ("monthly_ai_calls", "storage_bytes"):
             v = override_row[col]
             if v is not None:
                 defaults[col] = v
@@ -162,18 +175,21 @@ def get_caps(tenant_id: int) -> dict:
 
 
 def usage_for_tenant(tenant_id: int) -> dict:
-    """Per-surface usage in the current windows — month for
-    AI/upload, day for AI cost.  Mirrors the cap dict's keys so
-    the soft-warning math is a straight per-key compare.
+    """Per-surface usage for the current cap windows.  Mirrors the
+    cap dict's keys so the soft-warning math is a straight
+    per-key compare.
 
-    ``monthly_ai_art_calls`` is sub-counted off the same ``ai``
-    surface but filtered to ``kind = 'gemini_art'`` since art is
-    the priciest surface and we cap it separately from the
-    bulk ai-call budget."""
+    * ``monthly_ai_calls`` / ``daily_ai_cost_micros`` /
+      ``monthly_ai_art_calls`` — windowed sums over usage_events.
+    * ``storage_bytes`` — *current* on-disk footprint, not a
+      cumulative monthly write.  Read fresh each call from
+      ``dao_usage.storage_footprint`` (cheap on a hobby-scale
+      stash; cached server-side if the call ever gets hot).
+    """
     if tenant_id is None:
         return {
             "monthly_ai_calls": 0,
-            "monthly_upload_bytes": 0,
+            "storage_bytes": 0,
             "daily_ai_cost_micros": 0,
             "monthly_ai_art_calls": 0,
         }
@@ -183,12 +199,6 @@ def usage_for_tenant(tenant_id: int) -> dict:
         ai_calls = conn.execute(
             "SELECT COALESCE(SUM(units), 0) AS n FROM usage_events "
             "WHERE tenant_id = ? AND surface = 'ai' "
-            "  AND created_at >= ?",
-            (tenant_id, month),
-        ).fetchone()["n"]
-        upload_bytes = conn.execute(
-            "SELECT COALESCE(SUM(units), 0) AS n FROM usage_events "
-            "WHERE tenant_id = ? AND surface = 'upload' "
             "  AND created_at >= ?",
             (tenant_id, month),
         ).fetchone()["n"]
@@ -205,9 +215,14 @@ def usage_for_tenant(tenant_id: int) -> dict:
             "  AND created_at >= ?",
             (tenant_id, month),
         ).fetchone()["n"]
+    # Late import to avoid the dao_usage → dao_quotas cycle (usage
+    # imports quotas for its own meters; pulling it at module load
+    # would deadlock).
+    from dao import usage as dao_usage
+    footprint = dao_usage.storage_footprint(tenant_id)
     return {
         "monthly_ai_calls": int(ai_calls),
-        "monthly_upload_bytes": int(upload_bytes),
+        "storage_bytes": int(footprint["total_bytes"]),
         "daily_ai_cost_micros": int(ai_cost_today),
         "monthly_ai_art_calls": int(ai_art_calls),
     }
@@ -312,11 +327,19 @@ def check_or_raise(
                 used["daily_ai_cost_micros"] + cost_about_to_record, cap,
             )
     elif surface == "upload":
-        cap = caps.get("monthly_upload_bytes")
-        if cap is not None and used["monthly_upload_bytes"] + units_about_to_record > cap:
+        # Flat on-disk cap (post-2026-05 pivot from monthly
+        # upload-accumulation).  ``used["storage_bytes"]`` is the
+        # tenant's CURRENT footprint on disk; we add the size of
+        # the about-to-write payload and refuse if the post-write
+        # total would exceed the cap.  Existing-but-unrelated
+        # files don't get reclaimed automatically — operator has
+        # to delete to free space, same model as a phone's
+        # photo-library quota.
+        cap = caps.get("storage_bytes")
+        if cap is not None and used["storage_bytes"] + units_about_to_record > cap:
             raise QuotaExceeded(
-                "upload", "monthly_upload_bytes",
-                used["monthly_upload_bytes"] + units_about_to_record, cap,
+                "upload", "storage_bytes",
+                used["storage_bytes"] + units_about_to_record, cap,
             )
     # core / backup surfaces are uncapped today.
 
@@ -378,7 +401,7 @@ def set_overrides(
     tenant_id: int,
     *,
     monthly_ai_calls: Optional[int] = None,
-    monthly_upload_bytes: Optional[int] = None,
+    storage_bytes: Optional[int] = None,
     daily_ai_cost_micros: Optional[int] = None,
 ) -> None:
     """Operator-driven per-tenant cap override.  ``None`` for a
@@ -392,14 +415,14 @@ def set_overrides(
 
     with db() as conn:
         existing = conn.execute(
-            "SELECT monthly_ai_calls, monthly_upload_bytes, "
+            "SELECT monthly_ai_calls, storage_bytes, "
             "       backup_storage_bytes, overrides_json "
             "FROM quotas WHERE tenant_id = ?",
             (tenant_id,),
         ).fetchone()
 
         new_ai = existing["monthly_ai_calls"] if existing else None
-        new_up = existing["monthly_upload_bytes"] if existing else None
+        new_storage = existing["storage_bytes"] if existing else None
         new_backup = existing["backup_storage_bytes"] if existing else None
         try:
             blob = json.loads(existing["overrides_json"]) if (
@@ -410,8 +433,8 @@ def set_overrides(
 
         if monthly_ai_calls is not None:
             new_ai = None if monthly_ai_calls < 0 else monthly_ai_calls
-        if monthly_upload_bytes is not None:
-            new_up = None if monthly_upload_bytes < 0 else monthly_upload_bytes
+        if storage_bytes is not None:
+            new_storage = None if storage_bytes < 0 else storage_bytes
         if daily_ai_cost_micros is not None:
             if daily_ai_cost_micros < 0:
                 blob.pop("daily_ai_cost_micros", None)
@@ -422,18 +445,18 @@ def set_overrides(
         if existing is None:
             conn.execute(
                 "INSERT INTO quotas "
-                "(tenant_id, monthly_ai_calls, monthly_upload_bytes, "
+                "(tenant_id, monthly_ai_calls, storage_bytes, "
                 " backup_storage_bytes, overrides_json) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (tenant_id, new_ai, new_up, new_backup, json_blob),
+                (tenant_id, new_ai, new_storage, new_backup, json_blob),
             )
         else:
             conn.execute(
                 "UPDATE quotas SET monthly_ai_calls = ?, "
-                "  monthly_upload_bytes = ?, backup_storage_bytes = ?, "
+                "  storage_bytes = ?, backup_storage_bytes = ?, "
                 "  overrides_json = ? "
                 "WHERE tenant_id = ?",
-                (new_ai, new_up, new_backup, json_blob, tenant_id),
+                (new_ai, new_storage, new_backup, json_blob, tenant_id),
             )
 
         obs.write_audit(
@@ -445,7 +468,7 @@ def set_overrides(
             target_id=tenant_id,
             metadata={
                 "monthly_ai_calls": new_ai,
-                "monthly_upload_bytes": new_up,
+                "storage_bytes": new_storage,
                 "daily_ai_cost_micros":
                     blob.get("daily_ai_cost_micros"),
             },

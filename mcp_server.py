@@ -279,7 +279,7 @@ def _quota_warnings_meta(actor: Actor) -> dict | None:
     except Exception:  # noqa: BLE001
         return None
     warnings: list[str] = []
-    for key in ("monthly_ai_calls", "monthly_upload_bytes",
+    for key in ("monthly_ai_calls", "storage_bytes",
                 "daily_ai_cost_micros"):
         cap = caps.get(key)
         if not cap:
