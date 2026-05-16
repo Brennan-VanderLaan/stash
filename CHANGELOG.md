@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.33.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.32.1...v1.33.0) (2026-05-16)
+
+
+### Features
+
+* **feedback:** capture page HTML, console log, and perf timing on opt-in ([a6e454a](https://github.com/Brennan-VanderLaan/stash/commit/a6e454a47facabade928f7fa7d844ccd857f86ba))
+
 ## [1.32.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.32.0...v1.32.1) (2026-05-16)
 
 
