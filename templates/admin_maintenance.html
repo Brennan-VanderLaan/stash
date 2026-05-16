@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Maintenance · Admin · Stash{% endblock %}
+{% block content %}
+
+{# Operator-only deployment-control surface.  Cards here all
+   affect platform-wide state and previously lived on
+   /maintenance with no auth gate — RBAC fix moved them here.
+   Non-operators get a 404 from the route (opacity rule) and
+   never see this URL space exists. #}
+
+<header class="admin-section-head">
+  <h1 style="margin:0;">Deployment maintenance</h1>
+  <a href="/admin" class="btn btn-link btn-sm">← Admin overview</a>
+</header>
+
+<p class="text-sm text-muted">
+  Operator-only.  These cards touch platform state — every tenant
+  on the deployment.  Per-tenant operations (single-tenant
+  backup, member invite, plan override) live on
+  <a href="/admin">/admin</a> and inside each tenant's
+  <code>/usage</code>.
+</p>
+
+{# ── Version + update ────────────────────────────────────── #}
+<section class="admin-section">
+  <header class="admin-section-head">
+    <h2>Version</h2>
+  </header>
+  <div class="version-display">
+    <span class="version-label">Running</span>
+    <span class="version-value" id="version-value">{{ version }}</span>
+    {% if git_sha %}<span class="version-sha" id="version-sha">{{ git_sha }}</span>{% endif %}
+  </div>
+  {% if not update_enabled %}
+  <p class="text-sm text-muted">Updates are not configured (no <code>WATCHTOWER_URL</code> set).</p>
+  {% elif update_status == "triggered" %}
+  <noscript>
+    <div class="notice">Update check started.  The app will restart shortly if a new image is available — refresh in ~30 s.</div>
+  </noscript>
+  {% endif %}
+  <div id="update-status" class="notice" hidden></div>
+  <form method="post" action="/admin/maintenance/update" id="update-form">
+    <button type="submit" class="btn btn-primary btn-sm" id="update-button"
+            {% if not update_enabled %}disabled{% endif %}>
+      Check for updates
+    </button>
+  </form>
+  {% if update_enabled %}
+  <script>
+  (function() {
+    const form = document.getElementById('update-form');
+    const button = document.getElementById('update-button');
+    const status = document.getElementById('update-status');
+    const initialVersion = {{ version | tojson }};
+    const POLL_INTERVAL_MS = 2500;
+    const TIMEOUT_MS = 180000;
+
+    function setStatus(text, kind) {
+      status.hidden = false;
+      status.textContent = text;
+      status.className = 'notice' + (kind ? ' notice-' + kind : '');
+    }
+    async function pollVersion() {
+      const r = await fetch('/maintenance/version', { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }
+    async function watchForUpdate(startedAt) {
+      try {
+        const data = await pollVersion();
+        if (data.version !== initialVersion) {
+          setStatus('Updated to ' + data.version + '. Reloading…', 'success');
+          setTimeout(() => location.reload(), 1200);
+          return;
+        }
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          setStatus('No new version detected — already up to date.', null);
+          button.disabled = false;
+          return;
+        }
+        setStatus('Checking for updates…');
+      } catch (err) {
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          setStatus('Update appears stuck. Refresh manually to check.', 'danger');
+          button.disabled = false;
+          return;
+        }
+        setStatus('Restarting…');
+      }
+      setTimeout(() => watchForUpdate(startedAt), POLL_INTERVAL_MS);
+    }
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      if (!confirm('Check for updates and restart if a new image is available?')) return;
+      button.disabled = true;
+      setStatus('Triggering update…');
+      try {
+        const resp = await fetch('/admin/maintenance/update', { method: 'POST' });
+        if (!resp.ok && resp.status !== 200) {
+          setStatus('Failed to start update (HTTP ' + resp.status + ').', 'danger');
+          button.disabled = false;
+          return;
+        }
+      } catch (err) {
+        setStatus('Could not reach the server to start the update.', 'danger');
+        button.disabled = false;
+        return;
+      }
+      setStatus('Checking for updates…');
+      setTimeout(() => watchForUpdate(Date.now()), POLL_INTERVAL_MS);
+    });
+  })();
+  </script>
+  {% endif %}
+</section>
+
+{# ── Whole-platform backup ───────────────────────────────── #}
+<section class="admin-section">
+  <header class="admin-section-head">
+    <h2>Whole-platform backup</h2>
+  </header>
+  <p class="text-sm text-muted">
+    Downloads a zip containing <code>stash.db</code> + every
+    referenced photo across every tenant.  The blobs are
+    ciphertext under <code>STASH_KEK</code>; a restore needs the
+    matching key.  Per-tenant exports (cleartext, GDPR-shaped)
+    live on each tenant's <code>/usage</code>.
+  </p>
+  <a href="/admin/maintenance/export" class="btn btn-primary btn-sm" download>
+    Download platform backup
+  </a>
+</section>
+
+{# ── Restore from backup ──────────────────────────────────── #}
+<section class="admin-section">
+  <header class="admin-section-head">
+    <h2>Restore</h2>
+  </header>
+  <p class="text-sm text-muted">
+    Upload a SQLite <code>.db</code> file or a backup
+    <code>.zip</code> to <strong>replace the running database</strong>.
+    The current DB is saved to <code>stash.db.bak-&lt;timestamp&gt;</code>
+    first so a botched restore is recoverable.  Max 2 GB.
+  </p>
+  {% if imported %}
+  <div class="notice notice-success">Import successful.</div>
+  {% endif %}
+  <form method="post" action="/admin/maintenance/import" enctype="multipart/form-data"
+        onsubmit="return confirm('This will REPLACE the running database for EVERY tenant.  A backup file will be created alongside.  Proceed?');">
+    <input type="file" name="file" accept=".db,.sqlite,.zip" required>
+    <button type="submit" class="btn btn-danger btn-sm">Import &amp; restore</button>
+  </form>
+</section>
+
+{# ── Orphan-file cleanup ─────────────────────────────────── #}
+<section class="admin-section">
+  <header class="admin-section-head">
+    <h2>Orphan cleanup</h2>
+  </header>
+  <dl class="stat-row">
+    <div><dt>Items</dt><dd>{{ item_count }}</dd></div>
+    <div><dt>Boxes</dt><dd>{{ box_count }}</dd></div>
+    <div><dt>Files on disk</dt><dd>{{ files_on_disk }}</dd></div>
+    <div><dt>Files referenced</dt><dd>{{ files_referenced }}</dd></div>
+    <div><dt>Orphaned</dt><dd>{{ orphan_count }}</dd></div>
+  </dl>
+  {% if cleaned %}
+  <p class="text-sm text-muted">Removed {{ cleaned }} orphan file{{ '' if cleaned == '1' else 's' }}.</p>
+  {% endif %}
+  <form method="post" action="/admin/maintenance/cleanup"
+        onsubmit="return confirm('Delete {{ orphan_count }} orphan file(s) from uploads/ across every tenant?');">
+    <button type="submit" class="btn btn-secondary btn-sm"
+            {% if orphan_count == 0 %}disabled{% endif %}>
+      Clean up orphan files
+    </button>
+  </form>
+</section>
+
+{% endblock %}

@@ -7048,44 +7048,34 @@ def admin_create_tenant_and_invite(
 
 @app.get("/maintenance", response_class=HTMLResponse)
 def maintenance(request: Request, cleaned: str = "", update: str = "", imported: str = ""):
+    """User-facing maintenance landing — slimmed down to the three
+    cards that are safe for any tenant member to see: Version
+    (read-only), Access (read-only tenant + member list), and
+    the platform Changelog.
+
+    Anything that can affect platform state (update, cleanup,
+    whole-DB backup, restore) lives behind the operator gate on
+    /admin/maintenance — those routes don't exist at /maintenance
+    anymore.  A non-operator user can't even see them in the
+    rendered HTML.  Same template, less surface."""
     actor: Actor = request.state.actor
-    with db() as conn:
-        item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
-        box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
-        tenant_name = None
-        members = []
-        if actor.tenant_id is not None:
-            row = conn.execute(
-                "SELECT name FROM tenants WHERE id = ?", (actor.tenant_id,),
-            ).fetchone()
-            tenant_name = row["name"] if row else None
-            members = [
-                dict(r) for r in conn.execute(
-                    "SELECT email, role FROM tenant_members "
-                    "WHERE tenant_id = ? ORDER BY joined_at, email",
-                    (actor.tenant_id,),
-                ).fetchall()
-            ]
-    on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
-    referenced = len(_referenced_uploads())
+    # User-facing page now only needs tenant + member context for the
+    # Access card; the orphan-count + box-count queries moved to the
+    # operator-only /admin/maintenance page so they stay off the
+    # ratchet for app-level conn.execute.
+    tenant_name = None
+    members = []
+    if actor.tenant_id is not None:
+        tenant_row = dao_tenants.get_tenant(actor, actor.tenant_id)
+        tenant_name = tenant_row["name"] if tenant_row else None
+        members = dao_tenants.list_members(actor, actor.tenant_id)
     return templates.TemplateResponse(
         request, "maintenance.html",
         {
-            "item_count": item_count, "box_count": box_count,
-            "files_on_disk": on_disk, "files_referenced": referenced,
-            "orphan_count": max(0, on_disk - referenced),
-            "cleaned": cleaned,
-            "imported": imported,
             "version": VERSION,
             "git_sha": GIT_SHA[:7] if GIT_SHA else "",
-            "update_enabled": bool(WATCHTOWER_URL),
-            "update_status": update,
             "changelog_html": CHANGELOG_HTML,
-            # Access panel data: the active tenant + its members, replacing
-            # the old global STASH_ALLOWED_EMAILS view.  This whole card
-            # moves to /usage in roadmap step 13; until then we keep it on
-            # /maintenance with tenant-scoped data so the live user has
-            # parity with the old behaviour.
+            # Access panel data: the active tenant + its members.
             "tenant_name": tenant_name,
             "tenant_members": members,
             "current_email": actor.email,
@@ -7095,27 +7085,42 @@ def maintenance(request: Request, cleaned: str = "", update: str = "", imported:
     )
 
 
-@app.post("/maintenance/update")
-def maintenance_update(background: BackgroundTasks):
-    if not WATCHTOWER_URL:
-        return RedirectResponse("/maintenance?update=disabled", status_code=303)
-    background.add_task(_trigger_watchtower_update)
-    return RedirectResponse("/maintenance?update=triggered", status_code=303)
-
-
 @app.get("/maintenance/version")
 def maintenance_version():
-    """Lightweight probe for client-side polling. The maintenance page snapshots
-    the version on load and watches this endpoint for a change, which signals
-    that watchtower has finished restarting the container with a new image."""
+    """Lightweight probe for client-side polling.  The (admin)
+    update-check page snapshots the version on load and watches
+    this endpoint for a change, which signals that watchtower
+    has finished restarting the container with a new image.
+    Public read — no tenant data, just the build identifier."""
     return {
         "version": VERSION,
         "git_sha": GIT_SHA[:7] if GIT_SHA else "",
     }
 
 
-@app.post("/maintenance/cleanup")
-def maintenance_cleanup():
+# ── Operator-only platform maintenance ──────────────────────────
+#
+# Pre-RBAC-pass, these lived at /maintenance/* and were reachable
+# by any signed-in tenant member.  That was a real hole:
+#   * cleanup walks every tenant's upload subdir
+#   * export streams the whole-platform DB + every tenant's
+#     encrypted photo bytes
+#   * import REPLACES the entire DB
+#   * update triggers watchtower → recreates every container
+# All four affect the deployment as a whole, not just the caller's
+# tenant.  Now operator-only, and at /admin/maintenance/* so the
+# URL space itself signals "this is operator territory".
+#
+# Pure-function helpers stay accessible to tests (which use them
+# as setup / teardown without needing operator creds).  The HTTP
+# wrappers add the auth gate + redirect.
+
+
+def _run_orphan_cleanup() -> int:
+    """Walk every tenant's upload directory and delete files that
+    aren't in :func:`_referenced_uploads`.  Returns the count
+    removed.  Pure function — no auth, no HTTP — so tests can
+    call it directly without minting an operator session."""
     refs = _referenced_uploads()
     cleaned = 0
     if UPLOAD_DIR.exists():
@@ -7134,26 +7139,93 @@ def maintenance_cleanup():
                         except FileNotFoundError:
                             pass
             elif entry.is_file():
-                # Stray file in the flat root (pre-migration leftover or
-                # broken write).  Always orphan in the post-phase-2
-                # world.
                 try:
                     entry.unlink()
                     cleaned += 1
                 except FileNotFoundError:
                     pass
-    return RedirectResponse(f"/maintenance?cleaned={cleaned}", status_code=303)
+    return cleaned
 
 
-@app.get("/maintenance/export")
-def maintenance_export():
-    """Stream a zip of stash.db + every upload file still referenced.
+@app.get("/admin/maintenance", response_class=HTMLResponse)
+def admin_maintenance(
+    request: Request,
+    cleaned: str = "", update: str = "", imported: str = "",
+):
+    """Operator-only deployment-control surface.  Renders the
+    cards that affect platform-wide state (update via watchtower,
+    whole-DB backup zip, whole-DB restore, cross-tenant orphan
+    cleanup).  Non-operators get 404 by the opacity rule —
+    they don't see the URL space at all."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    on_disk = sum(1 for _ in UPLOAD_DIR.iterdir()) if UPLOAD_DIR.exists() else 0
+    referenced = len(_referenced_uploads())
+    with db() as conn:
+        item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        box_count = conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0]
+    return templates.TemplateResponse(
+        request, "admin_maintenance.html",
+        {
+            "version": VERSION,
+            "git_sha": GIT_SHA[:7] if GIT_SHA else "",
+            "update_enabled": bool(WATCHTOWER_URL),
+            "update_status": update,
+            "imported": imported,
+            "cleaned": cleaned,
+            "item_count": item_count,
+            "box_count": box_count,
+            "files_on_disk": on_disk,
+            "files_referenced": referenced,
+            "orphan_count": max(0, on_disk - referenced),
+        },
+    )
 
-    Files are written into the zip under their on-disk relative path
-    (`uploads/{tenant_id}/{name}`).  The blobs are stored as ciphertext —
-    the zip is a coherent snapshot of the on-disk state, not a cleartext
-    dump.  Restoring this zip without the matching STASH_KEK is useless,
-    by design (see spec § "Encryption at rest")."""
+
+@app.post("/admin/maintenance/update")
+def admin_maintenance_update(request: Request, background: BackgroundTasks):
+    """Operator-only — triggers watchtower to pull + recreate
+    every container labelled for auto-update.  Deployment-wide
+    operation; gated so a per-tenant maintainer can't restart
+    everyone else's containers."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    if not WATCHTOWER_URL:
+        return RedirectResponse(
+            "/admin/maintenance?update=disabled", status_code=303,
+        )
+    background.add_task(_trigger_watchtower_update)
+    return RedirectResponse(
+        "/admin/maintenance?update=triggered", status_code=303,
+    )
+
+
+@app.post("/admin/maintenance/cleanup")
+def admin_maintenance_cleanup(request: Request):
+    """Operator-only — walks every tenant's upload directory and
+    deletes orphaned files.  Cross-tenant filesystem operation."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    cleaned = _run_orphan_cleanup()
+    return RedirectResponse(
+        f"/admin/maintenance?cleaned={cleaned}", status_code=303,
+    )
+
+
+def _produce_full_backup_zip() -> tuple[bytes, str]:
+    """Build the deployment-wide backup zip in memory.  Returns
+    ``(bytes, filename)``.  Pure function — no auth, no HTTP.
+
+    Captures the WHOLE platform: stash.db + every referenced
+    upload file across every tenant.  Restore is operator-only
+    (see :func:`admin_maintenance_import`); a tenant maintainer
+    can't snapshot the deployment from this helper.
+
+    Files in the zip use their on-disk relative path
+    (``uploads/{tenant_id}/{name}``).  The blobs are stored as
+    ciphertext — restoring the zip without the matching
+    STASH_KEK is useless, by design (see spec § "Encryption at
+    rest")."""
     import io as _io
     import zipfile
     from datetime import datetime
@@ -7175,12 +7247,22 @@ def maintenance_export():
             p = _tenant_file(tid, name)
             if p.exists():
                 zf.write(p, arcname=f"uploads/{tid}/{name}")
-    buf.seek(0)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return buf.getvalue(), f"stash-backup-{stamp}.zip"
+
+
+@app.get("/admin/maintenance/export")
+def admin_maintenance_export(request: Request):
+    """Operator-only — streams the whole-platform backup zip."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    payload, filename = _produce_full_backup_zip()
     return Response(
-        content=buf.getvalue(),
+        content=payload,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="stash-backup-{stamp}.zip"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )
 
 
@@ -7325,13 +7407,26 @@ async def _spool_upload_to_disk(file: UploadFile, dst: Path, max_bytes: int) -> 
     return size
 
 
-@app.post("/maintenance/import")
-async def maintenance_import(file: UploadFile = File(...)):
-    """Replace the live DB (and optionally uploads/) from a `.db` or backup `.zip`.
+@app.post("/admin/maintenance/import")
+async def admin_maintenance_import(
+    request: Request, file: UploadFile = File(...),
+):
+    """Operator-only — replace the live DB (and optionally
+    uploads/) from a ``.db`` or backup ``.zip``.
 
-    The current DB is copied to `stash.db.bak-<timestamp>` before replacement so
-    a botched import can be reverted by hand. Streams the upload to disk rather
-    than buffering — backup zips can be multi-GB on photo-heavy stashes."""
+    Wipes the whole deployment.  The current DB is copied to
+    ``stash.db.bak-<timestamp>`` before replacement so a botched
+    import can be reverted by hand.  Streams the upload to disk
+    rather than buffering — backup zips can be multi-GB on
+    photo-heavy stashes.
+
+    Originally at /maintenance/import with no auth gate, which
+    meant any signed-in tenant maintainer could replace every
+    other tenant's data with arbitrary bytes.  Now at the
+    /admin/maintenance/ prefix with the operator gate, and
+    invisible to non-operators."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
     if not file or not file.filename:
         raise HTTPException(400, "File required")
 
@@ -7373,7 +7468,7 @@ async def maintenance_import(file: UploadFile = File(...)):
         except FileNotFoundError:
             pass
 
-    return RedirectResponse("/maintenance?imported=1", status_code=303)
+    return RedirectResponse("/admin/maintenance?imported=1", status_code=303)
 
 
 # ── Module bottom: schema + filesystem migrations run last ───────────

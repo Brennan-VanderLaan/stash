@@ -36,7 +36,7 @@ def _uploads_root(client) -> Path:
 def _read_db_bytes(client) -> bytes:
     """Drain the WAL into main.db before snapshotting the file.  WAL mode
     means recent commits can sit in the -wal sidecar until checkpointed,
-    so a raw read_bytes() captures a stale snapshot.  /maintenance/export
+    so a raw read_bytes() captures a stale snapshot.  /admin/maintenance/export
     handles this internally; tests that simulate "user copied stash.db
     off disk" must do the same explicitly."""
     with client.app_module.db() as conn:
@@ -114,7 +114,7 @@ def test_replace_photo_deletes_old_files(client):
 
 # ── Orphan sweep ─────────────────────────────────────────────────────
 
-def test_cleanup_removes_unreferenced_files_only(client):
+def test_cleanup_removes_unreferenced_files_only(client, as_operator):
     _ingest_and_assign(client)
     # Drop an unrelated file into uploads/
     stray = _uploads(client) / "stray-orphan.jpg"
@@ -129,7 +129,7 @@ def test_cleanup_removes_unreferenced_files_only(client):
             ).fetchall() if r[0]
         }
 
-    r = client.post("/maintenance/cleanup", follow_redirects=False)
+    r = client.post("/admin/maintenance/cleanup", follow_redirects=False)
     assert r.status_code == 303
     assert "cleaned=1" in r.headers["location"]
     assert not stray.exists()
@@ -137,21 +137,23 @@ def test_cleanup_removes_unreferenced_files_only(client):
         assert (_uploads(client) / name).exists(), f"cleanup deleted referenced file {name}"
 
 
-def test_maintenance_page_reports_orphan_count(client):
+def test_maintenance_page_reports_orphan_count(client, as_operator):
+    """Orphan count + cleanup CTA moved to the operator-only
+    /admin/maintenance page during the RBAC pass.  User-facing
+    /maintenance no longer surfaces filesystem state."""
     _ingest_and_assign(client)
     (_uploads(client) / "orphan1.jpg").write_bytes(b"x")
     (_uploads(client) / "orphan2.jpg").write_bytes(b"x")
-    page = client.get("/maintenance").text
+    page = client.get("/admin/maintenance").text
     assert "Orphaned" in page
-    # Two stray files plus anything already orphaned — just assert >= 2
     assert "Clean up orphan files" in page
 
 
 # ── Export ───────────────────────────────────────────────────────────
 
-def test_export_zip_contains_db_and_referenced_uploads(client):
+def test_export_zip_contains_db_and_referenced_uploads(client, as_operator):
     _ingest_and_assign(client)
-    r = client.get("/maintenance/export")
+    r = client.get("/admin/maintenance/export")
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/zip"
     assert "stash-backup-" in r.headers["content-disposition"]
@@ -171,10 +173,10 @@ def test_export_zip_contains_db_and_referenced_uploads(client):
         assert f"uploads/{tid}/{name}" in names, f"missing {name} from export"
 
 
-def test_export_excludes_orphan_files(client):
+def test_export_excludes_orphan_files(client, as_operator):
     _ingest_and_assign(client)
     (_uploads(client) / "orphan.jpg").write_bytes(b"junk")
-    r = client.get("/maintenance/export")
+    r = client.get("/admin/maintenance/export")
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = set(zf.namelist())
     tid = client.test_tenant_id
@@ -184,10 +186,10 @@ def test_export_excludes_orphan_files(client):
 
 # ── Import ───────────────────────────────────────────────────────────
 
-def test_import_zip_round_trip_replaces_db_and_uploads(client):
+def test_import_zip_round_trip_replaces_db_and_uploads(client, as_operator):
     """Export from a populated state, wipe, re-import — all data comes back."""
     _ingest_and_assign(client)
-    backup = client.get("/maintenance/export").content
+    backup = client.get("/admin/maintenance/export").content
 
     # Wipe state: drop the assigned item and remove its upload files
     with client.app_module.db() as conn:
@@ -204,7 +206,7 @@ def test_import_zip_round_trip_replaces_db_and_uploads(client):
             pass
 
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("backup.zip", io.BytesIO(backup), "application/zip")},
         follow_redirects=False,
     )
@@ -219,7 +221,7 @@ def test_import_zip_round_trip_replaces_db_and_uploads(client):
         assert (_uploads(client) / p).exists(), f"upload {p} not restored"
 
 
-def test_import_raw_db_file_replaces_db(client):
+def test_import_raw_db_file_replaces_db(client, as_operator):
     """Uploading just a .db file (no zip wrapper) replaces the running DB."""
     # Build a known-good DB out of band using the running app's schema
     client.post("/boxes", data={"name": "Original"})
@@ -233,7 +235,7 @@ def test_import_raw_db_file_replaces_db(client):
         assert conn.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 2
 
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("stash.db", io.BytesIO(db_bytes), "application/octet-stream")},
         follow_redirects=False,
     )
@@ -243,7 +245,7 @@ def test_import_raw_db_file_replaces_db(client):
     assert names == ["Original"]
 
 
-def test_import_creates_backup_of_existing_db(client):
+def test_import_creates_backup_of_existing_db(client, as_operator):
     """The current DB is preserved as stash.db.bak-<timestamp> before replacement."""
     client.post("/boxes", data={"name": "Pre-import"})
     db_bytes = _read_db_bytes(client)
@@ -252,7 +254,7 @@ def test_import_creates_backup_of_existing_db(client):
     backups_before = list(db_path.parent.glob(f"{db_path.name}.bak-*"))
 
     client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("stash.db", io.BytesIO(db_bytes), "application/octet-stream")},
     )
 
@@ -260,7 +262,7 @@ def test_import_creates_backup_of_existing_db(client):
     assert len(backups_after) == len(backups_before) + 1
 
 
-def test_export_includes_floorplans_and_background_art(client):
+def test_export_includes_floorplans_and_background_art(client, as_operator):
     """Pin coverage for every file-bearing column beyond items.photo: a
     location floorplan, a floor floorplan, and a box's generated
     background art must all ride along in the backup zip."""
@@ -298,7 +300,7 @@ def test_export_includes_floorplans_and_background_art(client):
         )
         conn.commit()
 
-    r = client.get("/maintenance/export")
+    r = client.get("/admin/maintenance/export")
     assert r.status_code == 200
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = set(zf.namelist())
@@ -307,7 +309,7 @@ def test_export_includes_floorplans_and_background_art(client):
         assert f"uploads/{tid}/{expected}" in names, f"{expected} missing from export"
 
 
-def test_import_round_trip_restores_floorplans_and_background_art(client):
+def test_import_round_trip_restores_floorplans_and_background_art(client, as_operator):
     """Round-trip: backup → wipe → restore brings back the floorplan and
     background-art files alongside the DB rows that point at them."""
     import secrets
@@ -336,7 +338,7 @@ def test_import_round_trip_restores_floorplans_and_background_art(client):
         )
         conn.commit()
 
-    backup = client.get("/maintenance/export").content
+    backup = client.get("/admin/maintenance/export").content
 
     # Wipe DB rows + the files on disk so the restore has actual work to do.
     with client.app_module.db() as conn:
@@ -351,7 +353,7 @@ def test_import_round_trip_restores_floorplans_and_background_art(client):
             pass
 
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("backup.zip", io.BytesIO(backup), "application/zip")},
         follow_redirects=False,
     )
@@ -374,37 +376,37 @@ def test_import_round_trip_restores_floorplans_and_background_art(client):
         ).fetchone()["floorplan"] == floor_floorplan
 
 
-def test_import_rejects_non_sqlite_file(client):
+def test_import_rejects_non_sqlite_file(client, as_operator):
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("evil.txt", io.BytesIO(b"not a database"), "text/plain")},
     )
     assert r.status_code == 400
 
 
-def test_import_rejects_zip_without_stash_db(client):
+def test_import_rejects_zip_without_stash_db(client, as_operator):
     """A zip that doesn't carry stash.db is not a stash backup."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("readme.txt", "hello")
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("bad.zip", io.BytesIO(buf.getvalue()), "application/zip")},
     )
     assert r.status_code == 400
 
 
-def test_import_rejects_invalid_sqlite_with_correct_header(client):
+def test_import_rejects_invalid_sqlite_with_correct_header(client, as_operator):
     """Bytes that *start with* the SQLite header but aren't a real DB still get rejected."""
     fake = b"SQLite format 3\x00" + b"\x00" * 4096
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("fake.db", io.BytesIO(fake), "application/octet-stream")},
     )
     assert r.status_code == 400
 
 
-def test_import_zip_larger_than_photo_upload_limit(client):
+def test_import_zip_larger_than_photo_upload_limit(client, as_operator):
     """Backups can exceed MAX_UPLOAD_BYTES (the photo cap) — only MAX_IMPORT_BYTES
     should bound them. Confirms the streaming path doesn't reuse the wrong limit."""
     client.post("/boxes", data={"name": "Box"})
@@ -419,19 +421,19 @@ def test_import_zip_larger_than_photo_upload_limit(client):
         zf.writestr("padding.bin", b"\x00" * padding_size)
 
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("backup.zip", io.BytesIO(buf.getvalue()), "application/zip")},
         follow_redirects=False,
     )
     assert r.status_code == 303, f"unexpected: {r.status_code} {r.text[:300]}"
 
 
-def test_import_rejects_uploads_above_import_limit(client, monkeypatch):
+def test_import_rejects_uploads_above_import_limit(client, monkeypatch, as_operator):
     """A file beyond MAX_IMPORT_BYTES must still 413, not crash mid-stream."""
     monkeypatch.setattr(client.app_module, "MAX_IMPORT_BYTES", 4096)
     payload = b"SQLite format 3\x00" + b"x" * 8192
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("big.db", io.BytesIO(payload), "application/octet-stream")},
     )
     assert r.status_code == 413
@@ -447,7 +449,7 @@ def test_version_endpoint_returns_running_version(client):
     assert payload["version"] == client.app_module.VERSION
 
 
-def test_import_zip_skips_path_traversal_entries(client):
+def test_import_zip_skips_path_traversal_entries(client, as_operator):
     """A malicious zip with `uploads/../evil` (or any path-traversal
     variant) must not write outside UPLOAD_DIR.  Includes both the
     phase-2 ``uploads/{tenant_id}/{name}`` shape and the legacy flat
@@ -470,7 +472,7 @@ def test_import_zip_skips_path_traversal_entries(client):
         zf.writestr("uploads/legacy.jpg", _fake_jpg())
 
     r = client.post(
-        "/maintenance/import",
+        "/admin/maintenance/import",
         files={"file": ("backup.zip", io.BytesIO(buf.getvalue()), "application/zip")},
     )
     assert r.status_code == 200  # followed redirect to /maintenance

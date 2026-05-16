@@ -153,7 +153,7 @@ def test_maintenance_cleanup_keeps_referenced_thumbs(client):
     thumb = _thumb_path(client, photo)
     assert thumb.exists()
 
-    client.post("/maintenance/cleanup")
+    client.app_module._run_orphan_cleanup()
     assert thumb.exists(), "cleanup deleted a referenced photo's thumb"
 
 
@@ -215,5 +215,5 @@ def test_maintenance_cleanup_removes_orphaned_thumbs(client):
         conn.execute("UPDATE items SET photo = NULL, source_photo = NULL WHERE id = 1")
         conn.commit()
 
-    client.post("/maintenance/cleanup")
+    client.app_module._run_orphan_cleanup()
     assert not thumb.exists(), "orphan thumb survived the cleanup sweep"

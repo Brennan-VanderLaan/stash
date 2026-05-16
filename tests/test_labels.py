@@ -548,7 +548,7 @@ def test_art_files_are_protected_from_orphan_cleanup(client, monkeypatch):
     with client.app_module.db() as conn:
         art = conn.execute("SELECT background_art FROM boxes WHERE id = 1").fetchone()[0]
 
-    client.post("/maintenance/cleanup")
+    client.app_module._run_orphan_cleanup()
     assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id)
             / art).exists(), "cleanup deleted referenced background art"
 

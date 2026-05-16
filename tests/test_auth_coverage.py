@@ -136,8 +136,12 @@ _PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("POST", "/usage/api-tokens", {"name": "x"}),
     ("POST", "/usage/invites", {"email": "x@example.com"}),
     ("GET", "/maintenance", None),
-    ("POST", "/maintenance/cleanup", None),
-    ("GET", "/maintenance/export", None),
+    # Operator-only deployment controls.  Renamed from /maintenance/*
+    # to /admin/maintenance/* during the RBAC pass; cleanup / export /
+    # import / update all moved off the tenant-member-reachable
+    # surface.  Unauthenticated must still 401/403 these.
+    ("POST", "/admin/maintenance/cleanup", None),
+    ("GET", "/admin/maintenance/export", None),
     ("GET", "/admin", None),
     ("POST", "/admin/tenants", {"name": "x", "invitee_email": "x@example.com"}),
     ("GET", "/api/v1/me", None),
@@ -358,6 +362,14 @@ _NON_OPERATOR_HEADERS = {"X-Forwarded-Email": "main@t1.example"}
     ("GET", "/admin", None),
     ("POST", "/admin/tenants", {"name": "x", "invitee_email": "y@example.com"}),
     ("POST", "/admin/tenants/1/backup", None),
+    # Operator-only deployment controls.  Pre-RBAC-pass these
+    # lived at /maintenance/* with no gate; any tenant member
+    # could trigger watchtower, dump the whole DB, or replace
+    # everyone's data.  Now operator-only + opacity-ruled.
+    ("GET", "/admin/maintenance", None),
+    ("POST", "/admin/maintenance/update", None),
+    ("POST", "/admin/maintenance/cleanup", None),
+    ("GET", "/admin/maintenance/export", None),
 ])
 def test_non_operator_admin_routes_404(tmp_path, monkeypatch,
                                        method, path, body):

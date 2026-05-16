@@ -520,7 +520,7 @@ def test_floorplan_files_are_protected_from_orphan_cleanup(client):
     loc_id, floor_id = _setup_location_with_floor(client)
     with client.app_module.db() as conn:
         plan = conn.execute("SELECT floorplan FROM floors WHERE id = ?", (floor_id,)).fetchone()[0]
-    client.post("/maintenance/cleanup")
+    client.app_module._run_orphan_cleanup()
     assert (client.app_module.UPLOAD_DIR / str(client.test_tenant_id) / plan).exists(), \
         "cleanup deleted referenced floorplan"
 

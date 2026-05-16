@@ -94,3 +94,35 @@ def client(tmp_path, monkeypatch):
         c.test_email = TEST_EMAIL
         c.test_tenant_id = tenant_id
         yield c
+
+
+def _promote_to_operator(c):
+    """Promote the test actor to operator at runtime by
+    monkey-poking ``_OPERATOR_EMAILS`` on the live app module.
+    Used by the ``operator_client`` fixture below; also exposed
+    so a single test can opt in mid-flight when needed.
+
+    Why this and not ``monkeypatch.setenv``: ``_OPERATOR_EMAILS``
+    is a module-level ``frozenset`` constructed at import time,
+    so re-setting the env var after import is a no-op.  Direct
+    replacement of the constant is the simplest path to
+    operator behaviour in a test that already has a running
+    app + tenant."""
+    c.app_module._OPERATOR_EMAILS = frozenset({c.test_email.lower()})
+
+
+@pytest.fixture
+def as_operator(client):
+    """Side-effect fixture: promote the default ``client``'s
+    actor email to operator before the test runs.  Use as an
+    extra parameter alongside ``client``:
+
+        def test_admin_thing(client, as_operator):
+            client.post("/admin/maintenance/cleanup")
+
+    Body code keeps using ``client`` — the fixture just patches
+    ``_OPERATOR_EMAILS`` so middleware resolves the existing
+    actor with ``is_operator=True``.  Avoids the
+    rename-every-reference churn of a wrapper-fixture pattern."""
+    _promote_to_operator(client)
+    yield
