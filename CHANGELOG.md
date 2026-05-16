@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.31.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.30.1...v1.31.0) (2026-05-16)
+
+
+### Features
+
+* **public:** robots.txt — open the marketing surface with a friendly note ([c1beca0](https://github.com/Brennan-VanderLaan/stash/commit/c1beca0c8ed711c7d562119e2b45a744ab3e0e40))
+
+
+### Bug Fixes
+
+* **public:** legal name no longer plastered across marketing surfaces ([b0e744c](https://github.com/Brennan-VanderLaan/stash/commit/b0e744cba1d279f69be45791728c33495c5ebee5))
+
 ## [1.30.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.30.0...v1.30.1) (2026-05-16)
 
 
