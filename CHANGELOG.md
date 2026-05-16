@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.31.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.31.0...v1.31.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **deploy:** oauth2-proxy was overriding /robots.txt with hardcoded Disallow ([8d8cdb1](https://github.com/Brennan-VanderLaan/stash/commit/8d8cdb13cda18a1102a176df2eb6bf6371994640))
+
 ## [1.31.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.30.1...v1.31.0) (2026-05-16)
 
 
