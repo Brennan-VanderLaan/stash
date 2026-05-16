@@ -820,24 +820,104 @@
           height: Math.min(document.documentElement.clientHeight, 1600),
           x: window.scrollX, y: window.scrollY,
           // html2canvas 1.4.1 (last released 2022) predates the
-          // ``color-mix()`` CSS function and throws "Attempting
+          // modern CSS colour functions and throws "Attempting
           // to parse an unsupported color function 'color'" the
           // moment it hits one in a computed style.  Several
           // hot surfaces (box-card hover, room rects, search
-          // chips) use color-mix to blend a per-tile colour
-          // against the page background, so the screenshot
-          // button broke on every interior page.
+          // chips) use ``color-mix()`` to blend a per-tile colour
+          // against the page background, and recent Chrome
+          // serialises the resolved value as ``color(srgb …)``
+          // — especially in ``box-shadow`` or any time the alpha
+          // channel is non-1 — which html2canvas still can't
+          // parse even after our copy-computed-to-inline trick.
           //
-          // Fix without swapping the vendor library: walk every
-          // element in lockstep between the live document and
-          // the clone h2c is about to rasterise; copy the
-          // RESOLVED computed colour for each interesting
-          // property onto the clone as an inline style.  By the
-          // time h2c reads the clone's style, color-mix has
-          // already been resolved to plain rgb() by the
-          // browser's own getComputedStyle, so there's nothing
-          // for h2c to choke on.
+          // Fix: paint each problematic colour fragment onto a
+          // 1×1 canvas, read back the rgba bytes, and substitute
+          // the result.  Covers ``color()``, ``color-mix()``,
+          // ``oklch()``, and ``oklab()`` — whatever a recent
+          // browser resolves to that html2canvas can't grok.
+          // The canvas pipeline goes through the browser's own
+          // colour engine, so anything the browser can render
+          // gets normalised to plain rgba() before h2c sees it.
           onclone: (clonedDoc) => {
+            // Lazy 1×1 canvas used to coerce any browser-
+            // parseable colour into plain rgba().  Reused across
+            // every fragment so we don't allocate per call.
+            let _ctx = null;
+            const _toRgba = (cssColor) => {
+              if (!_ctx) {
+                const c = document.createElement('canvas');
+                c.width = c.height = 1;
+                _ctx = c.getContext('2d');
+              }
+              try {
+                // Two-step rejection guard: set a sentinel fill,
+                // read back the browser's normalised serialisation,
+                // then assign the candidate.  If ``fillStyle`` is
+                // unchanged afterwards the browser couldn't parse
+                // ``cssColor`` and we'd silently paint the sentinel
+                // colour — return null so the caller falls back to
+                // the original string.  Sentinel chosen with a
+                // non-collidable alpha so a literal sRGB fragment
+                // can't accidentally match.
+                _ctx.fillStyle = 'rgba(1, 2, 3, 0.97)';
+                const sentinel = _ctx.fillStyle;
+                _ctx.fillStyle = cssColor;
+                if (_ctx.fillStyle === sentinel) return null;
+                _ctx.clearRect(0, 0, 1, 1);
+                _ctx.fillRect(0, 0, 1, 1);
+                const d = _ctx.getImageData(0, 0, 1, 1).data;
+                const a = (d[3] / 255).toFixed(3);
+                return `rgba(${d[0]}, ${d[1]}, ${d[2]}, ${a})`;
+              } catch (_) {
+                return null;
+              }
+            };
+            // Find ``color(...)`` / ``color-mix(...)`` / ``oklch(...)``
+            // / ``oklab(...)`` substrings (including nested parens)
+            // and substitute each with its canvas-resolved rgba().
+            // Top-down: an enclosing color-mix() gets resolved as
+            // a whole, swallowing any inner color() — so we make
+            // exactly one pass left-to-right.
+            const FN_OPEN = /(?:^|[^\w-])(color|color-mix|oklch|oklab)\s*\(/g;
+            const _resolveColorFns = (value) => {
+              if (!value
+                  || (!value.includes('color(')
+                      && !value.includes('color-mix(')
+                      && !value.includes('oklch(')
+                      && !value.includes('oklab('))) {
+                return value;
+              }
+              let out = '';
+              let cursor = 0;
+              FN_OPEN.lastIndex = 0;
+              let m;
+              while ((m = FN_OPEN.exec(value)) !== null) {
+                // m[0] may include a leading non-word char (the
+                // negative-of-\w- in the lookbehind-ish prefix);
+                // m.index points at that prefix, but the function
+                // name starts at m.index + (m[0].length - m[1].length - 1).
+                const fnStart = m.index + m[0].length - m[1].length - 1;
+                out += value.slice(cursor, fnStart);
+                // Walk forward to find the matching close paren.
+                let depth = 1;
+                let j = FN_OPEN.lastIndex;
+                while (j < value.length && depth > 0) {
+                  const ch = value[j];
+                  if (ch === '(') depth++;
+                  else if (ch === ')') depth--;
+                  j++;
+                }
+                const fragment = value.slice(fnStart, j);
+                const rgba = _toRgba(fragment);
+                out += (rgba !== null) ? rgba : fragment;
+                cursor = j;
+                FN_OPEN.lastIndex = j;
+              }
+              out += value.slice(cursor);
+              return out;
+            };
+
             const live = document.body.querySelectorAll('*');
             const cloned = clonedDoc.body.querySelectorAll('*');
             if (live.length !== cloned.length) return;
@@ -851,19 +931,23 @@
               'border-left-color',
               'outline-color',
               'box-shadow',
+              'text-shadow',
+              'text-decoration-color',
+              'caret-color',
+              'accent-color',
+              'column-rule-color',
               'fill',
               'stroke',
             ];
             for (let i = 0; i < live.length; i++) {
               const cs = window.getComputedStyle(live[i]);
               for (const p of PROPS) {
-                const v = cs.getPropertyValue(p);
-                // Skip empties + the "no color" default so we
-                // don't bloat the clone's inline style and
-                // accidentally override an unset value.
-                if (v && v !== 'rgba(0, 0, 0, 0)' && v !== 'none') {
-                  cloned[i].style.setProperty(p, v);
+                const raw = cs.getPropertyValue(p);
+                if (!raw || raw === 'rgba(0, 0, 0, 0)' || raw === 'none') {
+                  continue;
                 }
+                const v = _resolveColorFns(raw);
+                cloned[i].style.setProperty(p, v);
               }
             }
           },
