@@ -1540,23 +1540,20 @@ body.about-public {
   line-height: 1.5;
 }
 .about-header {
+  /* Desktop: one row — brand on the left, nav in the middle,
+     sign-in on the right.  Mobile (≤ 720 px): brand + ☰ + sign-in
+     in one tight row, with the nav promoted to a full-width
+     drawer beneath when the ☰ checkbox is toggled.
+     Padding clamp keeps the inner content aligned with
+     ``.about-main`` on wide viewports (the 1080 px inner column
+     + 1.5 rem floor side padding align the bar with the body's
+     left and right edges on wide desktops) and tightens to
+     0.85 rem on phones so the bar doesn't waste horizontal
+     space. */
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
-  /* Background stretches edge-to-edge as a sticky bar, but the
-     CONTENT sits in the same max-width column as ``.about-main``
-     below so the page reads as one centred axis instead of
-     "wide sticky bar + narrow body floating left of nowhere"
-     (feedback #27, "feels off balance to the left").  The
-     ``max(1.5rem, ...)`` clamp keeps padding sane on viewports
-     narrower than the column.  At 1080px on the inner column +
-     1.5rem floor side padding, the brand / nav / sign-in align
-     with the body's left and right edges on wide desktops. */
-  padding-top: 0.85rem;
-  padding-bottom: 0.85rem;
-  padding-left: max(1.5rem, calc(50% - 540px));
-  padding-right: max(1.5rem, calc(50% - 540px));
+  padding: 0.7rem max(0.85rem, calc(50% - 540px));
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
   background: var(--panel);
@@ -1569,28 +1566,141 @@ body.about-public {
   font-weight: 700;
   color: var(--accent, #4ade80);
   text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  order: 1;
 }
 .about-nav {
   display: flex;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 0.35rem;
   flex-wrap: wrap;
   flex: 1;
+  order: 2;
+  min-width: 0;
 }
 .about-nav a {
   color: var(--text, #e6f4ea);
   text-decoration: none;
   font-size: 0.9rem;
-  padding: 0.25rem 0.4rem;
-  border-radius: 4px;
+  padding: 0.4rem 0.65rem;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
 }
-.about-nav a:hover { color: var(--accent); background: var(--hover); }
+.about-nav a:hover,
+.about-nav a:focus-visible {
+  color: var(--accent);
+  background: var(--hover);
+}
 .about-signin {
-  padding: 0.45rem 0.85rem;
+  padding: 0.55rem 1rem;
   background: var(--accent, #4ade80);
-  color: var(--bg, #0a1810);
+  color: var(--on-accent, var(--bg, #0a1810));
   border-radius: 8px;
   text-decoration: none;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  order: 3;
+  transition: background 0.15s, transform 0.1s;
+}
+.about-signin:hover {
+  background: var(--accent-hover, var(--accent));
+  transform: translateY(-1px);
+}
+.about-signin:active { transform: translateY(0); }
+
+/* Mobile menu toggle — checkbox + label hack so the drawer
+   works pure-CSS.  Hidden on desktop. */
+.about-nav-toggle-input {
+  /* Visually hidden but keyboard-focusable. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.about-nav-toggle {
+  display: none;  /* shown only at mobile breakpoint */
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border);
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--text);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, border-color 0.15s;
+  order: 2;
+  flex-shrink: 0;
+}
+.about-nav-toggle:hover,
+.about-nav-toggle-input:focus-visible + .about-nav-toggle {
+  background: var(--hover);
+  border-color: var(--border-strong, var(--accent));
+}
+.about-nav-toggle-icon-close { display: none; }
+.about-nav-toggle-input:checked + .about-nav-toggle {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.about-nav-toggle-input:checked + .about-nav-toggle .about-nav-toggle-icon-open {
+  display: none;
+}
+.about-nav-toggle-input:checked + .about-nav-toggle .about-nav-toggle-icon-close {
+  display: inline;
+}
+
+@media (max-width: 720px) {
+  .about-header {
+    flex-wrap: wrap;
+    padding: 0.6rem 0.85rem;
+    gap: 0.55rem;
+  }
+  .about-brand {
+    font-size: 1.05rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .about-nav-toggle { display: inline-flex; order: 2; }
+  .about-signin {
+    padding: 0.5rem 0.85rem;
+    font-size: 0.92rem;
+    order: 3;
+  }
+  /* Nav lives in source order at the END so it can wrap below
+     the top row as a full-width drawer.  ``order: 4`` puts it
+     last in flex flow regardless of source. */
+  .about-header > .about-nav {
+    order: 4;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.1rem;
+    padding-top: 0.55rem;
+    margin-top: 0.55rem;
+    border-top: 1px solid var(--border);
+    /* Closed by default; the checkbox toggle reveals it. */
+    display: none;
+  }
+  .about-nav-toggle-input:checked ~ .about-nav {
+    display: flex;
+  }
+  .about-header > .about-nav a {
+    padding: 0.75rem 0.5rem;  /* 44 px tap target */
+    font-size: 1rem;
+    border-radius: 8px;
+  }
 }
 .about-main {
   /* Reading column.  820 → 1080 at wide-desktop breakpoint
@@ -1719,14 +1829,34 @@ body.about-public {
 }
 
 .about-footer {
-  text-align: center;
-  padding: 1.5rem 1rem 2.5rem;
+  padding: 1.75rem 1rem 2.5rem;
   color: var(--muted, #9bbfa6);
   font-size: 0.85rem;
   border-top: 1px solid var(--border, #2a5a3a);
   margin-top: 2rem;
 }
-.about-footer a { color: var(--accent); text-decoration: none; }
+.about-footer-row {
+  text-align: center;
+  margin: 0 0 0.5rem;
+}
+.about-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+  justify-content: center;
+}
+.about-footer-links a {
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.35rem 0;
+  /* Phone-friendly tap targets without making desktop links feel
+     gappy — the gap above spaces siblings; the padding gives each
+     link its own non-overlapping click box. */
+}
+.about-footer-links a:hover,
+.about-footer-links a:focus-visible {
+  text-decoration: underline;
+}
 
 /* === Public landing (/) =====================================
    The marketing-side home page that unauthenticated visitors
@@ -1735,30 +1865,41 @@ body.about-public {
    (hero, feature grid, transparency callout, final CTA). */
 .landing-hero {
   text-align: center;
-  padding: 2.5rem 0 2rem;
+  /* Clamp shrinks the vertical padding on phones so the hero
+     doesn't eat half the viewport before the headline lands;
+     stretches comfortably on desktop. */
+  padding: clamp(1.5rem, 5vw, 2.75rem) 0 clamp(1.25rem, 4vw, 2.25rem);
   max-width: 720px;
   margin: 0 auto;
 }
 .landing-eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-size: 0.78rem;
+  font-size: clamp(0.72rem, 1.6vw, 0.82rem);
   color: var(--accent);
-  margin: 0 0 0.6rem;
+  margin: 0 0 0.55rem;
   font-weight: 600;
 }
 .landing-headline {
-  font-size: clamp(1.8rem, 5vw, 2.7rem);
-  line-height: 1.15;
-  margin: 0 0 0.9rem;
+  font-size: clamp(2rem, 6vw, 2.85rem);
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.85rem;
   color: var(--text);
   border: 0;
+  /* Long headlines on the public landing can break awkwardly on
+     phones if a single word lands alone on the last line.  ``balance``
+     evens the line lengths so the headline reads as a deliberate
+     unit on every viewport. */
+  text-wrap: balance;
 }
 .landing-sub {
-  font-size: 1.05rem;
+  font-size: clamp(0.98rem, 2.2vw, 1.1rem);
+  line-height: 1.55;
   color: var(--text-muted);
   max-width: 56ch;
-  margin: 0 auto 1.5rem;
+  margin: 0 auto 1.4rem;
+  text-wrap: pretty;
 }
 .landing-cta-row {
   display: flex;
@@ -1772,7 +1913,7 @@ body.about-public {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.75rem 1.4rem;
+  padding: 0.8rem 1.5rem;
   border-radius: var(--radius-sm);
   font-size: 1rem;
   font-weight: 600;

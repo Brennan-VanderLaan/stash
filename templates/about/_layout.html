@@ -57,6 +57,30 @@
        party — that's the only place an operator's full legal
        name is load-bearing for a sole-prop deploy. #}
     <a href="/about" class="about-brand">{{ product_name }}</a>
+    {# Mobile nav toggle — pure-CSS checkbox+label trick so the
+       drawer works without JS.  The checkbox is visually hidden
+       but accessible via keyboard / screen reader; the label is
+       the visible ☰ button.  Desktop CSS hides the label so the
+       nav reads as a normal inline list. #}
+    <input type="checkbox" id="about-nav-toggle" class="about-nav-toggle-input">
+    <label for="about-nav-toggle" class="about-nav-toggle"
+           aria-label="Toggle navigation menu">
+      <span class="about-nav-toggle-icon-open" aria-hidden="true">☰</span>
+      <span class="about-nav-toggle-icon-close" aria-hidden="true">✕</span>
+    </label>
+    {# Right-edge action.  Default is "Sign in" for anonymous
+       visitors on the public /about/* pages, but pages that
+       render for a *signed-in* visitor with no tenant access
+       (no_tenant.html) override this block to a Sign-out link.
+       Stays in the top row at all viewport sizes — primary CTA
+       on mobile shouldn't hide behind a menu. #}
+    {% block header_action %}
+    <a href="/home" class="about-signin">Sign in →</a>
+    {% endblock %}
+    {# Nav comes last in source order so the mobile drawer (set
+       to ``flex-basis: 100%`` via CSS) wraps to a new row beneath
+       brand + toggle + sign-in.  ``order`` properties reshuffle
+       to brand → nav → sign-in on desktop. #}
     <nav class="about-nav">
       <a href="/about/pricing">Pricing</a>
       <a href="/about/transparency">Where your $ goes</a>
@@ -66,25 +90,18 @@
       <a href="/about/sub-processors">Sub-processors</a>
       <a href="/about/contact">Contact</a>
     </nav>
-    {# Right-edge action.  Default is "Sign in" for anonymous
-       visitors on the public /about/* pages, but pages that
-       render for a *signed-in* visitor with no tenant access
-       (no_tenant.html) override this block to a Sign-out link. #}
-    {% block header_action %}
-    <a href="/home" class="about-signin">Sign in →</a>
-    {% endblock %}
   </header>
   <main class="about-main">
     {% block content %}{% endblock %}
   </main>
   <footer class="about-footer">
-    <p>
-      © {{ product_name }} ·
-      <a href="/about/contact">{{ contact_email }}</a> ·
-      <a href="/about/terms">Terms</a> ·
-      <a href="/about/privacy">Privacy</a> ·
+    <div class="about-footer-row">© {{ product_name }}</div>
+    <nav class="about-footer-links" aria-label="Footer">
+      <a href="/about/contact">{{ contact_email }}</a>
+      <a href="/about/terms">Terms</a>
+      <a href="/about/privacy">Privacy</a>
       <a href="/about/refunds">Refunds</a>
-    </p>
+    </nav>
   </footer>
 </body>
 </html>
