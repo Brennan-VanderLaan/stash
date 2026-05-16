@@ -3967,6 +3967,18 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   gap: 0.3rem;
   flex-wrap: wrap;
 }
+/* Photo-adjacent crop toolbar — feedback #42/#43.  Sits directly
+   beneath the photo so the cropper UI's visual target and its
+   buttons stay paired at every viewport width.  Pre-existing
+   ``.sort-customize-crop`` rule is kept for backwards compat
+   in case any deployed fragment still references the old class. */
+.sort-photo-controls {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.85rem 0;
+  margin-top: 0.35rem;
+}
 
 /* Sticky action bar at the bottom of the card — Accept / Reject
    always visible, no matter how tall the card gets. */

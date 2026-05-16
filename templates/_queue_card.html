@@ -12,7 +12,12 @@
    noise. #}
 <form method="post" action="/queue/{{ p.id }}/assign" class="card sort-card" id="card-{{ p.id }}">
 
-  {# Photo + bbox overlay. #}
+  {# Photo + bbox overlay.  Crop controls live IMMEDIATELY beneath
+     the photo (feedback #42 #43 — operator on mobile could not
+     find the "Adjust crop" button buried inside Customize past
+     the long box-picker dropdown).  Keep them paired so the
+     visual target and its toolbar stay adjacent at every
+     viewport width. #}
   {% if p.photo %}
   <div class="sort-photo">
     <div class="sort-photo-frame">
@@ -29,6 +34,14 @@
       </div>
       {% endif %}
     </div>
+  </div>
+  <div class="sort-photo-controls">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
+            id="crop-btn-{{ p.id }}">Adjust crop</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="resetCrop({{ p.id }})"
+            id="reset-btn-{{ p.id }}" style="display:none;">Reset</button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="clearCrop({{ p.id }})"
+            id="clear-btn-{{ p.id }}" style="display:none;">No crop</button>
   </div>
   {% endif %}
 
@@ -96,6 +109,18 @@
         {% endfor %}
       </optgroup>
       {% endfor %}
+      {# "Just in a room (no box yet)" — feedback #39.  Server
+         get-or-creates a per-room "Loose items" box when one of
+         these values is submitted.  Lives at the bottom of the
+         picker so it doesn't shadow the regular "pick a real box"
+         path the AI suggestion typically points at. #}
+      {% if rooms_for_loose %}
+      <optgroup label="📍 Just in a room (no box yet)">
+        {% for r in rooms_for_loose %}
+        <option value="loose:{{ r.id }}">{{ r.label }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endif %}
     </select>
   </label>
 
@@ -125,16 +150,9 @@
         <input type="text" name="tags" placeholder="e.g. costa-rica, serial:ABC123"
                list="tag-suggestions" autocomplete="off">
       </label>
-      {% if p.photo %}
-      <div class="sort-customize-crop">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCrop({{ p.id }})"
-                id="crop-btn-{{ p.id }}">Adjust crop</button>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="resetCrop({{ p.id }})"
-                id="reset-btn-{{ p.id }}" style="display:none;">Reset</button>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="clearCrop({{ p.id }})"
-                id="clear-btn-{{ p.id }}" style="display:none;">No crop</button>
-      </div>
-      {% endif %}
+      {# Crop controls moved out — they now live right under the
+         photo (feedback #42/#43).  Removing the redundant block
+         here keeps Customize focused on text fields. #}
     </div>
   </details>
 

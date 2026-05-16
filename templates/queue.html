@@ -78,6 +78,18 @@ function toggleCrop(id) {
   document.getElementById('crop-btn-' + id).textContent = 'Done';
   document.getElementById('reset-btn-' + id).style.display = '';
   document.getElementById('clear-btn-' + id).style.display = '';
+  // Bring the photo into view so the operator can see what they're
+  // cropping.  Feedback #43: on a 384px-wide phone, the "Adjust
+  // crop" button (now sitting under the photo) was sometimes still
+  // out of view if the user was reading the box-picker further
+  // down the card — tapping it then required a fresh upward
+  // scroll.  ``scrollIntoView`` w/ ``block: 'start'`` parks the
+  // photo at the top of the viewport so the cropper widget is
+  // immediately tappable.  Skipped on desktop where the card
+  // fits comfortably already.
+  if (window.innerWidth < 720) {
+    img.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 function finalizeCrop(id) {
