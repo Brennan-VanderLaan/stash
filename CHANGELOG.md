@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.35.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.34.0...v1.35.0) (2026-05-16)
+
+
+### Features
+
+* **feedback:** admin_create_feedback MCP tool + source-tagged rows ([f2307eb](https://github.com/Brennan-VanderLaan/stash/commit/f2307ebec7cc1ad278863b4fe87a311e0aaabfdf))
+* **tools:** sweep group-by-route view + 18-viewport device palette ([6d6dc74](https://github.com/Brennan-VanderLaan/stash/commit/6d6dc7478901d40fa470a35e32ce4035ff37cdae))
+* **tools:** visual-sweep — live playwright + gemini layout review ([33c1b9c](https://github.com/Brennan-VanderLaan/stash/commit/33c1b9c55e9c5ac2fa2034f0a56bd24b856bf941))
+
+
+### Bug Fixes
+
+* **floorplan:** box-preview modal unkillable when /preview fetch hangs ([24b4882](https://github.com/Brennan-VanderLaan/stash/commit/24b4882d383e980e3475b521d4d9ea484855d9f1))
+
 ## [1.34.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.33.0...v1.34.0) (2026-05-16)
 
 
