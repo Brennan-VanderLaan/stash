@@ -1378,7 +1378,21 @@ main.main-wide {
 }
 .audit-card-meta { margin: 0.4rem 0 0; }
 
-/* Stamps that fade in based on drag intent — purely visual hint. */
+/* Direction-intent feedback during a swipe.  Feedback #34 —
+   "swiping was not intuitive to me … I accidentally deleted my
+   box while thinking I was accepting everything."  Mid-swipe
+   the user needs to know WHICH side they're committing to
+   before they let go.  Two changes:
+
+   1. Persistent edge guides on the active card — small labels
+      that ALWAYS show "← MISSING" on the left and "FOUND →"
+      on the right.  Faint by default; brighten + color-shift
+      as the swipe crosses each side's threshold.
+
+   2. The big stamps stay (FOUND / MISSING rotated text), but
+      now they fade in earlier (intent > 0.25 instead of 0.4)
+      and lock in colour earlier so the user feels the commit
+      before release. */
 .audit-card-stamps {
   position: absolute;
   inset: 0;
@@ -1410,6 +1424,47 @@ main.main-wide {
 }
 .audit-card.intent-right .audit-stamp-found { opacity: 1; }
 .audit-card.intent-left .audit-stamp-missing { opacity: 1; }
+
+/* Persistent edge guides — visible at all times on the active
+   card so the user knows which direction means what BEFORE
+   they start swiping.  Faded by default so they don't fight
+   the card content; brighten on intent crossing. */
+.audit-edge-guide {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  user-select: none;
+  text-transform: uppercase;
+}
+.audit-edge-guide-missing {
+  left: 0.75rem;
+  color: var(--danger);
+  border: 2px solid var(--danger);
+}
+.audit-edge-guide-found {
+  right: 0.75rem;
+  color: var(--success);
+  border: 2px solid var(--success);
+}
+.audit-card.intent-left .audit-edge-guide-missing {
+  opacity: 1;
+  background: var(--danger);
+  color: var(--bg);
+}
+.audit-card.intent-right .audit-edge-guide-found {
+  opacity: 1;
+  background: var(--success);
+  color: var(--bg);
+}
 .audit-card-finished {
   position: static;
   text-align: center;
@@ -1418,10 +1473,17 @@ main.main-wide {
   opacity: 1;
 }
 
-/* Always-visible action bar — never below the fold. */
+/* Always-visible action bar — never below the fold.
+   ``bottom`` clears the mobile tab-bar (fixed bottom: 0, ~64 px
+   tall) AND the iOS safe-area inset.  Without this, the
+   action row sat directly underneath the tab-bar's fixed
+   strip, hiding Missing / Skip / Found from anyone trying to
+   audit on a phone (feedback #33).  The 72 px figure matches
+   the value used by the feedback-launcher's mobile media
+   query — both clear the tab-bar by ~8 px breathing room. */
 .audit-actions {
   position: sticky;
-  bottom: calc(var(--safe-bottom, 0) + 0.5rem);
+  bottom: calc(72px + var(--safe-bottom, 0px) + 0.5rem);
   display: grid;
   grid-template-columns: 1fr 0.6fr 1fr;
   gap: 0.5rem;
@@ -1431,6 +1493,16 @@ main.main-wide {
   border-radius: var(--radius);
   z-index: 30;
   box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.25);
+}
+@media (min-width: 640px) {
+  /* Desktop has no bottom tab-bar — restore the smaller offset
+     so the action bar sits closer to the bottom of the
+     viewport.  Body's padding-bottom is reset to 0 above 640 px
+     (see the ``@media (min-width: 640px)`` block near the
+     ``main`` section), so we don't need the 72 px clearance. */
+  .audit-actions {
+    bottom: calc(var(--safe-bottom, 0px) + 0.5rem);
+  }
 }
 .audit-actions.is-busy { opacity: 0.6; pointer-events: none; }
 .audit-action {
@@ -6126,17 +6198,25 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5rem 0.75rem 0.75rem;
-  margin: 0.5rem 0 0.25rem;
+  padding: 0.4rem 0.7rem;
+  margin: 0.4rem 0;
 }
 .contrib-handle-disclosure[open] {
   border-color: var(--accent);
+  padding-bottom: 0.6rem;
 }
 .contrib-handle-disclosure summary {
   cursor: pointer;
   list-style: none;
   font-size: 0.9rem;
-  padding: 0.15rem 0;
+  padding: 0.1rem 0;
+  /* Make the summary itself feel like a button so users
+     understand it's clickable. */
+  user-select: none;
+}
+.contrib-handle-hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
 }
 .contrib-handle-disclosure summary::-webkit-details-marker { display: none; }
 .contrib-handle-disclosure summary::marker { content: ''; }

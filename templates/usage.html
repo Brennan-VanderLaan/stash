@@ -78,23 +78,25 @@
   {% endif %}
   {% if your_handle_revoked %}
   <div class="notice notice-warning">
-    {{ _("An operator revoked your previous handle.  Pick a new acceptable one below; your stars are unaffected.") }}
+    {{ _("An operator revoked your previous handle.  Pick a new one below; your stars are unaffected.") }}
   </div>
   {% endif %}
-  <details class="contrib-handle-disclosure"
-           {% if your_stars > 0 and not your_handle %}open{% endif %}>
+  {# Always collapsed — the disclosure body has a 2-line form +
+     a one-line hint, but the section read as massive when it
+     auto-opened for every signed-in user without a handle.
+     Feedback #35 — "the handle input is like 15-20 lines tall,
+     it should be one line."  Now the summary line is the
+     entire thing until tapped. #}
+  <details class="contrib-handle-disclosure">
     <summary>
       🪪
       {% if your_handle %}
         {{ _("Handle:") }} <strong>{{ your_handle }}</strong>
         <span class="text-sm text-muted">— {{ _("change") }}</span>
       {% else %}
-        {{ _("Pick a handle for the public leaderboard (optional)") }}
+        {{ _("Pick a leaderboard handle (optional)") }}
       {% endif %}
     </summary>
-    <p class="text-sm text-muted">
-      {{ _("Your email is never shown on the leaderboard.  Set a handle and you appear by name; leave it blank and you stay 'Anonymous'.  2-24 chars, letters / digits / hyphen / underscore.  Operators can revoke any handle that's offensive — no ists or isms.") }}
-    </p>
     <form method="post" action="/usage/handle"
           class="contrib-handle-form">
       <input type="text" name="handle" required
@@ -105,9 +107,12 @@
              autocomplete="off" autocapitalize="off"
              spellcheck="false">
       <button type="submit" class="btn btn-primary btn-sm">
-        {% if your_handle %}{{ _("Update") }}{% else %}{{ _("Claim handle") }}{% endif %}
+        {% if your_handle %}{{ _("Update") }}{% else %}{{ _("Claim") }}{% endif %}
       </button>
     </form>
+    <p class="text-sm text-muted contrib-handle-hint">
+      {{ _("2-24 chars, alphanumeric + hyphen / underscore.  Your email stays private.  Operators can revoke offensive handles.") }}
+    </p>
   </details>
 
   {# ── Submissions: 2 visible inline, rest behind a disclosure ── #}
