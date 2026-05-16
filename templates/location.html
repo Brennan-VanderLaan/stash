@@ -300,6 +300,77 @@
   const floorId = Number(stage.dataset.floorId);
   const DRAG_THRESHOLD_PX = 4;
 
+  // ── Unconditional dialog-close wiring ────────────────────────
+  // Feedback #37 / #41 reported the box-preview dialog stuck at
+  // Loading… with the X click doing nothing.  The original close
+  // handler lived inside ``if (!isEdit && boxDialog)`` and so
+  // didn't attach when the page rendered in edit mode (``?edit=1``
+  // or the cookie equivalent).  The dialog *element* exists in
+  // both modes (it's in the template HTML unconditionally), so
+  // if anything — even a stale tab transitioning between modes —
+  // leaves it open, we need a working close path.  Hoisting the
+  // bindings here makes the X work regardless of edit state,
+  // adds Escape as a keyboard fallback (modern <dialog> handles
+  // this natively but we wire an explicit listener so a hijacked
+  // showModal call can't suppress it), and runs a dead-man's-
+  // switch that force-closes if the dialog is still showing the
+  // initial Loading… placeholder after 20 s.
+  if (boxDialog) {
+    const closeBtn = boxDialog.querySelector('.item-dialog-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        try { boxDialog.close(); } catch (_) {
+          // Last-resort if the dialog API misbehaves: yank the
+          // open attribute manually.
+          boxDialog.removeAttribute('open');
+        }
+      });
+    }
+    // Backdrop click → close.  Mirrors the per-mode handler so
+    // it works even if the per-mode block doesn't run.
+    boxDialog.addEventListener('click', (e) => {
+      if (e.target === boxDialog) {
+        try { boxDialog.close(); } catch (_) {
+          boxDialog.removeAttribute('open');
+        }
+      }
+    });
+    // Watchdog: if the dialog is still in its initial Loading…
+    // state 20 s after opening, force-close.  Defends against
+    // every conceivable variant of "showModal ran, fetch never
+    // landed, the X handler glitched" — the user gets their
+    // page back unconditionally.
+    let watchdogTimer = null;
+    const observer = new MutationObserver(() => {
+      const open = boxDialog.hasAttribute('open');
+      if (!open && watchdogTimer) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
+        return;
+      }
+      if (open && !watchdogTimer) {
+        watchdogTimer = setTimeout(() => {
+          // Only auto-close if the body is still the *initial*
+          // Loading… placeholder; an in-progress edit
+          // (rare custom innerHTML use) shouldn't be nuked.
+          const body = boxDialog.querySelector('#floorplan-box-body');
+          if (body && /Loading…/.test(body.textContent)) {
+            try { boxDialog.close(); } catch (_) {
+              boxDialog.removeAttribute('open');
+            }
+            console.warn('floorplan-box-dialog watchdog fired — closed stale Loading…');
+          }
+          watchdogTimer = null;
+        }, 20_000);
+      }
+    });
+    observer.observe(boxDialog, {
+      attributes: true, attributeFilter: ['open'],
+    });
+  }
+
   // ── Zoom + pan ────────────────────────────────────────────────────
   // The stage's width is driven by --zoom. Setting that >1 makes the
   // stage wider than the viewport, so native overflow:auto handles
@@ -758,19 +829,11 @@
     // browser fires this click synchronously after pointerup even for
     // gestures we consumed as a drag.
     //
-    // The `<form method="dialog">` close button is the spec-correct
-    // way to dismiss a <dialog>, but feedback #37 documented a case
-    // where it became a no-op — fetch hangs at Loading…, X click
-    // does nothing, dialog can't be dismissed.  Belt-and-suspenders
-    // below: an explicit JS click handler on the close button, plus
-    // an AbortController on the fetch so it can't loiter past the
-    // dialog itself, plus a 15 s hard timeout so a wedged server
-    // doesn't leave the user stuck at Loading… forever.
+    // Close-handler + watchdog wiring lives at module top — runs
+    // regardless of edit mode (#37 #41 follow-up).  Here we only
+    // attach the per-mode fetch-abort hook that pairs with the
+    // ``<- showModal()`` tile-click below.
     let _previewAbort = null;
-    const closeBtn = boxDialog.querySelector('.item-dialog-close');
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => boxDialog.close());
-    }
     boxDialog.addEventListener('close', () => {
       if (_previewAbort) {
         _previewAbort.abort();
@@ -815,9 +878,9 @@
         if (_previewAbort === ac) _previewAbort = null;
       }
     });
-    boxDialog.addEventListener('click', (e) => {
-      if (e.target === boxDialog) boxDialog.close();
-    });
+    // Backdrop click handler lives in the hoisted block at the
+    // top of this script so it works whether or not we're in
+    // view mode.
   }
 
   function stageRect() { return stage.getBoundingClientRect(); }
