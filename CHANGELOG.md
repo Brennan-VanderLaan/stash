@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.36.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.36.0...v1.36.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **floorplan:** root cause of the unkillable Loading dialog — CSS specificity ([d50d10a](https://github.com/Brennan-VanderLaan/stash/commit/d50d10a5ca63c2af5bf48f0e99e7fd9aacc931e9))
+
 ## [1.36.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.35.1...v1.36.0) (2026-05-16)
 
 
