@@ -6062,12 +6062,18 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   align-items: flex-end;
 }
 .leaderboard-handle-form label {
-  flex: 1 1 12rem;
+  flex: 0 1 18rem;
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  min-width: 8rem;
 }
 .leaderboard-handle-form input[type="text"] {
+  /* Same width override as ``.contrib-handle-form`` — the global
+     ``width: 100%`` on inputs would otherwise push the Claim
+     button onto its own row. */
+  width: auto;
+  max-width: 100%;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.95rem;
 }
@@ -6117,9 +6123,20 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.5rem;
+  align-items: center;
 }
 .contrib-handle-form input[type="text"] {
-  flex: 1 1 12rem;
+  /* Override the global ``input[type="text"] { width: 100% }``
+     rule that ships from the form-control reset — without this
+     the input stretched to fill the flex row and pushed the
+     Submit button onto its own line, which made the whole
+     disclosure read as "multiple paragraphs of vertical space"
+     (feedback #31).  Cap the width to something reasonable so
+     the input + button sit on one line on a desktop column. */
+  flex: 0 1 18rem;
+  width: auto;
+  max-width: 100%;
+  min-width: 8rem;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 .contrib-history-disclosure {
