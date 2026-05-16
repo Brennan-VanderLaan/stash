@@ -1505,6 +1505,20 @@ def migrate_db():
         # "Start audit"; cleared on "Finish".  No separate audit
         # session table needed.
         _add_column_if_missing(conn, "boxes", "last_audit_started_at", "TEXT")
+        # Per-room "Loose items" container for the feedback #39 flow
+        # ("I would like to add this item to just a room vs in a box in
+        # a room — I'm not ready to pack it fully yet").  When the user
+        # picks the room directly from the queue picker, the server
+        # gets-or-creates a box flagged ``is_loose=1`` in that room and
+        # assigns the item there.  Loose boxes are real boxes (search,
+        # audit, etc all keep working) — the flag is purely a UI hint
+        # for "this came from the no-box-yet path", lets the picker
+        # avoid showing the loose box twice (once as a regular option,
+        # once as the "Just in <room>" option).
+        _add_column_if_missing(
+            conn, "boxes", "is_loose",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
         # First-run onboarding tour state.  One row per (user, feature)
         # pair the user has completed.  ``version`` lets the operator
         # bump a tour and force every user to re-see the updated copy
@@ -3658,10 +3672,25 @@ def _queue_view_context(actor: Actor) -> dict:
             current_label = label
         current_group.append(b)
 
+    # Per-room "Just in a room (no box yet)" picker — feedback #39.
+    # Same flat list shape, the template renders it as its own
+    # optgroup with values prefixed ``loose:`` so the assign route
+    # can route them through the get-or-create-loose-box path
+    # instead of the regular box lookup.
+    loose_rooms = dao_boxes.list_rooms_for_loose_picker(actor)
+    rooms_for_loose: list[dict] = []
+    for r in loose_rooms:
+        if r["location_name"]:
+            label = f"{r['location_name']} · {r['name']}"
+        else:
+            label = r["name"]
+        rooms_for_loose.append({"id": r["id"], "label": label})
+
     return {
         "pending": pending,
         "boxes": boxes,
         "boxes_grouped": boxes_grouped,
+        "rooms_for_loose": rooms_for_loose,
         "fingerprint": dao_pending.fingerprint(actor),
         "all_tags": all_tags,
     }
@@ -3750,11 +3779,35 @@ def queue_assign(
     except NotFoundError:
         raise HTTPException(404)
     tenant_id = row["tenant_id"]
-    target_box_id = int(box_id)
-    try:
-        dao_boxes.get_by_id(actor, target_box_id)
-    except NotFoundError:
-        raise HTTPException(400, "Unknown box")
+    # ``box_id=loose:<room_id>`` means "no box yet — just stash this
+    # in the room".  Get-or-create the room's loose box and route the
+    # assign through it (feedback #39).  Stays a real box so the
+    # rest of the app — search, audit, labels — keeps working
+    # unchanged; the operator can promote the loose box to a real
+    # one (or move items out) at their leisure.
+    raw_box_id = box_id.strip()
+    if raw_box_id.startswith("loose:"):
+        try:
+            room_id = int(raw_box_id.split(":", 1)[1])
+        except (ValueError, IndexError):
+            raise HTTPException(400, "Bad loose-room target")
+        try:
+            target_box_id = dao_boxes.get_or_create_loose_for_room(
+                actor, room_id,
+            )
+        except NotFoundError:
+            raise HTTPException(400, "Unknown room")
+        except ForbiddenError as exc:
+            raise HTTPException(403, str(exc))
+    else:
+        try:
+            target_box_id = int(raw_box_id)
+        except ValueError:
+            raise HTTPException(400, "Bad box target")
+        try:
+            dao_boxes.get_by_id(actor, target_box_id)
+        except NotFoundError:
+            raise HTTPException(400, "Unknown box")
 
     # Use manual crop coords if submitted, fall back to DB bbox, skip if cleared
     source_photo = row["photo"]

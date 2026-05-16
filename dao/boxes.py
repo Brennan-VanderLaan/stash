@@ -8,6 +8,7 @@ import obs
 from dao._base import (
     Actor,
     ConflictError,
+    ForbiddenError,
     NotFoundError,
     db,
     require_role,
@@ -80,7 +81,14 @@ def get_by_id(actor: Actor, box_id: int) -> dict:
 def list_for_picker(actor: Actor) -> list[dict]:
     """Lightweight list for the box-picker dropdown on the queue page.
     Same ordering rules as list_with_counts but without the JOINs we
-    don't need."""
+    don't need.
+
+    Filters out ``is_loose=1`` boxes — the queue picker offers
+    "Just in <room>" as a separate optgroup; surfacing the same
+    target twice (once as the loose box's real name, once via the
+    room path) would just confuse the operator.  Loose boxes
+    still appear in every other view (home, audit, search) so the
+    operator can re-pack them later."""
     if actor.tenant_id is None:
         return []
     with db() as conn:
@@ -91,11 +99,88 @@ def list_for_picker(actor: Actor) -> list[dict]:
             "FROM boxes b "
             "LEFT JOIN rooms r ON r.id = b.room_id "
             "LEFT JOIN locations l ON l.id = r.location_id "
-            "WHERE b.tenant_id = ? "
+            "WHERE b.tenant_id = ? AND COALESCE(b.is_loose, 0) = 0 "
             "ORDER BY l.name IS NULL, l.name, r.name, b.name",
             (actor.tenant_id,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_rooms_for_loose_picker(actor: Actor) -> list[dict]:
+    """Rooms grouped by location, for the "Just in a room (no box
+    yet)" optgroup on the queue picker.  Returns rows shaped like
+    ``list_for_picker`` so the template can iterate both lists with
+    one loop pattern."""
+    if actor.tenant_id is None:
+        return []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT r.id, r.name, "
+            "       l.id AS location_id, l.name AS location_name "
+            "FROM rooms r "
+            "LEFT JOIN locations l ON l.id = r.location_id "
+            "WHERE r.tenant_id = ? "
+            "ORDER BY l.name IS NULL, l.name, r.name",
+            (actor.tenant_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# Display name used for every per-room loose box.  Centralised here
+# (not the route layer) so the create + lookup paths can't drift
+# apart on a typo.
+LOOSE_BOX_NAME = "Loose items"
+
+
+def get_or_create_loose_for_room(actor: Actor, room_id: int) -> int:
+    """Return the id of the per-room loose-items box, creating it
+    on first call.  Idempotent — a follow-up assign to the same
+    room reuses the same box, so loose items accumulate in one
+    place per room instead of spawning a new container each time.
+
+    Maintainer-only — the queue assign flow is a write surface;
+    creating boxes there should hit the same role gate as the
+    rest of the box-creation surface."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise ForbiddenError(f"{actor.email} has no active tenant")
+    # Verify the room exists in the actor's tenant before we go
+    # touching boxes.  Cross-tenant probe yields NotFoundError to
+    # match the operator-surface opacity rule.
+    with db() as conn:
+        room = conn.execute(
+            "SELECT id FROM rooms WHERE id = ? AND tenant_id = ?",
+            (room_id, actor.tenant_id),
+        ).fetchone()
+        if room is None:
+            raise NotFoundError(f"room {room_id}")
+        existing = conn.execute(
+            "SELECT id FROM boxes "
+            "WHERE tenant_id = ? AND room_id = ? AND is_loose = 1 "
+            "LIMIT 1",
+            (actor.tenant_id, room_id),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["id"])
+        cur = conn.execute(
+            "INSERT INTO boxes (name, tenant_id, room_id, is_loose) "
+            "VALUES (?, ?, ?, 1)",
+            (LOOSE_BOX_NAME, actor.tenant_id, room_id),
+        )
+        box_id = int(cur.lastrowid)
+        obs.write_audit(
+            conn,
+            tenant_id=actor.tenant_id,
+            actor_email=actor.email,
+            action="box.loose_create",
+            target_kind="box",
+            target_id=box_id,
+            metadata={"room_id": room_id},
+        )
+        conn.commit()
+    _log.info("box.loose_create id=%s room_id=%s by=%s",
+              box_id, room_id, actor.email)
+    return box_id
 
 
 def list_for_room(actor: Actor, room_id: int) -> list[dict]:
