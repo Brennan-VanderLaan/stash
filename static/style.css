@@ -4277,12 +4277,28 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   display: block;
 }
 
-/* Avery sheet-format picker — sits above the grid card. */
+/* Avery sheet-format picker — sits above the grid card.
+   ``.label-format-row`` is the side-by-side wrapper around the
+   picker form and the printer-compat notice (feedback #32 —
+   "the sheet format is off on the right, and the advice /
+   warning is on the left, there's a ton of empty space").  At
+   desktop widths the dropdown sits on the left and the notice
+   to its right; at narrow widths the wrapper wraps to a
+   stack.  ``align-items: stretch`` lines the notice's height
+   with the form so neither column looks ragged. */
+.label-format-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.85rem;
+  margin-top: 0.5rem;
+}
 .label-format-form {
   display: flex;
   align-items: flex-end;
   gap: 0.6rem;
-  margin-top: 0.5rem;
+  /* Was ``margin-top: 0.5rem`` — moved to the wrapper above so
+     the form + notice gap is the only vertical spacing. */
 }
 .label-format-label {
   display: flex;
@@ -4305,7 +4321,12 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
    base layout and only differ in the accent stripe colour.
    Feedback #23. */
 .label-printer-notice {
-  margin-top: 0.6rem;
+  /* Sits next to the format-form inside ``.label-format-row``
+     on desktop, wraps below on mobile.  ``margin-top: 0`` since
+     the wrapper's gap handles spacing; flex-grow lets the
+     notice occupy whatever horizontal space is left over after
+     the dropdown. */
+  margin: 0;
   padding: 0.55rem 0.75rem 0.6rem 0.85rem;
   border: 1px solid var(--border);
   border-left-width: 4px;
@@ -4314,6 +4335,7 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   font-size: 0.88rem;
   line-height: 1.4;
   color: var(--text);
+  flex: 1 1 22rem;
   max-width: 60ch;
 }
 .label-printer-notice code {
