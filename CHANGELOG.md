@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.38.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.37.0...v1.38.0) (2026-05-16)
+
+
+### Features
+
+* **imports:** bulk import from Encircle (first of N parser registry) ([516269a](https://github.com/Brennan-VanderLaan/stash/commit/516269a97dd0f2a14a70f5ef4cb6085bcbd2e7a6))
+* **imports:** extract photos — XLSX embedded + media ZIP companion ([bfe34a7](https://github.com/Brennan-VanderLaan/stash/commit/bfe34a701e57a243538f81bdcb7920df2fad163f))
+
 ## [1.37.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.36.1...v1.37.0) (2026-05-16)
 
 
