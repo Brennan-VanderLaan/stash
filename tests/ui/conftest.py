@@ -99,10 +99,15 @@ def live_server(tmp_path_factory) -> dict:
         # Local-loopback uvicorn never serves HTTPS — disable the
         # bearer-over-HTTPS guard.
         "STASH_REQUIRE_HTTPS_TOKENS": "false",
-        # No operator accounts by default — UI tests target the
-        # tenant-member surface.  Tests that want operator
-        # behaviour can override per-context via env injection.
-        "STASH_OPERATOR_EMAILS": "",
+        # The UI test session actor is BOTH a tenant maintainer
+        # AND an operator.  Most UI tests touch the customer-side
+        # surface (the maintainer role is what they need); the
+        # operator flag is additive — it doesn't change customer
+        # routes, just unlocks /admin so the admin-layering tests
+        # can render.  Tests that want a strictly-non-operator
+        # actor can spin up a separate context with a different
+        # X-Forwarded-Email value.
+        "STASH_OPERATOR_EMAILS": TEST_EMAIL,
         # Quieter uvicorn logs so a failing UI test's pytest output
         # isn't drowned in request lines.
         "STASH_LOG_LEVEL": "WARNING",
@@ -252,6 +257,147 @@ def seeded_tenant(live_server) -> int:
     tenant_id.  Use this for tests that hit routes which only need an
     authenticated actor (e.g. /home, /usage)."""
     return _ensure_tenant(live_server)
+
+
+@pytest.fixture(scope="session")
+def populated_admin(live_server, seeded_tenant) -> dict:
+    """Heavier admin-side seed: the canonical UI Test tenant plus
+    half a dozen extra tenants so the /admin page renders a
+    realistic tenant card grid + outstanding-invite list + tokens
+    table.  Catches the "renders fine on a blank page, breaks
+    when there's data" regression class — feedback #64
+    (mint-link popup behind tenant cards), #65 (handles table
+    needs to scale), #63 (floor-settings popup behind floorplan).
+
+    The test session actor is already promoted to operator at
+    server boot (see ``STASH_OPERATOR_EMAILS`` in ``live_server``
+    above).  This fixture's job is just to seed the data.
+    Returns ``{tenant_id, extra_tenant_ids}``."""
+    tenant_id = seeded_tenant
+    extra_ids: list[int] = []
+    with _db(live_server) as conn:
+        # Multiple tenants so the .admin-tenant-grid has a real
+        # row of cards beneath the section header.  Mix plans +
+        # soft-delete state so the cards have visual variety
+        # (and so soft-deleted cards' ``opacity: 0.7`` stacking
+        # context is exercised).
+        for i, (name, plan, deleted) in enumerate([
+            ("Echo House", "pro", False),
+            ("Foxtrot Flat", "free", False),
+            ("Golf Garage", "pro", False),
+            ("Hotel Hostel", "free", True),
+            ("India Inn", "pro", False),
+            ("Juliet Junction", "free", False),
+        ]):
+            row = conn.execute(
+                "SELECT id FROM tenants WHERE name = ?", (name,),
+            ).fetchone()
+            if row:
+                extra_ids.append(int(row["id"]))
+                continue
+            cur = conn.execute(
+                "INSERT INTO tenants (name, plan, deleted_at) "
+                "VALUES (?, ?, ?)",
+                (name, plan,
+                 "2026-04-01 00:00:00" if deleted else None),
+            )
+            extra_ids.append(int(cur.lastrowid))
+        # Outstanding onboarding-link invite — exercises the
+        # "open_bootstrap_invites" branch in the section header
+        # so the second <details> renders alongside the mint
+        # action.  Stacking-context torture for the mint-link
+        # popup.
+        existing_inv = conn.execute(
+            "SELECT 1 FROM tenant_bootstrap_invites "
+            "WHERE created_by_email = ? AND consumed_at IS NULL",
+            (TEST_EMAIL,),
+        ).fetchone()
+        if existing_inv is None:
+            conn.execute(
+                "INSERT INTO tenant_bootstrap_invites "
+                "(token, plan, role, created_by_email, "
+                " created_at, expires_at) "
+                "VALUES (?, 'free', 'maintainer', ?, "
+                "        '2026-05-17 00:00:00', "
+                "        '2026-06-17 00:00:00')",
+                (secrets.token_urlsafe(32), TEST_EMAIL),
+            )
+        conn.commit()
+    return {"tenant_id": tenant_id, "extra_tenant_ids": extra_ids}
+
+
+@pytest.fixture(scope="session")
+def populated_floorplan(live_server, seeded_tenant) -> dict:
+    """Floorplan seeded with multiple rooms + boxes so the
+    location page renders a real overlay, real box tiles, real
+    sidebar.  Catches the "modal renders behind the floorplan
+    image" regression class — feedback #63: "Replace floorplan
+    and Delete this floor are showing up behind the floorplan
+    image at all times".
+
+    Distinct from ``seeded_floorplan`` (which has one room, one
+    box) so existing tests stay deterministic.  Returns the new
+    location's ids."""
+    tenant_id = seeded_tenant
+    with _db(live_server) as conn:
+        existing = conn.execute(
+            "SELECT id FROM locations "
+            "WHERE tenant_id = ? AND name = 'Populated Home'",
+            (tenant_id,),
+        ).fetchone()
+        if existing is not None:
+            location_id = int(existing["id"])
+        else:
+            cur = conn.execute(
+                "INSERT INTO locations (name, tenant_id) "
+                "VALUES ('Populated Home', ?)",
+                (tenant_id,),
+            )
+            location_id = int(cur.lastrowid)
+            cur = conn.execute(
+                "INSERT INTO floors "
+                "(name, location_id, tenant_id, floorplan) "
+                "VALUES ('Ground', ?, ?, 'fake-populated.png')",
+                (location_id, tenant_id),
+            )
+            floor_id = int(cur.lastrowid)
+            # Five rooms scattered across the floor.  Each has at
+            # least one box.  The location.html template renders
+            # room rects + box tiles + the floor-settings dialog
+            # — and the boxes' photos / mosaic surfaces are what
+            # surfaced the "popup behind image" stacking bugs.
+            for i, (rn, x, y) in enumerate([
+                ("Kitchen",      0.05, 0.10),
+                ("Living Room",  0.30, 0.10),
+                ("Bedroom",      0.60, 0.10),
+                ("Garage",       0.05, 0.55),
+                ("Basement",     0.40, 0.55),
+            ]):
+                rc = conn.execute(
+                    "INSERT INTO rooms "
+                    "(name, floor_id, location_id, "
+                    " x, y, w, h, tenant_id) "
+                    "VALUES (?, ?, ?, ?, ?, 0.22, 0.32, ?)",
+                    (rn, floor_id, location_id, x, y, tenant_id),
+                )
+                room_id = int(rc.lastrowid)
+                conn.execute(
+                    "INSERT INTO boxes "
+                    "(name, room_id, tenant_id, location) "
+                    "VALUES (?, ?, ?, ?)",
+                    (f"{rn} stash", room_id, tenant_id, rn),
+                )
+            conn.commit()
+        floor_row = conn.execute(
+            "SELECT id FROM floors WHERE location_id = ?",
+            (location_id,),
+        ).fetchone()
+        floor_id = int(floor_row["id"])
+    return {
+        "tenant_id": tenant_id,
+        "location_id": location_id,
+        "floor_id": floor_id,
+    }
 
 
 @pytest.fixture(scope="session")

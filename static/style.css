@@ -3590,8 +3590,22 @@ summary.card-summary-soft::-webkit-details-marker { display: none; }
   width: 100%;
   max-height: calc(100vh - 4rem);
   overflow: hidden;
-  display: flex;
   flex-direction: column;
+}
+/* Same trap as ``#floorplan-box-dialog[open]`` above (and the
+   ``.global-drop-overlay[hidden]`` fix from earlier today):
+   ``display: flex`` on the un-scoped selector beats the UA
+   ``dialog:not([open]) { display: none }`` rule (author rules
+   trump UA rules in the cascade, regardless of specificity), so
+   the dialog renders inline as a flex container EVEN WHEN
+   CLOSED.  Result: the Replace-floorplan + Delete-this-floor
+   form fields sit permanently on the page below the floorplan
+   card — feedback #63: "I'm seeing visual bugs where replace
+   floorplan and delete this floor are showing up behind the
+   floorplan image at all times".  Scope ``display: flex`` to
+   ``[open]`` so the UA gate works. */
+.location-settings-dialog[open] {
+  display: flex;
 }
 .location-settings-dialog::backdrop {
   background: rgba(0, 0, 0, 0.55);
