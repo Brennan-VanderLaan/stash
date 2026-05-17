@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.50.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.1...v1.50.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ci:** move prod redeploy webhook into build.yml to avoid race ([f7943c5](https://github.com/Brennan-VanderLaan/stash/commit/f7943c5cb983289f9eb1ffcc08f9c70a877878c5))
+
 ## [1.50.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.0...v1.50.1) (2026-05-17)
 
 
