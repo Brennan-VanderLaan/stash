@@ -1,0 +1,80 @@
+name: main-sync
+# When a v*.*.* tag is created (which only happens when the
+# rolling Release PR on dev merges, per the new release-please
+# config), this workflow:
+#
+#   1. Fast-forwards ``main`` to the tagged commit, so main
+#      always reflects the latest released code.
+#   2. POSTs to prod's ``/api/v1/admin/redeploy`` webhook so
+#      watchtower on prod pulls the new image.
+#
+# Why both steps in one workflow (not "ff main on tag, then
+# prod-redeploy on push: main"): a push using GITHUB_TOKEN
+# deliberately doesn't trigger downstream workflows.  Chaining
+# would require a PAT just so the main push fires prod-redeploy.
+# One workflow with both steps avoids that and keeps the
+# "tag → main → prod" promotion atomic.
+#
+# Prod-side prerequisites (one-time):
+#   * STASH_IMAGE on prod pinned to a tag that moves with releases:
+#     - ``:1``       — track any 1.x.y (auto-applies minors + patches)
+#     - ``:1.49``    — track only 1.49.x patches (no minor auto-bump)
+#     - ``:v1.49.0`` — frozen; webhook is a no-op
+#   * GHA secrets:
+#     - PROD_REDEPLOY_URL    e.g. https://stash.swampcats.life/api/v1/admin/redeploy
+#     - PROD_REDEPLOY_TOKEN  bearer minted on prod by an operator account
+#   * main branch protection must allow github-actions[bot] to
+#     push (Settings → Branches → Branch protection rules → main
+#     → "Restrict who can push" allowlist), OR main protection
+#     can be removed entirely since release decisions don't
+#     happen there anymore.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      # Fast-forward only.  If main has commits that aren't an
+      # ancestor of this tag (would only happen if someone
+      # pushed a hotfix to main directly — the new model says
+      # don't do that), the push fails loudly and we want to
+      # know rather than silently overwrite history.
+      - name: Fast-forward main to tagged commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git push origin ${{ github.sha }}:refs/heads/main
+
+      # Same webhook structure as the staging redeploy step in
+      # build.yml — the endpoint is operator-only bearer-auth
+      # in app.py, and a missing/empty secret skips cleanly
+      # rather than failing the build.  Image is already in GHCR
+      # at this point; a webhook failure shouldn't fail the
+      # workflow (continue-on-error).  If the webhook misses,
+      # operator can hit "Check for updates" on prod's
+      # /admin/maintenance to catch up manually.
+      - name: Trigger prod redeploy
+        continue-on-error: true
+        env:
+          URL: ${{ secrets.PROD_REDEPLOY_URL }}
+          TOKEN: ${{ secrets.PROD_REDEPLOY_TOKEN }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+            echo "::warning::PROD_REDEPLOY_URL or PROD_REDEPLOY_TOKEN not set — skipping webhook"
+            exit 0
+          fi
+          curl -fsSL --max-time 30 -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "$URL"

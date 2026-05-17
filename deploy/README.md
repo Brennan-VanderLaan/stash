@@ -184,28 +184,71 @@ after sign-in see Stash.
 
 ## Production: which image tag to pin
 
-Production pins to an **explicit version tag** — never a floating
-tag.  The full SDLC (dev → staging → release → prod) is in
-`CICD.md` at the repo root; the operator-side bit here is:
+Three choices, ordered from "auto-updates everything" to "frozen":
 
-1. **Find the latest release** on GitHub:
-   https://github.com/Brennan-VanderLaan/stash/releases
-2. **Edit `.env`** on the prod box to point `STASH_IMAGE` at that
-   exact tag:
-   ```
-   STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:v1.47.0
-   ```
-3. **Pull + restart** the stash container:
+| Pin | What it tracks | When to use |
+|---|---|---|
+| `:1` | Any 1.x.y release (minors + patches auto-apply) | Solo operator, comfortable with auto-deploys ([CICD.md](../CICD.md)'s `main-sync` webhook fires on every release) |
+| `:1.49` | Only 1.49.x patches; minor bumps need a manual `.env` edit | Most operators — auto-apply hotfixes, conscious decision on features |
+| `:v1.49.0` | Frozen — never moves | Compliance / regulated deploys, or rollback target after a bad release |
+
+There is **no `:latest`** by design.
+
+### Auto-deploy is now wired up
+
+When a release tag is cut (the Release PR on `dev` merges), the
+`main-sync.yml` workflow:
+
+1. Fast-forwards `main` to the tagged commit.
+2. POSTs to prod's `/api/v1/admin/redeploy` endpoint with a
+   bearer token, which triggers watchtower to re-check whatever
+   tag prod's `STASH_IMAGE` points at.
+
+So if you're pinned to `:1.49`, every 1.49.x patch lands without
+touching the box.  Bump to 1.50.0 requires editing `.env`:
+
+```
+STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:1.50
+```
+then `docker compose pull stash && docker compose up -d stash`.
+
+### One-time wiring of the prod webhook
+
+Exactly like staging's setup but with prod-named secrets:
+
+1. **Mint a bearer token on prod.**  Sign in to
+   `https://stash.<domain>/usage` as a Google account that's in
+   `STASH_OPERATOR_EMAILS` on the prod box.  Under **API tokens**,
+   create one named `gha-redeploy-prod`.  Copy the `stash_…`
+   plaintext.
+2. **Add GitHub Actions secrets** at Settings → Secrets and
+   variables → Actions:
+   - `PROD_REDEPLOY_URL` = `https://stash.<domain>/api/v1/admin/redeploy`
+   - `PROD_REDEPLOY_TOKEN` = the `stash_…` value from step 1
+3. **Allow github-actions[bot] to push to main** (Settings →
+   Branches → Branch protection rules → main → "Restrict who
+   can push to matching branches" allowlist).  Without this,
+   `main-sync.yml`'s fast-forward step fails and the prod
+   webhook in the same workflow may or may not still fire
+   (depending on whether `continue-on-error` saves it).  Simplest
+   alternative: remove main's protection entirely — release
+   decisions no longer happen there.
+4. **Smoke-test from your laptop** with the token before relying
+   on GHA:
    ```bash
-   docker compose pull stash
-   docker compose up -d stash
+   curl -fsSL -X POST \
+     -H "Authorization: Bearer stash_..." \
+     https://stash.<domain>/api/v1/admin/redeploy
    ```
-4. Watch logs for a minute; hit `/healthz`; sanity-check the app.
+   Expected: `{"ok":true,"triggered":"watchtower"}`.
+5. **First real exercise** is the next Release PR merge on dev.
+   Watch `main-sync.yml` in the Actions tab — both steps should
+   go green, and prod recreates within ~60 s.
 
-There is **no `:latest` tag**.  The build pipeline deliberately
-doesn't publish one — every prod cutover is an explicit operator
-action so a bad commit on main can't auto-roll-out the way it
-used to.
+If the webhook ever misses (network blip, secret rotation), the
+in-app **Check for updates** button on `/admin/maintenance` is
+the manual fallback — same effect, just a click instead of a
+push.
 
 ### Updates triggered from the app
 
