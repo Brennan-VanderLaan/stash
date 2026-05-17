@@ -45,25 +45,18 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref }}
 
-      # Fast-forward only.  If main has commits that aren't an
-      # ancestor of this tag (would only happen if someone
-      # pushed a hotfix to main directly — the new model says
-      # don't do that), the push fails loudly and we want to
-      # know rather than silently overwrite history.
-      - name: Fast-forward main to tagged commit
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git push origin ${{ github.sha }}:refs/heads/main
-
-      # Same webhook structure as the staging redeploy step in
-      # build.yml — the endpoint is operator-only bearer-auth
-      # in app.py, and a missing/empty secret skips cleanly
-      # rather than failing the build.  Image is already in GHCR
-      # at this point; a webhook failure shouldn't fail the
-      # workflow (continue-on-error).  If the webhook misses,
-      # operator can hit "Check for updates" on prod's
-      # /admin/maintenance to catch up manually.
+      # Webhook fires FIRST.  Image is already in GHCR at this
+      # point (build.yml runs in parallel and is fast enough); the
+      # webhook tells prod's watchtower to re-check the pinned tag.
+      # Putting this step before the main-ff step decouples the
+      # two — a FF failure (e.g. main diverged) doesn't block the
+      # prod redeploy.
+      #
+      # Missing/empty secret skips cleanly (warning only).
+      # ``continue-on-error: true`` because the image is already
+      # built; a transient webhook failure shouldn't tank the
+      # workflow.  Operator can hit "Check for updates" on
+      # /admin/maintenance to catch up if needed.
       - name: Trigger prod redeploy
         continue-on-error: true
         env:
@@ -78,3 +71,22 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
             "$URL"
+
+      # Best-effort: fast-forward main to the tagged commit so
+      # "main" reflects the latest released code.  Fails benignly
+      # if main has diverged (e.g. one-time bootstrap mismatch
+      # where merge commits landed on main but not dev) — in that
+      # case the webhook above has already done the load-bearing
+      # work.  Operator can manually align main when convenient
+      # by force-pushing dev to main (after temporarily dropping
+      # the non_fast_forward rule).
+      - name: Fast-forward main to tagged commit
+        continue-on-error: true
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if git push origin ${{ github.sha }}:refs/heads/main; then
+            echo "main is now at $(git rev-parse --short ${{ github.sha }})"
+          else
+            echo "::warning::Could not fast-forward main to ${{ github.sha }} — main has diverged.  See main-sync.yml comments for one-time realignment."
+          fi
