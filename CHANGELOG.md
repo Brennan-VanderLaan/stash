@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.46.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.4...v1.46.0) (2026-05-17)
+
+
+### Features
+
+* feedback burndown — 9 items across UX, copy, mobile, new features ([915390c](https://github.com/Brennan-VanderLaan/stash/commit/915390cb482d98dd6564a1b80541e35b730c4780))
+* **ingest:** "Skip AI" button on failed jobs — manual-entry escape hatch ([#60](https://github.com/Brennan-VanderLaan/stash/issues/60)) ([729762e](https://github.com/Brennan-VanderLaan/stash/commit/729762e399d6e95e9bd0be4f77991d1dfe66463a))
+
+
+### Bug Fixes
+
+* **deploy:** emergency — Stripe webhook was auth-rejected by oauth2-proxy ([90eb5ae](https://github.com/Brennan-VanderLaan/stash/commit/90eb5ae01c223fa24c006ec78038573ff6d3856e))
+
 ## [1.45.4](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.3...v1.45.4) (2026-05-17)
 
 
