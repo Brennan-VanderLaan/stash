@@ -50,6 +50,29 @@ def test_csp_includes_load_bearing_directives(client):
         assert directive in csp, f"CSP missing directive: {directive!r}"
 
 
+def test_csp_form_action_allows_stripe_checkout_and_portal(client):
+    """Stash's billing flow POSTs to ``/usage/upgrade`` (303 →
+    checkout.stripe.com) and ``/usage/portal`` (303 →
+    billing.stripe.com).  ``form-action`` controls the redirect
+    target in modern browsers — without explicitly allow-listing
+    Stripe's hosted domains here, the browser blocks the 303 with
+    "Sending form data to ... violates the following Content
+    Security Policy directive: form-action 'self'.  The request
+    has been blocked" and the user can't complete checkout.
+
+    Pin both domains so a future security-tightening pass can't
+    silently break billing again."""
+    csp = client.get("/home").headers.get("Content-Security-Policy", "")
+    assert "checkout.stripe.com" in csp, (
+        "form-action must allow checkout.stripe.com for the "
+        "upgrade redirect to land in the user's browser"
+    )
+    assert "billing.stripe.com" in csp, (
+        "form-action must allow billing.stripe.com for the "
+        "Customer Portal redirect to land"
+    )
+
+
 def test_permissions_policy_disables_all_sensitive_features(client):
     """The app doesn't use camera, microphone, geolocation, USB,
     Bluetooth, motion sensors, or payments — disable them so an

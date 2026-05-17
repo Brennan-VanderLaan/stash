@@ -497,7 +497,19 @@ _SECURITY_HEADERS = {
         "style-src 'self' 'unsafe-inline'; "
         "script-src 'self' 'unsafe-inline'; "
         "connect-src 'self'; "
-        "form-action 'self'; "
+        # ``form-action`` controls where forms can submit, AND where
+        # the response can redirect (modern browsers walk the redirect
+        # chain through this directive).  Stash's billing flow POSTs
+        # to ``/usage/upgrade`` and ``/usage/portal``, both of which
+        # respond 303 to a Stripe-hosted URL — Checkout for new
+        # upgrades, Customer Portal for managing existing subscriptions.
+        # Without the explicit Stripe domains here, the browser blocks
+        # the redirect with "Sending form data to ... violates the
+        # following Content Security Policy directive: form-action
+        # 'self'.  The request has been blocked" and the user can't
+        # complete checkout.
+        "form-action 'self' "
+        "https://checkout.stripe.com https://billing.stripe.com; "
         "frame-ancestors 'none'; "
         "frame-src 'none'; "
         "object-src 'none'; "
