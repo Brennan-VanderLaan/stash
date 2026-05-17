@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.44.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.43.0...v1.44.0) (2026-05-17)
+
+
+### Features
+
+* **ingest:** global drag-drop file upload from any page ([8627a67](https://github.com/Brennan-VanderLaan/stash/commit/8627a675b57a3a2e78e77404cb81fbc096b4dd99))
+
+
+### Bug Fixes
+
+* **locations:** consolidate edit affordances on /locations/{id} ([#48](https://github.com/Brennan-VanderLaan/stash/issues/48)) ([e214b0e](https://github.com/Brennan-VanderLaan/stash/commit/e214b0e4ba1c3f86951790ed2e545a2eeebd5377))
+
 ## [1.43.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.42.0...v1.43.0) (2026-05-17)
 
 
