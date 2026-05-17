@@ -200,10 +200,20 @@
   // fragment when something actually changed.
   const jobsEl = document.getElementById('ingest-jobs');
   let fingerprint = {{ fingerprint | tojson }};
+  let pollHandle = null;
   async function tick() {
     if (uploading) return;
     try {
       const r = await fetch('/ingest/state', { cache: 'no-store' });
+      // Stop polling on auth failure.  Without this, a stale tab
+      // left open past sign-out keeps hammering /ingest/state every
+      // 2.5 s, which oauth2-proxy converts into sign-in initiations
+      // that overwrite the CSRF cookie of any concurrent sign-in
+      // attempt in another tab.  Same fix shape as /queue/state.
+      if (r.status === 401 || r.status === 403) {
+        clearInterval(pollHandle);
+        return;
+      }
       if (!r.ok) return;
       const data = await r.json();
       if (data.fingerprint !== fingerprint) {
@@ -215,7 +225,7 @@
       }
     } catch (e) { /* network blip — retry next tick */ }
   }
-  setInterval(tick, 2500);
+  pollHandle = setInterval(tick, 2500);
 })();
 </script>
 

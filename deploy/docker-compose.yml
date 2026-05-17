@@ -125,6 +125,18 @@ services:
       # the rewritten path so it forwards to stash without
       # auth; stash serves the actual friendly content.
       OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/,^/encircle-alternative$
+      # API_ROUTES — endpoints that return 401 instead of redirecting
+      # to /oauth2/sign_in when the session is missing/expired.  Polling
+      # endpoints belong here.  Without this, a stale tab still running
+      # /queue/state every few seconds triggers oauth2-proxy's sign-in
+      # initiation each poll, which generates a NEW CSRF cookie that
+      # overwrites the one for the user's actually-in-progress OAuth
+      # flow in their other tab — the callback then 403s with
+      # "CSRF token mismatch, potential attack" and the user can't sign
+      # back in until every stale tab is closed.  Returning 401 lets
+      # the polling JS detect logout cleanly without touching CSRF
+      # state.
+      OAUTH2_PROXY_API_ROUTES: ^/queue/state$,^/queue/items$,^/ingest/state$,^/ingest/jobs$,^/api/v1/tour/state$
       # Pass useful headers to stash (X-Forwarded-User / X-Forwarded-Email).
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"

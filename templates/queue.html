@@ -315,9 +315,23 @@ async function refreshQueueCards() {
 }
 
 (function() {
-  setInterval(async function() {
+  // Stop polling once the session is gone.  Without this guard, a
+  // tab left open after sign-out keeps firing /queue/state every
+  // 2 s.  oauth2-proxy's API_ROUTES (deploy/docker-compose.yml)
+  // returns 401 on those polls rather than redirecting to
+  // /oauth2/sign_in — so they never overwrite the CSRF cookie of
+  // an in-progress sign-in in another tab (the bug that locked a
+  // friend out of stash mid-invite).  This JS side just stops
+  // talking once it sees the 401 so the tab goes quiet.
+  let pollHandle = null;
+  pollHandle = setInterval(async function() {
     try {
-      const {fingerprint} = await (await fetch("/queue/state", {cache: "no-store"})).json();
+      const r = await fetch("/queue/state", { cache: "no-store" });
+      if (r.status === 401 || r.status === 403) {
+        clearInterval(pollHandle);
+        return;
+      }
+      const {fingerprint} = await r.json();
       if (fingerprint !== cardsContainer.dataset.fingerprint) {
         await refreshQueueCards();
         cardsContainer.dataset.fingerprint = fingerprint;
