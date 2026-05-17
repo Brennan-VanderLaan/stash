@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.49.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.48.0...v1.49.0) (2026-05-17)
+
+
+### Features
+
+* **ci:** event-driven staging redeploy webhook + drop dup pr-checks on dev push ([370e368](https://github.com/Brennan-VanderLaan/stash/commit/370e368368eb5f2b80ae1a376d9d58450329b91f))
+* **deploy:** wire dev → staging auto-update via env-driven watchtower ([8957892](https://github.com/Brennan-VanderLaan/stash/commit/895789207c9829b2d67b84ce8bcdf32e39a84f3f))
+
 ## [1.48.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.47.0...v1.48.0) (2026-05-17)
 
 
