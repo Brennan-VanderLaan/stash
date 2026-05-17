@@ -157,7 +157,12 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
 
   stash:
-    image: ${STASH_IMAGE:-ghcr.io/brennan-vanderlaan/stash:latest}
+    # STASH_IMAGE is REQUIRED — there is intentionally no ``:latest``
+    # tag published.  Pin prod to a specific ``:vX.Y.Z`` so cutovers
+    # are deliberate; pin staging to ``:dev`` so watchtower can
+    # auto-pull the staging channel.  See ``.env.example`` for the
+    # values to use in each environment.
+    image: ${STASH_IMAGE:?STASH_IMAGE must be set — see deploy/.env.example for the prod vs staging values}
     container_name: stash
     restart: unless-stopped
     pull_policy: always
@@ -166,6 +171,13 @@ services:
     environment:
       # Used to build the URL encoded into printed-label QR codes.
       STASH_PUBLIC_URL: https://${DOMAIN}
+      # Where the matching staging deployment lives.  Only used on
+      # the PROD box — it lets the verification-loop kanban
+      # render a 🧪 "open on staging" link that rewrites the
+      # feedback row's source_url to the staging host.  Unset on
+      # staging itself (the link is meaningless there).  See
+      # CICD.md → "verification loop".
+      STASH_STAGING_URL: ${STASH_STAGING_URL:-}
       WATCHTOWER_URL: http://watchtower:8080
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN}
       # Encryption at rest.  Required — stash refuses to boot without it.
@@ -242,10 +254,24 @@ services:
       DOCKER_API_VERSION: "1.45"
       # Only act on containers explicitly opted-in via the label above.
       WATCHTOWER_LABEL_ENABLE: "true"
-      # Disable the scheduled poll; updates are driven on-demand from the
-      # app's Maintenance page via the HTTP API.
+      # Two update channels, both gated on the env values in .env so the
+      # same compose file serves prod + staging without forking:
+      #
+      #   1. HTTP API ("Check for updates" on /admin/maintenance).
+      #      Always on — operators get a manual cutover button.
+      #
+      #   2. Periodic poll (auto-pull on a timer).  Off for prod
+      #      (cutover stays deliberate); on for staging (the whole
+      #      point is "dev push → image lives on staging within
+      #      minutes").
+      #
+      # Defaults below match prod (manual only).  Staging sets:
+      #   WATCHTOWER_PERIODIC_POLLS=true
+      #   WATCHTOWER_POLL_INTERVAL=300
+      # in its .env to flip on the auto-pull loop.  See README.md.
       WATCHTOWER_HTTP_API_UPDATE: "true"
-      WATCHTOWER_HTTP_API_PERIODIC_POLLS: "false"
+      WATCHTOWER_HTTP_API_PERIODIC_POLLS: ${WATCHTOWER_PERIODIC_POLLS:-false}
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-86400}
       WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN}
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_INCLUDE_RESTARTING: "true"

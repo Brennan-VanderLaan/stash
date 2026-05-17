@@ -221,16 +221,79 @@ the Maintenance page will be the new one.
 
 ## Staging
 
-stash-staging runs on a separate EC2 instance, tracking the `:dev`
-image tag.  Watchtower on that box polls `:dev` every poll
-interval (default 5 min) and pulls automatically.  Push to `dev`
-→ build.yml fires → `:dev` updated → staging pulls within
-minutes, no operator action required.
+stash-staging runs on a separate EC2 instance using the **same**
+`docker-compose.yml` as prod.  The difference between the two
+environments lives entirely in `.env`:
 
-The matching `:dev-sha-<short>` immutable tag is published in the
-same build so you can pin staging to a specific commit for
-forensics or A/B testing — just edit staging's `.env` the same
-way you would for prod.
+| Variable | Prod | Staging |
+|---|---|---|
+| `STASH_IMAGE` | `:vX.Y.Z` (explicit tag, bumped per release) | `:dev` (floating, watchtower auto-pulls) |
+| `WATCHTOWER_PERIODIC_POLLS` | `false` (manual cutover only) | `true` (auto-pull on a timer) |
+| `WATCHTOWER_POLL_INTERVAL` | `86400` (effectively off; doesn't matter when periodic polls are disabled) | `300` (poll every 5 min) |
+| `DOMAIN` | `stash.example.com` | `stash-staging.example.com` |
+| Stripe keys | `sk_live_…` / live `whsec_…` | `sk_test_…` / test mode `whsec_…` |
+| `STASH_KEK` | unique to prod — **do not share** | unique to staging — independent backup |
+
+Everything else (OAuth client, KEK generation procedure, Caddy,
+oauth2-proxy) is identical; staging just gets its own values.
+
+### How the auto-update works
+
+```
+   dev branch push  ──►  build.yml fires (.github/workflows)
+                              │
+                              ▼
+                  GHCR :dev tag updated
+                              │  (every WATCHTOWER_POLL_INTERVAL)
+                              ▼
+                staging's watchtower polls GHCR
+                              │
+                   manifest differs from running image?
+                              │  yes
+                              ▼
+                pull :dev + recreate stash container
+                              │
+                              ▼
+                  staging is on the new code
+```
+
+End-to-end latency from `git push origin dev` to "running on
+staging" is roughly: build.yml runtime (~3-5 min for the image
+build + GHCR push) + up to `WATCHTOWER_POLL_INTERVAL` seconds for
+watchtower to notice the new manifest.  With the recommended
+300 s poll, worst case is ~8 min; typical is closer to 5.
+
+### Pinning staging to a specific dev commit
+
+The build also publishes a `:dev-sha-<short>` immutable tag in
+addition to `:dev`.  If you need to freeze staging on a particular
+commit (forensics, A/B testing a change with a real user before
+the next dev push overwrites `:dev`), set:
+
+```
+STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:dev-sha-abc1234
+WATCHTOWER_PERIODIC_POLLS=false
+```
+
+then `docker compose pull stash && docker compose up -d stash`.
+Re-enable the auto-poll later by flipping `STASH_IMAGE` back to
+`:dev` and `WATCHTOWER_PERIODIC_POLLS=true`.
+
+### Verifying the wiring on a fresh staging box
+
+1. `docker compose up -d` (will error fast if STASH_IMAGE is unset
+   — that's deliberate).
+2. `docker compose logs watchtower | head -20` — confirm the
+   "Started Watchtower version …" line includes both
+   `Scheduling first run …` AND a poll interval matching your
+   `WATCHTOWER_POLL_INTERVAL`.
+3. `docker compose exec stash python -c "import os; print(os.environ.get('STASH_PUBLIC_URL'))"`
+   — sanity-check the env reached the container.
+4. Push a no-op commit to `dev` (e.g. a typo fix in a comment),
+   wait for build.yml to go green in GitHub Actions, then watch
+   `docker compose logs -f watchtower` on the staging box — you
+   should see "Found new ghcr.io/…/stash:dev image" within the
+   poll interval.
 
 ## Rollback (prod)
 
