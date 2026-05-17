@@ -394,6 +394,130 @@ def test_page_returns_200(
 # ── Check 5: <details> summaries are clickable + expand to content ──
 
 
+# ── Check 6: no console errors / unhandled rejections ───────────────
+
+
+@pytest.mark.parametrize("path, viewport_id", PAGE_VIEWPORT_MATRIX)
+def test_no_console_errors_on_page_load(
+    browser, live_server, populated_admin, populated_floorplan,
+    path, viewport_id,
+):
+    """Page load shouldn't log any JS errors or unhandled promise
+    rejections.  Catches the "silent JS exception breaks a click
+    handler" class — feedback #58 (tag-suggest 'doc error') and
+    #62 (Cropper-undefined ReferenceError) both surfaced first in
+    the console before users reported them.  Pinning here means
+    next time the bug is caught in CI, not by a frustrated user.
+
+    Allow-list legitimate noise: third-party warnings about
+    deprecated APIs that we can't fix, favicon 404s on test
+    deploys without a favicon, etc."""
+    vp = (
+        {"viewport": {"width": 384,  "height": 721}}
+        if viewport_id == "mobile"
+        else {"viewport": {"width": 1502, "height": 900}}
+    )
+    ctx = browser.new_context(
+        **vp,
+        extra_http_headers={"X-Forwarded-Email": "ui-test@example.com"},
+    )
+    errors: list[str] = []
+    try:
+        page = ctx.new_page()
+        page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+        page.on(
+            "console",
+            lambda msg: errors.append(f"console.{msg.type}: {msg.text}")
+            if msg.type in ("error",) else None,
+        )
+        page.goto(f"{live_server['url']}{path}")
+        page.wait_for_load_state("domcontentloaded")
+        # Give async tasks (polling fetches, deferred JS) a beat
+        # to fire any errors they're going to fire.
+        page.wait_for_timeout(300)
+    finally:
+        ctx.close()
+    # Filter the allow-list.
+    IGNORE_PATTERNS = [
+        # Test harness doesn't serve a favicon — every page logs
+        # a 404 for /favicon.ico.  Noise, not a bug.
+        "favicon.ico",
+        # The /uploads/{name} 404s in tests are expected (fake
+        # filenames seeded by populated_floorplan).  Same idea:
+        # we deliberately don't write the encrypted upload bytes
+        # for these test images.
+        "/uploads/",
+        "/thumbs/",
+        # Chrome logs ``console.error: Failed to load resource:
+        # the server responded with a status of 404`` (without
+        # the URL) on every asset 404.  The dedicated
+        # ``test_no_unexpected_asset_failures`` check already
+        # covers asset 404s with full URL context — filter the
+        # generic console line here to avoid duplicate noise.
+        "Failed to load resource",
+    ]
+    real_errors = [
+        e for e in errors
+        if not any(p in e for p in IGNORE_PATTERNS)
+    ]
+    assert real_errors == [], (
+        f"[{viewport_id}] {path}: {len(real_errors)} JS error(s) "
+        f"on page load:\n"
+        + "\n".join(f"  - {e}" for e in real_errors)
+    )
+
+
+# ── Check 7: no unexpected 4xx/5xx for in-page assets ───────────────
+
+
+@pytest.mark.parametrize("path, viewport_id", PAGE_VIEWPORT_MATRIX)
+def test_no_unexpected_asset_failures(
+    browser, live_server, populated_admin, populated_floorplan,
+    path, viewport_id,
+):
+    """Every ``<link>`` stylesheet, ``<script>`` src, and visible
+    in-content ``<img>`` should return 2xx.  Catches the "vendor
+    file moved + no one noticed" / "CSP blocked the CDN script"
+    class of bugs — feedback #62 was CSP-blocking cropper.js and
+    nobody noticed for weeks because the failed-load was silent.
+
+    Excludes ``/uploads/`` and ``/thumbs/`` — those are
+    encrypted-blob fetches against seeded test data where we
+    deliberately don't write the underlying bytes."""
+    vp = (
+        {"viewport": {"width": 384,  "height": 721}}
+        if viewport_id == "mobile"
+        else {"viewport": {"width": 1502, "height": 900}}
+    )
+    ctx = browser.new_context(
+        **vp,
+        extra_http_headers={"X-Forwarded-Email": "ui-test@example.com"},
+    )
+    failed: list[str] = []
+    EXPECTED_404 = ("/uploads/", "/thumbs/", "/favicon.ico")
+
+    def on_response(response):
+        if response.status < 400:
+            return
+        url = response.url
+        if any(p in url for p in EXPECTED_404):
+            return
+        failed.append(f"HTTP {response.status} {url}")
+
+    try:
+        page = ctx.new_page()
+        page.on("response", on_response)
+        page.goto(f"{live_server['url']}{path}")
+        page.wait_for_load_state("domcontentloaded")
+        page.wait_for_timeout(300)
+    finally:
+        ctx.close()
+    assert failed == [], (
+        f"[{viewport_id}] {path}: {len(failed)} asset(s) failed "
+        f"to load:\n" + "\n".join(f"  - {e}" for e in failed)
+    )
+
+
 @pytest.mark.parametrize("path, viewport_id", PAGE_VIEWPORT_MATRIX)
 def test_details_disclosures_open_to_nonempty_content(
     browser, live_server, populated_admin, populated_floorplan,
