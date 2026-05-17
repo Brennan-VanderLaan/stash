@@ -195,6 +195,13 @@ feedback(
     viewport_w INTEGER,
     viewport_h INTEGER,
     status TEXT NOT NULL DEFAULT 'open',  -- open | accepted | rejected | done
+    urgent INTEGER NOT NULL DEFAULT 0,   -- operator-set major-blocker flag;
+                                         -- urgent rows sort to the top of each
+                                         -- kanban column with a 🔥 pill.
+    source TEXT NOT NULL DEFAULT 'user_widget',  -- 'user_widget' | 'mcp' | 'operator' …
+                                                 -- 'mcp' rows come from agents
+                                                 -- driving the visual-sweep rig
+                                                 -- via admin_create_feedback.
     operator_notes TEXT,
     created_at TEXT,
     resolved_at TEXT,
@@ -266,10 +273,29 @@ usage_rollups(
 quotas(
     tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
     monthly_ai_calls INTEGER,
-    monthly_upload_bytes INTEGER,
+    storage_bytes INTEGER,             -- FLAT cap (current footprint), not
+                                       -- monthly cumulative.  Renamed in
+                                       -- 2026-05-16 from monthly_upload_bytes
+                                       -- when the free tier shifted to a
+                                       -- delete-to-free-space model.
     backup_storage_bytes INTEGER,
+    daily_ai_cost_micros INTEGER,      -- runaway-MCP / Gemini-art guard,
+                                       -- carried in overrides_json today
+                                       -- (schema add deferred behind the rename).
     -- NULL on any field = no cap (operator override or paid tier).
     overrides_json TEXT
+)
+
+-- KV operator tunables.  Today: ``free_tier_bytes_total`` (default 10 GB);
+-- the operator bumps this from /admin when EBS scales out, and the
+-- public landing's "N of M free spots open" line reflects it on next
+-- read — no restart.  Future tunables (e.g. pause new signups
+-- without dropping the cap to 0) ride the same row shape.
+deployment_settings(
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT,
+    updated_by_email TEXT
 )
 
 audit_log(
@@ -437,6 +463,67 @@ The original inviter sees the bound email in the audit log
 ("invite redirected from X to Y at <ts>") so surprises are
 detectable, and the invited user can pick which Google identity
 they want to associate with Stash without an extra UI step.
+
+### Bulk imports
+
+A first-class importer surface lets a user drop a competitor's
+export (XLSX / CSV / paired media ZIP) into Stash and walk away
+with a working inventory.  Shipped 2026-05-16 with Encircle as the
+first parser; the registry shape makes Sortly / HomeBox / MyStuff2
+one HEADER_MAP + one parser function each.
+
+**Architecture.**
+
+- ``dao/imports.py`` exposes ``parse(source, filename, bytes) ->
+  ParseResult`` with a per-source ``Importer`` registry in
+  ``PARSERS``.  Each importer normalises the source export into a
+  product-agnostic dict shape (``name``, ``quantity``, ``notes``,
+  ``room``, ``tags``, optional embedded photo bytes).
+- ``execute_import(actor, items, source)`` is product-agnostic:
+  get-or-create a per-import ``Location`` named ``"Imported from
+  <Source> (YYYY-MM-DD HH:MM)"``, map each unique ``room`` value
+  to a Stash room, land items in a per-room "Loose items" box via
+  ``dao_boxes.get_or_create_loose_for_room``.  Items go in
+  through the same DAO path the regular ingest queue uses, so
+  encryption + quotas + audit log apply unchanged.
+- ``undo_import(actor, location_id)`` cascade-deletes the whole
+  import — refuses any Location whose name doesn't carry the
+  ``IMPORTED_LOCATION_PREFIX`` so a typo'd id can't take out real
+  data.  The "undo" UI button posts here; same audit trail as
+  every other tenant-side delete.
+
+**Photo extraction (Encircle specifics, lift to other parsers as
+needed).**
+
+- **XLSX-embedded images** (Encircle's mobile-app export).
+  ``parse_encircle_xlsx`` switches openpyxl out of read-only mode
+  so ``ws._images`` is populated.  Each image's cell anchor
+  (``_from.row``) cross-references the parsed item via a
+  ``_sheet_row`` hint left by ``_normalise_rows`` during parse
+  (empty + nameless rows are dropped, so the row→item mapping
+  isn't trivial without that hint).
+- **Paired media ZIP** (Encircle's web-app "Download Photos &
+  Videos" bundle).  ``attach_encircle_media_zip`` walks
+  ``Room/Filename.jpg`` entries with an exact → prefix → substring
+  fuzzy-match ladder; only fills items that didn't already pick
+  up a photo from XLSX.  Receipt + data-tag filename tokens
+  skipped — Stash has a single ``photo`` column per item today;
+  multi-photo support is V3+.
+
+**Quotas.** Imports count against the tenant's ``storage_bytes``
+cap (each extracted photo is just a regular upload through
+``save_photo_bytes``).  A free-tier import that would exceed the
+100 MB cap stops at the first over-cap photo and surfaces a
+"hit your free-tier cap at item N of M — upgrade or drop some
+photos" banner; everything imported up to that point stays.
+
+**Funnel.** `/encircle-alternative` is the campaign landing page
+for displaced Encircle users (Encircle's consumer Home Inventory
+product shut down 2025-12-17).  Page is auth-free + carries a
+live "N of M free spots open right now" badge from
+`free_tier_capacity()`; CTAs route to `/import` for the upload
+or `/signup` for first-time visitors who hit the page without an
+account.
 
 ### Notifications
 
@@ -666,6 +753,18 @@ Write tools — one-shot, fail loudly on bad targets:
 | `update_item` | `item_id: int`, `name: str?`, `notes: str?` | Updated item dict |
 | `add_tag` / `remove_tag` | `item_id: int`, `tag: str` | Updated tag list |
 | `mark_missing` | `item_id: int` | `{is_missing: bool}` |
+
+Operator-scoped tools — gated on the bearer's operator flag, 404
+when called by a tenant-scoped token:
+
+| Tool | Args | Returns |
+|---|---|---|
+| `admin_list_feedback` | `status?`, `urgent?`, `source?`, `limit`, `offset` | Feedback rows with `has_screenshot` / `has_page_html` flags for cheap triage |
+| `admin_get_feedback` | `id`, `include?: list[str]` | Single feedback row; `include` opts in to `screenshot` (base64 data URL), `page_html` (text, 256 KB cap + truncated flag), `console_log` (parsed JSON), `perf_timing` (parsed JSON), or `all` |
+| `admin_set_feedback_status` | `id`, `status` | Updated row; audit-logs the transition |
+| `admin_set_feedback_urgent` | `id`, `urgent: bool` | Updated row; flips the major-blocker flag that floats it to the top of the queue |
+| `admin_create_feedback` | `body`, `tenant_id?`, `source?='mcp'`, `urgent?`, … | Inserts a feedback row tagged with `source` (defaults to `'mcp'`).  Used by the visual-sweep rig to drop layout findings into the same queue as user-submitted bugs |
+| `admin_feedback_counts` | — | `{open, accepted, rejected, done, urgent}` for the dashboard tiles |
 
 Each write tool walks the same DAO methods the REST API uses,
 so the audit log and quota enforcement are uniform across UI /
@@ -1020,9 +1119,16 @@ Surfaces:
   source of truth for the in-app price-transparency block.
 - Onboarding-link minter — single-use plan-bearing magic link
   for recipient-self-naming (see "Sign-up + onboarding" shape #3).
+- Free-tier capacity card — used / available / total slots for
+  the free pool + a "bump the pool" form against
+  ``deployment_settings.free_tier_bytes_total``.  Slot count is
+  pool ÷ per-tenant cap; bump takes effect on next read (no
+  restart).  Public landing's "N of M free spots open right now"
+  badge reads from the same source.
 - In-app feedback triage kanban with captured-DOM + screenshot
-  follow-up routes.  Same opacity rule: non-operators 404 on the
-  whole surface.
+  follow-up routes + urgent-flag toggle + source-tagged rows
+  (``user_widget`` vs ``mcp``).  Same opacity rule: non-operators
+  404 on the whole surface.
 
 ### User-facing usage page (replaces `/maintenance` for tenants)
 
@@ -1190,10 +1296,28 @@ tenants(
     ...
     deleted_at TEXT,                 -- soft-delete timestamp
     hard_delete_after TEXT,          -- when the cron may purge
-    archived_backup_key TEXT,        -- B2 key of the retained zip
-    archived_backup_until TEXT       -- when that zip will be purged
+    archived_backup_key TEXT,        -- B2 key of the retained zip (post-hard-delete)
+    archived_backup_until TEXT,      -- when that zip will be purged
+    -- Free-tier inactivity archive (distinct from the soft-delete grace
+    -- + post-grace archived backup above).  A free tenant that hasn't
+    -- shown audit-log activity in 180 days gets zipped + uploaded to B2
+    -- cold storage and its EBS slot freed; signing back in triggers an
+    -- operator-approved restore.  Pro tenants are never archived.
+    archived_at TEXT,                -- non-NULL = currently archived
+    archive_b2_key TEXT              -- B2 object key for the cold bundle
 )
 ```
+
+**Free-tier inactivity archive vs. soft-delete archive.** Two superficially
+similar archive surfaces, deliberately separate:
+
+| | Soft-delete archive (`archived_backup_*`) | Inactivity archive (`archived_at` / `archive_b2_key`) |
+|---|---|---|
+| Trigger | User clicked "delete tenant"; grace expired | Free tenant has 180 days of no audit-log activity |
+| Eligible | Any tenant | Free-plan tenants only — Pro is never archived for inactivity |
+| State during | Tenant row already gone (hard-deleted) | Tenant row still present, flagged archived; sign-in triggers restore |
+| Storage | B2 `_archived/` prefix, 1-year retention | B2 cold-storage bundle, separate operator budget |
+| User reachable? | No — they explicitly deleted it | Yes — sign back in and your data comes back |
 
 A scheduled job promotes soft-deleted tenants past their
 `hard_delete_after` to hard-delete. A second job purges archived
@@ -1233,25 +1357,35 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-16).** Phases 1–4 + 6 + 9 + 10 + 11 + 12 + 15 + 16
-+ 18 + 19 shipped; phases 5, 7, 8 partially shipped (link-share
-invites, per-tenant backup download, manual B2 upload from /admin
-respectively).  In-app feedback widget shipped out-of-phase as the
-support-loop replacement (was deferred at the end of the roadmap).
-Out-of-order work is all bootstrap-the-move-and-MCP adjacent —
-moved up to unblock immediate use.  Pre-MCP security audit drove a
-pass that closes the audit's P0/P1 list: per-share file allow-list,
-healthz bypass, bearer auto-revoke on HTTP/URL-leak, operator
-suspend/resume, SameSite=lax (oauth2-proxy needs Lax-not-Strict
-to survive Google's cross-site OAuth callback; Lax still blocks
-cross-origin form POST on modern browsers), app-level security
-headers, and
+**Status (2026-05-16, end of day).** Phases 1–4 + 6 + 9 + 10 + 11 +
+12 + 15 + 16 + 18 + 19 shipped; phase 5 now [shipped] end-to-end
+with self-serve free-tier signup landing on 2026-05-16 (the last
+piece — fresh-email path was the only outstanding shape).  Phase
+13 promotes to [partial] (cost-transparency block rebuilt on
+/about/transparency with the math actually closing across three
+tables — per-Pro variable, fixed AWS, pool-clearing arc).  Phase
+14 promotes to [partial] (180-day inactivity archive policy +
+schema landed; the sweep + B2 round-trip + recovery UI still
+deferred).  Phases 7, 8 still partial as before.  In-app feedback
+widget shipped out-of-phase as the support-loop replacement and
+keeps growing (urgent flag + MCP create tool + source-tagged rows
+this round).  Pre-MCP security audit drove a pass that closes the
+audit's P0/P1 list: per-share file allow-list, healthz bypass,
+bearer auto-revoke on HTTP/URL-leak, operator suspend/resume,
+SameSite=lax (oauth2-proxy needs Lax-not-Strict to survive
+Google's cross-site OAuth callback; Lax still blocks cross-origin
+form POST on modern browsers), app-level security headers, and
 the comprehensive auth-coverage test suite (69 cases).  Built-in
 MCP endpoint at ``/mcp`` (spec rev 2025-11-25) is live with the
 full tool + resource catalogue.  OAuth 2.1 authorization server at
 ``/oauth/{authorize,token,register}`` plus the RFC 8414 + 9728
 discovery surfaces lets claude.ai's web custom-connector dialog
-talk to stash without per-user JSON config.
+talk to stash without per-user JSON config.  **New this round**:
+the displaced-Encircle-user funnel (landing page → bulk importer
+with photo extraction → self-serve signup → cost-transparent
+free tier with capacity-tunable pool), plus a Playwright UI
+regression suite so the next CSS-specificity bug fails CI in a
+real browser instead of surviving three rounds of patch attempts.
 
 **Recent polish ships (2026-05-09 → 2026-05-12).** Day-to-day
 workflow + reliability work, mostly tightening surfaces that had
@@ -1398,6 +1532,165 @@ security pass + in-app feedback overhaul + onboarding rethink:
   on the accept page so a free-tier recipient doesn't worry
   about being billed.
 
+**Recent ships (2026-05-16, afternoon → evening tranche).** Two
+parallel tracks landed on top of the morning's RBAC / feedback /
+onboarding pass:
+
+* **Encircle-refugee funnel — landing → import → signup.**
+  Encircle's consumer Home Inventory product shut down 2025-12-17
+  leaving a documented cohort searching for a replacement.  Three
+  coupled pieces land the funnel:
+  * `/encircle-alternative` campaign landing page — auth-free,
+    ad-attribution-friendly, anti-SaaS-pricing-defaults copy.
+    Mobile-first header/hero/footer refresh on the public surface
+    shipped alongside (`style(public)`) so the page reads well
+    on phone-width ad traffic.
+  * `dao/imports.py` parser registry.  `parse(source, filename,
+    bytes) -> ParseResult` with a per-source `Importer` registry
+    (`PARSERS` dict); adding Sortly / HomeBox / MyStuff2 later is
+    one HEADER_MAP + one parser function each.
+    `execute_import(actor, items, source)` is product-agnostic —
+    creates a per-import `Location` named `"Imported from <Source>
+    (YYYY-MM-DD HH:MM)"`, maps each unique `room` value to a Stash
+    room, lands items in a per-room "Loose items" box via the
+    existing `dao_boxes.get_or_create_loose_for_room` helper.
+    `undo_import` cascade-deletes the whole import but refuses any
+    Location whose name doesn't carry the `IMPORTED_LOCATION_PREFIX`
+    so a typo'd id can't take out real data.
+  * Photo extraction across two paths (XLSX-embedded for the
+    mobile-app export + paired media ZIP for the web-app "Download
+    Photos & Videos" bundle).  `parse_encircle_xlsx` switches
+    openpyxl out of read-only mode so `ws._images` is populated;
+    each image's cell anchor cross-references the parsed item via
+    a `_sheet_row` hint left during normalisation.
+    `attach_encircle_media_zip` walks `Room/Filename.jpg` entries
+    with an exact → prefix → substring fuzzy-match ladder and only
+    fills items that didn't already pick up a photo from XLSX.
+    Receipt + data-tag filename tokens skipped — Stash has one
+    `photo` column per item today; multi-photo support is V3+.
+  * `/encircle-alternative` CTAs wired to `/import`; the funnel
+    actually closes.
+* **Self-serve free-tier signup + operator-tunable pool.**
+  * New `POST /signup` route lets an authed-but-tenantless user
+    create their own free tenant.  Replaces the `no_tenant.html`
+    dead end ("ask for an invite") with a real form.
+    Middleware-level bypass for `/signup` so the route reaches
+    a fresh user with no tenant yet; rest of the app still 303s
+    no-tenant browsers to `/signup` so the loop closes from any
+    URL they landed on.
+  * Reuses `dao_tenants.create_self_serve_tenant` (already shipped
+    for the bootstrap-invite flow); per-IP tenant-creation throttle
+    applies same as every other tenant-create path.
+  * `signup.html` renders three branches — capacity available
+    (form), capacity full (Pro upgrade + waitlist email), or POST
+    against a freshly-filled pool (409 + "just missed it" banner).
+  * **`deployment_settings` table** is the operator-tunables KV
+    surface.  `free_tier_bytes_total` defaults to 10 GB; the
+    operator bumps it from /admin when they scale their EBS volume.
+    Slot count = pool ÷ free per-tenant cap (100 MB) → 102 slots
+    at the default.  `dao_quotas.free_tier_capacity()` returns the
+    full picture: total bytes, per-slot bytes, total slots, used
+    slots, available, is_full.
+  * `/admin` gains a "Free-tier capacity" card with used /
+    available / total tiles + a "bump the pool" form.  Changes
+    take effect on next read — no restart.
+  * Public landing (`/`) + `/encircle-alternative` show a live
+    "N of M free spots open right now" line under the CTA; copy
+    flips to "Free tier full — leave us an email and we'll let you
+    know when slots open" when the pool's exhausted.
+* **100 MB flat free tier + cost-transparency rebuild.**
+  * `quotas.monthly_upload_bytes` renamed → `storage_bytes`
+    (idempotent ALTER) with FLAT semantics — "current footprint on
+    disk at any time", not "bytes uploaded per calendar month".
+    Delete to free space, same model as a phone's photo library.
+    `check_or_raise(surface="upload")` reads `storage_footprint`
+    (a walk of the encrypted upload dir) instead of summing the
+    per-month event ledger.
+  * AI calls + AI cost stay windowed (those reset cleanly on
+    month / day boundaries); storage doesn't.
+  * `/about/transparency` rewritten from a single mixed-unit cost
+    ledger into **three tables**: (1) per-Pro variable costs with
+    Typical / Heavy columns and an explicit Net-per-Pro → pool row
+    ($1.90 typical, $0.08 heavy at $4 Pro pricing); (2) the fixed
+    AWS bill (today's ~$33 / mo summed line-by-line + scale-tier
+    upper bounds); (3) a pool-clearing arc that derives breakeven
+    Pro counts from (1) and (2) (`~18 Pros today`, scaling to
+    `~160–530 Pros` at the upper deploy tier).  Replaces the old
+    "Remainder ≈ $0.50–$1.00" claim that didn't reconcile against
+    the per-Pro deductions above it.  Every number on the page
+    follows from the table above it now.
+  * `/about/pricing` copy: free = "100 MB total photo storage";
+    Pro = "5 GB total photo storage"; flat-cap language consistent
+    everywhere, no more "uploads per month".
+* **180-day inactivity → B2 cold archive (policy + schema; sweep
+  deferred).** Free accounts that go 180 days without audit-log
+  activity get zipped + uploaded to B2 cold storage on a separate
+  operator budget (so archive growth doesn't cannibalise the
+  active-backup line); local EBS slot frees up.  Sign back in →
+  operator triggers restore → data comes back exactly as it was.
+  Pro accounts are never archived for inactivity.  `tenants.
+  archived_at` + `tenants.archive_b2_key` added (see Tenant
+  lifecycle schema above); `dao_tenants.list_all` already computes
+  `last_activity_at` via subquery against `audit_log.created_at`,
+  so the 180-day check just reads that watermark.  /about/pricing
+  + /about/transparency + /signup carry the policy up-front so
+  newcomers see the trade before committing.  **Out of scope this
+  commit**: the sweep job (background or operator-triggered), the
+  B2 round-trip, and the recovery UI — all land in phase 14.
+* **Free-tier copy revamp.** Household-zone framing replaces the
+  closet/college-dorm framing ("the garage, the basement, the
+  workshop, the moving-day stack, the kids' bins, the holiday
+  decorations").  Grandfather clause spelled out: if the per-tenant
+  cap ever drops for new signups (vendor cost moves, paying base
+  shrinks), existing free accounts keep their original cap — the
+  operator squeezes the new-signup pool, not yours.  Resolution
+  lever called out: high-res phone shots are 3–6 MB, drop the
+  resolution and the 100 MB stretches a long way (AI surfaces
+  prefer higher-res but accuracy degrades gracefully).
+* **Feedback queue — urgent flag + agent-source rows.**
+  * `feedback.urgent` integer flag (0/1).  Urgent rows sort to
+    the top of each kanban column with a 🔥 pill + red left
+    border.  Operator flips per row via /admin; MCP exposes the
+    same surface as `admin_set_feedback_urgent`.
+  * `feedback.source` column (`'user_widget'` default; legacy
+    rows backfilled via ADD COLUMN WITH DEFAULT).  New MCP tool
+    `admin_create_feedback` inserts rows tagged `source='mcp'`
+    so visual-sweep findings land in the same triage queue as
+    real-user submissions with a clean "filter automated noise"
+    pill.  /admin renders the source as a pill on each card.
+* **Visual-sweep dev tool (out-of-tree).** New `tools/sweep/`
+  standalone — captures the public surface across an 18-viewport
+  device palette (phones → tablets → laptops, sorted ascending
+  width), asks Gemini Flash to flag layout bugs, streams results
+  into a local annotation gallery in real time.  Group-by-route
+  gallery view is default; "Flat" toggle drops back to the
+  original auto-fill grid.  No imports from stash — designed to
+  graduate to a generic Playwright pattern toolbelt later.  The
+  natural pairing with `admin_create_feedback` is "agent walks
+  the sweep manifest, one MCP call per layout finding."
+* **UI regression net via Playwright.** New `tests/ui/` —
+  pytest-playwright suite that drives a real browser against
+  uvicorn spawned in a subprocess.  In-process TestClient cannot
+  catch CSS / JS bugs; feedback #37/#41/#46 lived entirely in a
+  one-line CSS specificity collision and survived three rounds of
+  patch attempts because nothing in the tree ever rendered the
+  page in a browser to validate.  Verified by reintroducing the
+  original CSS bug temporarily: all four UI tests caught it.
+  Pytest now defaults to `xdist` parallel mode so the full suite
+  (including the browser tests) stays under a sane CI budget.
+* **Floorplan + queue polish.**
+  * Floorplan: box-preview modal close + watchdog made
+    unconditional (so a hung /preview fetch can't leave it
+    unkillable), root-cause fix on the unkillable Loading dialog
+    (CSS specificity collision masked the close handler from
+    landing on the right element), eraser paints over the
+    background image instead of refusing the stroke.
+  * Sort queue: "just in a room (no box yet)" picker option (lets
+    a maintainer accept an item to a room without committing to a
+    specific box up-front), crop controls moved under the photo
+    + scrollable on mobile, scroll position preserved across
+    Accept / Reject reloads.
+
 See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
@@ -1435,7 +1728,18 @@ See per-phase `[shipped]` / `[partial]` markers below.
    the contract — stale tokens 409 with `_conflict_http`, missing
    tokens fall back to last-write-wins for backwards compatibility.
 
-5. **[partial]** **Email delivery (Postmark) + invites.**
+5. **[partial]** **Email delivery (Postmark) + invites + sign-up.**
+   * **[shipped]** Self-serve free-tier sign-up — the fresh-email
+     shape from "Sign-up + onboarding".  `POST /signup` creates the
+     tenant via `dao_tenants.create_self_serve_tenant`, refuses
+     when `dao_quotas.free_tier_capacity()` reports `is_full=True`,
+     and surfaces a waitlist-email path for the full case.  Public
+     landing + `/encircle-alternative` carry a live capacity badge
+     ("N of M free spots open").  Operator-tunable pool via the
+     new `deployment_settings` table — `free_tier_bytes_total`
+     defaults to 10 GB (≈102 slots at the 100 MB per-tenant cap);
+     the operator bumps it from `/admin` on the back of an EBS
+     scale-out.
    * **[shipped]** Token-based invite links with the bypass logic
      from "Sign-up + onboarding".  `dao/invites.py` (mint / get /
      redeem / list / revoke).  Per-tenant `/usage` surface with the
@@ -1548,13 +1852,23 @@ See per-phase `[shipped]` / `[partial]` markers below.
 
 10. **[shipped]** **Quotas + enforcement + anti-abuse.**
     * `dao/quotas.py` — three caps per tenant
-      (``monthly_ai_calls``, ``monthly_upload_bytes``,
+      (``monthly_ai_calls``, ``storage_bytes``,
       ``daily_ai_cost_micros``) with plan defaults (free vs pro)
       + per-tenant overrides via the existing ``quotas`` table
       (the daily-cost field rides in the JSON blob since it
-      arrived after the schema).  ``check_or_raise`` is the
-      pre-flight gate; route layer translates ``QuotaExceeded``
-      to 429 with cap + reset-window in the body.
+      arrived after the schema).  **Storage is a FLAT cap**, not
+      monthly cumulative — ``check_or_raise(surface="upload")``
+      reads the current on-disk footprint and refuses if total +
+      new > cap.  The original ``monthly_upload_bytes`` column was
+      renamed to ``storage_bytes`` in 2026-05-16 when the free
+      tier shifted to a delete-to-free-space model (same model as
+      a phone's photo library).  AI calls + AI cost stay windowed
+      (those reset cleanly on month / day boundaries); only
+      storage went flat.
+    * Free tier: 100 MB flat storage, 5 GB on Pro.  Free-tier slot
+      count is gated by the operator-tunable
+      ``deployment_settings.free_tier_bytes_total`` (default 10 GB)
+      — see phase 5 + the "Free-tier capacity" /admin card.
     * Enforced at every AI call site (``/ingest``,
       ``queue_match``, ``generate_box_art``) and the upload
       path (``save_photo_bytes``).  ``daily_ai_cost_micros`` is
@@ -1630,12 +1944,25 @@ See per-phase `[shipped]` / `[partial]` markers below.
       done), per-row screenshot + captured-DOM links, CSV/JSON
       export, MCP triage tools (``admin_list_feedback``,
       ``admin_get_feedback`` with optional ``include`` array,
-      ``admin_set_feedback_status``, ``admin_feedback_counts``).
+      ``admin_set_feedback_status``, ``admin_set_feedback_urgent``,
+      ``admin_create_feedback``, ``admin_feedback_counts``).
       ``feedback`` + ``feedback_handles`` schema in "Schema
       additions".  Done feedback earns the submitter a star —
       counted via `WHERE status='done' AND actor_email=…`, no
       new column.  Public-leaderboard handle is explicit opt-in
-      so a star never reveals an email's local-part.
+      so a star never reveals an email's local-part.  Urgent
+      flag (``feedback.urgent``) floats major-blocker rows to
+      the top of each column with a 🔥 pill + red left border.
+      Source tagging (``feedback.source``) distinguishes
+      ``user_widget`` from ``mcp``-driven sweep findings so
+      operators can filter automated noise.
+    * **[shipped]** Free-tier capacity card.  Used / available /
+      total tiles for the free pool + a "bump the pool" form
+      against ``deployment_settings.free_tier_bytes_total``.
+      Audit-logs ``settings.change`` per bump.  Slot count =
+      pool ÷ per-tenant cap; ``dao_quotas.free_tier_capacity()``
+      counts active (not soft-deleted, not inactivity-archived)
+      free-plan tenants for the "used" tile.
     * **[shipped]** Tenant last-activity column +  per-member
       ``last_active_at`` (joined on ``audit_log.actor_email``)
       surfaced as a disclosure under each tenant row.
@@ -1682,16 +2009,47 @@ See per-phase `[shipped]` / `[partial]` markers below.
       existing access tokens keep working until natural expiry
       (we don't iterate ``api_tokens`` to mass-revoke).
 
-13. **User usage page + cost transparency + GDPR controls.**
-    `/usage` rebuilt as the per-tenant home for plan / role / quotas
-    / backups / members / shares / locale-prefs / notification-prefs.
-    The five-line cost-transparency block ships in the same view.
-    "Download my data" GDPR-portability bundle. `/about/pricing`,
-    `/about/sub-processors`, `/about/privacy`, `/about/dpa` static
-    pages.
+13. **[partial]** **User usage page + cost transparency + GDPR
+    controls.**
+    * **[shipped]** `/usage` rebuilt as the per-tenant home for
+      plan / role / quotas / sparkline trends / outbound shares /
+      API tokens / backups download / billing card.  Quota meters
+      with 80%/100% banners.  Stripe upgrade card when billing is
+      configured.
+    * **[shipped]** Public marketing pages: `/about/pricing`,
+      `/about/transparency` (rebuilt 2026-05-16 with three tables
+      that actually close the math — per-Pro variable, fixed AWS,
+      pool-clearing arc; see "Recent ships" above),
+      `/about/sub-processors`, `/about/privacy`, `/about/dpa`,
+      `/about/terms`.  Mobile-first header / hero / footer pass on
+      the public surface alongside.
+    * **[deferred]** The five-line per-tenant cost-transparency
+      block on /usage (Direct vendor passthrough / Community
+      backups / Community free-tier / Operator payout / Margin)
+      that reconciles to the aggregate `/about/pricing` view —
+      the aggregate cost panel exists on /admin (phase 12) but
+      the per-tenant breakdown UI hasn't shipped.  "Download my
+      data" GDPR-portability bundle also deferred.
 
-14. **Tenant lifecycle.** Soft-delete UX, reactivate flow, scheduled
-    hard-delete job, archived-backup retention on B2.
+14. **[partial]** **Tenant lifecycle.**
+    * **[shipped]** Soft-delete / reactivate / hard-delete
+      controls on /admin (cross-listed in phase 12).
+      ``deleted_at`` + ``hard_delete_after`` columns, 30-day grace
+      window, hard-delete requires typed ``confirm=<tenant_name>``.
+    * **[shipped, policy + schema only]** 180-day free-tier
+      inactivity → B2 cold archive.  ``tenants.archived_at`` +
+      ``tenants.archive_b2_key`` columns added (separate from the
+      soft-delete `archived_backup_*` columns — see "Free-tier
+      inactivity archive vs. soft-delete archive" in the Schema
+      section).  Policy declared on /about/pricing +
+      /about/transparency + /signup.  Pro tenants are never
+      archived for inactivity.
+    * **[deferred]** Scheduled hard-delete job (cron-driven
+      promotion past `hard_delete_after`), archived-backup
+      retention pruner, the inactivity sweep itself (background
+      or operator-triggered), the B2 cold-storage upload path,
+      and the operator-approved recovery flow that brings an
+      archived tenant back.
 
 15. **[shipped]** **Tenant switcher (top-right).** Persistent
     avatar/initials menu in the global header: list of tenants the
@@ -1870,6 +2228,20 @@ no 403/404.
   `test_import_round_trip_restores_floorplans_and_background_art`
   but assert tenant_id is preserved and rows of other tenants don't
   leak.
+- **UI regression net:** `tests/ui/` is a pytest-playwright suite
+  that drives a real browser against uvicorn spawned in a
+  subprocess.  In-process TestClient cannot catch CSS / JS bugs;
+  feedback #37/#41/#46 lived entirely in a one-line CSS
+  specificity collision and survived three rounds of patch
+  attempts because nothing in the tree ever rendered the page in
+  a browser to validate.  Any non-trivial CSS / JS change should
+  ship a UI test that fails when reverted.
+- **Parallel test runs.** Default pytest invocation uses
+  ``pytest-xdist`` (worker count auto-derived from CPU count) so
+  the suite — including the UI tests — stays under a sane CI
+  budget.  Tests that genuinely cannot run in parallel (DB-global
+  state, env-var mutation) declare ``@pytest.mark.serial`` and
+  land in the dedicated single-worker group.
 
 ## Commit message conventions
 
@@ -1917,11 +2289,15 @@ here so we don't repeat it.
 
 ## Open decisions
 
-- **Free-tier numerical caps.** Initial values: 100 MB photo storage,
-  one retained backup. AI quota is still TBD — pick after the
+- **Free-tier numerical caps.** Storage cap resolved at **100 MB
+  flat** (delete-to-free-space, not monthly cumulative).  The
+  free pool itself is operator-tunable via the
+  ``deployment_settings.free_tier_bytes_total`` row; default
+  10 GB → 102 slots.  AI quota is still TBD — pick after the
   telemetry step lands a baseline of typical free-user behaviour.
   Caps may shrink as the free base grows; the tier itself is
-  permanent.
+  permanent, and existing free accounts are grandfathered (cap
+  changes apply to new signups only).
 - **Paid tier shape.** Single Pro tier with transparent cost
   breakdown, vs. metered "pay for what you use" billing. Both fit
   the ethos; metered is more legible but harder to operate. Decide
@@ -1981,9 +2357,17 @@ here so we don't repeat it.
   can force immediate hard-delete for GDPR. UX described in "Tenant
   lifecycle".
 - **Sign-up flow**: self-serve tenant creation on first sign-in for
-  fresh emails; invite tokens and active object shares act as
-  bypass tickets through the global allowlist for first sign-in.
-  See "Sign-up + onboarding".
+  fresh emails (shipped 2026-05-16 via ``POST /signup``, gated by
+  the operator-tunable free-tier capacity pool); invite tokens and
+  active object shares act as bypass tickets through the global
+  allowlist for first sign-in.  See "Sign-up + onboarding".
+- **Free-tier inactivity policy**: 180 days of no audit-log
+  activity → B2 cold archive (recoverable; see Tenant lifecycle
+  schema for the ``archived_at`` / ``archive_b2_key`` columns
+  and the contrast with the soft-delete archive surface).  Pro
+  accounts are never inactivity-archived.  Policy declared on
+  /about/pricing + /about/transparency + /signup so newcomers
+  see the trade before committing.
 - **Notification provider**: Postmark; SES as fallback if cost
   becomes the deciding factor. Local dev writes to `mail/`.
 - **Anti-abuse posture**: tenant-creation throttle, email-domain
