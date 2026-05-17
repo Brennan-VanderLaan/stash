@@ -297,6 +297,39 @@ def _ensure_stripe_customer(tenant_id: int, actor_email: str) -> str:
 _PRO_ACTIVE_STATUSES = {"active", "trialing"}
 
 
+def _to_dict(obj) -> dict:
+    """Normalise a Stripe SDK response object into a plain dict.
+
+    ``stripe.Webhook.construct_event`` returns a ``StripeObject``
+    that supports subscript access (``obj["foo"]``) and attribute
+    access (``obj.foo``) but NOT the dict ``.get()`` method —
+    accessing ``.get`` triggers ``StripeObject.__getattr__`` which
+    raises ``AttributeError: get`` because there's no ``get`` key
+    in the payload.  The old handlers were all written against
+    ``dict`` shape (tests pass plain dicts) and crashed in prod
+    with the AttributeError.
+
+    Converting to a plain dict at the handler entry point keeps
+    the rest of the code idiomatic + makes the test fakes
+    representative of production behaviour."""
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    # StripeObject.to_dict() walks the object recursively, turning
+    # nested StripeObjects into plain dicts too.  That's what we
+    # want — the handlers may pluck nested fields.
+    to_dict = getattr(obj, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    # Defensive fallback for anything else that quacks dict-like
+    # (mappings, generic iterables of pairs).
+    try:
+        return dict(obj)
+    except (TypeError, ValueError):
+        return {}
+
+
 def process_webhook_event(payload: bytes, signature: str) -> dict:
     """Verify a Stripe webhook payload's signature, then process
     the event.  Returns a small dict describing what changed so the
@@ -339,10 +372,11 @@ def process_webhook_event(payload: bytes, signature: str) -> dict:
             "event_type": et}
 
 
-def _handle_checkout_completed(session: dict) -> dict:
+def _handle_checkout_completed(session) -> dict:
     """Initial purchase.  Stamp every field we got, flip plan to
     pro.  client_reference_id tells us which tenant (set when we
     created the Checkout session)."""
+    session = _to_dict(session)
     tenant_id_raw = session.get("client_reference_id")
     if not tenant_id_raw:
         _log.warning(
@@ -385,10 +419,11 @@ def _handle_checkout_completed(session: dict) -> dict:
     return {"action": "upgraded", "tenant_id": tenant_id}
 
 
-def _handle_subscription_updated(sub: dict) -> dict:
+def _handle_subscription_updated(sub) -> dict:
     """Status / period change.  Look up the tenant by Stripe
     subscription id (or customer id as fallback) and mirror the
     new state."""
+    sub = _to_dict(sub)
     sub_id = sub.get("id")
     customer_id = sub.get("customer")
     status = sub.get("status")
@@ -421,8 +456,9 @@ def _handle_subscription_updated(sub: dict) -> dict:
             "plan": plan, "status": status}
 
 
-def _handle_subscription_deleted(sub: dict) -> dict:
+def _handle_subscription_deleted(sub) -> dict:
     """Cancellation / expiry — back to free."""
+    sub = _to_dict(sub)
     sub_id = sub.get("id")
     customer_id = sub.get("customer")
     tenant_id = _tenant_for_subscription(sub_id, customer_id)

@@ -73,14 +73,6 @@ def _make_fake_stripe_module():
             return _FakePortalSession()
     fake.billing_portal = type("b", (), {"Session": PortalSession})()
 
-    class Webhook:
-        @staticmethod
-        def construct_event(payload, sig, secret):
-            fake.calls.append(("Webhook.construct_event", payload, sig, secret))
-            # Tests feed a JSON event body directly.
-            return json.loads(payload)
-    fake.Webhook = Webhook
-
     # Used by the prod_→price_ resolution flow when an operator
     # accidentally pastes a product id in ``STRIPE_PRICE_ID_PRO``.
     # ``fake.products`` is a dict the test seeds with plain dicts;
@@ -93,18 +85,49 @@ def _make_fake_stripe_module():
 
     class _FakeStripeObject:
         """Mirror the bits of ``stripe.StripeObject`` we touch:
-        attribute access via ``getattr`` returns the field, every
-        unknown attribute raises ``AttributeError`` (specifically,
-        ``.get`` does NOT silently return a method — that's the
-        prod regression we're pinning)."""
+
+        * ``obj.foo`` (attribute access) — works for set fields
+        * ``obj["foo"]`` (subscript) — works for set fields
+        * ``obj.get`` — **raises AttributeError** (the prod
+          regression we're pinning; real StripeObject doesn't
+          have ``.get`` as a dict method)
+        * ``obj.to_dict()`` — recursive dict conversion, matching
+          the real SDK so the handler-side normalisation works
+        """
         def __init__(self, data):
+            object.__setattr__(self, "_data", {})
             for k, v in data.items():
-                # Nested objects (default_price as an expanded
-                # Price object) also get wrapped so attribute
-                # access keeps working.
-                if isinstance(v, dict) and "id" in v:
+                # Nested dicts (e.g. ``data.object`` for a webhook
+                # event) also get wrapped so the recursion matches
+                # real StripeObject semantics.
+                if isinstance(v, dict):
                     v = _FakeStripeObject(v)
+                self._data[k] = v
                 object.__setattr__(self, k, v)
+        def __getitem__(self, key):
+            if key in self._data:
+                return self._data[key]
+            raise KeyError(key)
+        def to_dict(self):
+            out = {}
+            for k, v in self._data.items():
+                if isinstance(v, _FakeStripeObject):
+                    out[k] = v.to_dict()
+                else:
+                    out[k] = v
+            return out
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, sig, secret):
+            fake.calls.append(("Webhook.construct_event", payload, sig, secret))
+            # Tests feed a JSON event body; wrap into a fake
+            # StripeObject so the handler-side ``_to_dict`` path
+            # exercises the same shape that prod does.  Plain
+            # ``json.loads`` would return a dict, which has
+            # ``.get()`` and would mask the regression.
+            return _FakeStripeObject(json.loads(payload))
+    fake.Webhook = Webhook
 
     class Product:
         @staticmethod
