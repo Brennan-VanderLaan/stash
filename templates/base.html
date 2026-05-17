@@ -176,6 +176,208 @@
   })();
   </script>
 
+  {# Loose-tray sidebar — feedback from Nondre's first-user
+     thread: "have a right side bar of photos that haven't been
+     allocated somewhere yet, drag and drop into the ux at will."
+     Shows items currently parked in any ``is_loose=1`` box for
+     this tenant ("in a room but no specific box yet").  Drag a
+     thumbnail onto any box card / box tile on the page → POST
+     /items/{id}/move and the item leaves the tray.  Persistent
+     across pages so the workflow survives navigation. #}
+  {% if request.state.actor and request.state.actor.email %}
+  {% set _loose_count = loose_count_for(request.state.actor) %}
+  {% if _loose_count > 0 %}
+  {% set _loose_items = loose_items_for(request.state.actor) %}
+  <aside id="loose-tray" class="loose-tray" data-loose-count="{{ _loose_count }}">
+    <button type="button" class="loose-tray-toggle"
+            aria-controls="loose-tray-panel"
+            aria-expanded="false"
+            data-loose-toggle>
+      <span class="loose-tray-toggle-glyph" aria-hidden="true">📦</span>
+      <span class="loose-tray-toggle-count">{{ _loose_count }}</span>
+      <span class="loose-tray-toggle-label">{{ _("loose") }}</span>
+    </button>
+    <div id="loose-tray-panel" class="loose-tray-panel" hidden>
+      <div class="loose-tray-header">
+        <strong>{{ _("Items without a home") }}</strong>
+        <button type="button" class="loose-tray-close"
+                aria-label="Collapse tray"
+                data-loose-toggle>×</button>
+      </div>
+      <p class="loose-tray-hint text-sm text-muted">
+        {{ _("Drag a card onto any box on the page to put it there.") }}
+      </p>
+      <div class="loose-tray-list" data-loose-list>
+        {% for it in _loose_items %}
+        <div class="loose-tray-card"
+             data-loose-item-id="{{ it.id }}"
+             draggable="true"
+             title="{{ it.name }}{% if it.room_name %} · in {{ it.room_name }}{% endif %}">
+          {% if it.photo %}
+          <img class="loose-tray-card-thumb"
+               src="/thumbs/{{ it.photo }}"
+               alt="{{ it.name }}"
+               loading="lazy"
+               draggable="false">
+          {% else %}
+          <span class="loose-tray-card-thumb loose-tray-card-thumb-empty"
+                aria-hidden="true">📦</span>
+          {% endif %}
+          <span class="loose-tray-card-text">
+            <strong class="loose-tray-card-name">{{ it.name }}</strong>
+            {% if it.room_name %}
+            <span class="text-sm text-muted">{{ it.room_name }}</span>
+            {% endif %}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+      {% if _loose_count > _loose_items | length %}
+      <p class="loose-tray-more text-sm text-muted">
+        + {{ _loose_count - (_loose_items | length) }} {{ _("more not shown") }}
+      </p>
+      {% endif %}
+    </div>
+  </aside>
+  <script>
+  (function () {
+    var tray = document.getElementById('loose-tray');
+    if (!tray) return;
+    var panel = document.getElementById('loose-tray-panel');
+    var list  = tray.querySelector('[data-loose-list]');
+
+    // Persist expanded state — once a user opens the tray we
+    // assume they want it open next page too.
+    var EXPANDED_KEY = 'stash-loose-tray-open';
+    function setExpanded(open) {
+      tray.classList.toggle('loose-tray-open', open);
+      panel.hidden = !open;
+      var toggle = tray.querySelector('.loose-tray-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      try { localStorage.setItem(EXPANDED_KEY, open ? '1' : '0'); }
+      catch (e) { /* private mode */ }
+    }
+    try {
+      if (localStorage.getItem(EXPANDED_KEY) === '1') setExpanded(true);
+    } catch (e) { /* fine, stays closed */ }
+
+    tray.querySelectorAll('[data-loose-toggle]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        setExpanded(panel.hidden);
+      });
+    });
+
+    // ── Drag from sidebar → drop on any element with
+    //    ``data-box-id`` on the current page.  Uses the HTML5
+    //    drag-and-drop API (distinct from the floorplan's
+    //    Pointer Events flow — they don't conflict).
+    var currentDrag = null;
+
+    list.addEventListener('dragstart', function (e) {
+      var card = e.target.closest('.loose-tray-card');
+      if (!card) return;
+      currentDrag = {
+        itemId: card.dataset.looseItemId,
+        card: card,
+      };
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', 'stash-loose-item:' + card.dataset.looseItemId);
+      card.classList.add('loose-tray-card-dragging');
+      document.body.classList.add('loose-drag-active');
+    });
+    list.addEventListener('dragend', function (e) {
+      var card = e.target.closest('.loose-tray-card');
+      if (card) card.classList.remove('loose-tray-card-dragging');
+      document.body.classList.remove('loose-drag-active');
+      // Clear any lingering drop-target highlight if the gesture
+      // ended somewhere unexpected (e.g. dropped off-window).
+      document.querySelectorAll('.loose-drop-target').forEach(function (el) {
+        el.classList.remove('loose-drop-target');
+      });
+      currentDrag = null;
+    });
+
+    function findDropBox(el) {
+      if (!el) return null;
+      // Walk up to find any ancestor with ``data-box-id``.  This
+      // matches every existing surface — box-card, room-box-tile,
+      // search-result, etc.
+      var node = el.closest('[data-box-id]');
+      if (!node) return null;
+      var raw = node.dataset.boxId;
+      var n = Number(raw);
+      if (!raw || !Number.isFinite(n) || n <= 0) return null;
+      return { node: node, boxId: raw };
+    }
+
+    document.addEventListener('dragover', function (e) {
+      if (!currentDrag) return;
+      var hit = findDropBox(e.target);
+      if (!hit) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // Highlight the hovered box.  Clear any previous target.
+      document.querySelectorAll('.loose-drop-target').forEach(function (el) {
+        if (el !== hit.node) el.classList.remove('loose-drop-target');
+      });
+      hit.node.classList.add('loose-drop-target');
+    });
+    document.addEventListener('dragleave', function (e) {
+      if (!currentDrag) return;
+      var hit = findDropBox(e.target);
+      if (hit) hit.node.classList.remove('loose-drop-target');
+    });
+    document.addEventListener('drop', function (e) {
+      if (!currentDrag) return;
+      var hit = findDropBox(e.target);
+      if (!hit) return;
+      e.preventDefault();
+      var itemId = currentDrag.itemId;
+      var sourceCard = currentDrag.card;
+      var targetNode = hit.node;
+      var boxId = hit.boxId;
+      currentDrag = null;
+      targetNode.classList.remove('loose-drop-target');
+
+      // Optimistic UI — remove the card from the tray
+      // immediately; restore on failure.
+      var parent = sourceCard.parentNode;
+      var nextSibling = sourceCard.nextSibling;
+      sourceCard.remove();
+      updateTrayCount(-1);
+
+      fetch('/items/' + itemId + '/move', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({ box_id: boxId }),
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // Brief visual confirmation on the target.
+        targetNode.classList.add('loose-drop-success');
+        setTimeout(function () {
+          targetNode.classList.remove('loose-drop-success');
+        }, 600);
+      }).catch(function (err) {
+        // Restore the card on failure.
+        if (parent) parent.insertBefore(sourceCard, nextSibling);
+        updateTrayCount(+1);
+        alert("Couldn't move item: " + (err.message || err));
+      });
+    });
+
+    function updateTrayCount(delta) {
+      var current = Number(tray.dataset.looseCount || '0');
+      var next = Math.max(0, current + delta);
+      tray.dataset.looseCount = next;
+      var countEl = tray.querySelector('.loose-tray-toggle-count');
+      if (countEl) countEl.textContent = next;
+      if (next === 0) tray.hidden = true;
+    }
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
+
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
   {# Global drag-drop ingest target.  Drop one or more image files
@@ -281,7 +483,7 @@
       }
       toast.hidden = false;
       clearTimeout(toast._timer);
-      // Progress toasts stick until replaced; success/error
+      // In-progress kind sticks until replaced; success/error
       // dismiss after a comfortable read.
       if (kind !== 'progress') {
         toast._timer = setTimeout(function () { toast.hidden = true; }, 8000);
@@ -330,10 +532,10 @@
             'error'
           );
         } else {
-          showToast('Upload failed (HTTP ' + r.status + ').', 'error');
+          showToast("Upload didn't complete (HTTP " + r.status + ").", 'error');
         }
       }).catch(function (err) {
-        showToast('Upload failed: ' + (err.message || err), 'error');
+        showToast("Couldn't upload: " + (err.message || err), 'error');
       });
     }
   })();

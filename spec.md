@@ -1691,6 +1691,57 @@ onboarding pass:
     + scrollable on mobile, scroll position preserved across
     Accept / Reject reloads.
 
+**First-user feedback round (2026-05-17, Nondre + #48 thread).**
+Real-user dogfood surfaced three coupled UX gaps; this tranche
+ships fixes for all three.
+
+* **`/locations/{id}` discoverability fix (#48).** The page hid
+  the rename/delete location forms inside a collapsed `<details>`
+  AND the floor rename/replace/delete forms in another `<details>`
+  below the floorplan, only in edit mode — three separate
+  surfaces a user had to discover one at a time.  Replaced with
+  a single ``⚙️ Settings`` button that opens a unified dialog
+  with all location-level + floor-level controls in labelled
+  sections.  ``✏️ Edit rooms`` is now a prominent primary
+  button (not a small ``btn-sm`` tucked in the corner); edit-mode
+  help banner moved ABOVE the floorplan with the ``✓ Done editing``
+  exit visible inline.  Route contracts unchanged — only the
+  surrounding HTML moved.
+* **Global drag-drop ingest from any page.**  Drop a photo file
+  from the OS onto any page → POST ``/ingest`` as a bulk upload
+  (the existing route accepts ``list[UploadFile]`` already, so
+  no backend change).  ``base.html`` ships a window-level
+  dragenter/dragover/drop handler with the standard counter
+  pattern for child-element traversal.  Stays on the current
+  page; success shows a corner toast with an "Open Ingest" link.
+  Public marketing pages don't get the chrome (gated on
+  ``actor.email``).  Mobile users don't see the overlay — touch
+  doesn't drag files from the OS; the regular ``/ingest`` page
+  stays the canonical mobile entry.
+* **Loose-tray sidebar — items without a home (Nondre's
+  unallocated-items thread).**  Persistent right-edge floating
+  panel showing items currently parked in any ``is_loose=1`` box
+  (per-room "Loose items" boxes for stuff that's in a room but
+  no specific box yet).  Drag a thumbnail onto any element with
+  ``data-box-id`` on the page → POST ``/items/{id}/move`` and
+  the item leaves the tray; on failure the card restores
+  (optimistic UI).  Drop target highlight + a subtle scaffold
+  tint applied to every ``[data-box-id]`` surface during drag so
+  the user can find targets at a glance.  ``dao_items.list_loose``
+  (capped at 20 for the tray, with "+N more" pointer) +
+  ``dao_items.count_loose`` (cheap COUNT for the badge) are the
+  data layer; both wired into Jinja globals so non-template
+  routes (thumbs, uploads, MCP, API) pay nothing.  Tray hidden
+  on phones (< 720 px) — cross-page drag from a touch device is
+  clunky, and the sidebar would steal screen real estate from
+  actual content; the items remain reachable via the existing
+  ``/queue`` + per-box views on mobile.  ``data-box-id``
+  attribute added to box-card on ``/home`` + ``/rooms/{id}/boxes``
+  + the top-of-page summary on ``/boxes/{id}`` so those surfaces
+  accept drops.  Floorplan room-box-tiles already had the
+  attribute (used by the in-page box-DnD flow) — they double as
+  loose-tray drop targets without extra wiring.
+
 See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite

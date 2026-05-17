@@ -973,6 +973,31 @@ def _static_version() -> str:
 templates.env.globals["static_version"] = _static_version
 
 
+def _loose_items_for(actor) -> list[dict]:
+    """Jinja global — backs the loose-tray sidebar in base.html.
+    Called only when a template actually renders; non-template
+    routes (thumbs, uploads, MCP, API) pay nothing.  Capped at 20
+    rows so a tenant with hundreds of unallocated items doesn't
+    make every page render expensive; the sidebar surfaces "+N
+    more" to /loose for the full list."""
+    if actor is None or getattr(actor, "tenant_id", None) is None:
+        return []
+    return dao_items.list_loose(actor, limit=20)
+
+
+def _loose_count_for(actor) -> int:
+    """Jinja global — count of unallocated items for the badge.
+    Cheaper than ``_loose_items_for`` (no joins on photo /
+    room_name), used on every template render."""
+    if actor is None or getattr(actor, "tenant_id", None) is None:
+        return 0
+    return dao_items.count_loose(actor)
+
+
+templates.env.globals["loose_items_for"] = _loose_items_for
+templates.env.globals["loose_count_for"] = _loose_count_for
+
+
 def _sparkline_svg(values, *, width: int = 100, height: int = 24) -> str:
     """Inline-SVG sparkline.  Server-rendered (no JS) so the markup
     is part of the response payload and the meter is visible

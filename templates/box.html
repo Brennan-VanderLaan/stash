@@ -27,7 +27,7 @@
    visible "Edit" CTA + chevron in the summary so it's obviously
    interactive without the user needing the onboarding tour to find
    it. #}
-<details class="card box-edit-card">
+<details class="card box-edit-card" data-box-id="{{ box.id }}">
   <summary class="card-summary-soft box-edit-summary">
     <div class="box-edit-summary-meta">
       <div class="card-title card-title-lg">{{ box.name }}</div>

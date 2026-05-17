@@ -230,19 +230,32 @@ def test_about_transparency_breaks_down_costs(tmp_path, monkeypatch):
     """The transparency page surfaces the cost ledger including the
     MA-tax line and the labor allocation — both load-bearing pieces
     of the "honest about margins" posture.  Pin the headline rows so
-    a future copy refactor can't quietly drop them."""
+    a future copy refactor can't quietly drop them.
+
+    Ledger restructured 2026-05-16 into three tables (per-Pro
+    variable, fixed AWS, pool-clearing arc) so the math actually
+    closes; the assertions track the new line labels but the
+    semantic intent — every cost category visible — is preserved."""
     app_mod = _bootstrap_app(tmp_path, monkeypatch)
     with TestClient(app_mod.app) as c:
         page = c.get("/about/transparency").text
-    # Cost lines: each row in the ledger.  Bandwidth + storage
-    # split into separate lines (AWS egress vs B2 backup storage)
-    # because they hit different providers — confusing them was
-    # the bug that triggered this rework.
-    for line in ("Stripe processing fee", "AI APIs", "Compute",
-                 "Bandwidth (AWS egress)", "Backblaze B2",
+    # Per-Pro variable table (Table 1).
+    for line in ("Stripe processing fee", "AI APIs",
+                 "Backblaze B2",
                  "State business taxes",
-                 "Allocated to humans", "Remainder"):
-        assert line in page
+                 "Allocated to humans",
+                 # Replacement for the old "Remainder" — same
+                 # concept, derived correctly now.
+                 "Net per Pro"):
+        assert line in page, f"missing per-Pro line: {line!r}"
+    # Fixed AWS table (Table 2).
+    for line in ("Prod compute", "Staging compute",
+                 # "Bandwidth (egress)" — the table heading already
+                 # names AWS, so the per-row "(AWS egress)" qualifier
+                 # was dropped as redundant.
+                 "Bandwidth (egress)",
+                 "Total fixed"):
+        assert line in page, f"missing fixed-AWS line: {line!r}"
     # Roles glossary — Maintainer + Read-only + Operator + Admin
     # all named so the org-structure signal is on the public page.
     for role in ("Maintainer", "Read-only", "Operator", "Admin"):

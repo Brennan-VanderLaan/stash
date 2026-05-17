@@ -28,6 +28,59 @@ def list_for_box(actor: Actor, box_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_loose(actor: Actor, *, limit: int = 50) -> list[dict]:
+    """Items currently parked in a ``is_loose=1`` box — "in a room
+    but no specific box yet".  Powers the global loose-tray sidebar
+    in base.html so a user can see + drag every unallocated item
+    into a real box from any page.
+
+    Returns oldest-first because the rationale for the tray is
+    "stuff you forgot to put somewhere", and oldest items are the
+    most aged-off — surfacing them first nudges the user to
+    clean those up before adding to the pile.  Each row carries
+    enough context (item id + name + photo + source room name)
+    that the tray renders the thumbnail without a second query.
+
+    Caps at ``limit`` rows so a tenant with thousands of loose
+    items doesn't make every page render expensive; the sidebar
+    surfaces "+N more" pointing at /loose for the full list."""
+    if actor.tenant_id is None:
+        return []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT i.id, i.name, i.photo, i.box_id, "
+            "       b.room_id, r.name AS room_name "
+            "FROM items i "
+            "JOIN boxes b ON b.id = i.box_id AND b.tenant_id = i.tenant_id "
+            "LEFT JOIN rooms r ON r.id = b.room_id "
+            "WHERE i.tenant_id = ? "
+            "  AND COALESCE(b.is_loose, 0) = 1 "
+            "ORDER BY i.created_at ASC, i.id ASC "
+            "LIMIT ?",
+            (actor.tenant_id, limit + 1),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_loose(actor: Actor) -> int:
+    """Number of items currently in a ``is_loose=1`` box for the
+    actor's tenant.  Cheap one-row query — used by the loose-tray
+    badge in base.html even on pages where the full list isn't
+    rendered."""
+    if actor.tenant_id is None:
+        return 0
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n "
+            "FROM items i "
+            "JOIN boxes b ON b.id = i.box_id AND b.tenant_id = i.tenant_id "
+            "WHERE i.tenant_id = ? "
+            "  AND COALESCE(b.is_loose, 0) = 1",
+            (actor.tenant_id,),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def get_by_id(actor: Actor, item_id: int) -> dict:
     if actor.tenant_id is None:
         raise NotFoundError(f"item {item_id}")

@@ -53,6 +53,7 @@
     {% for b in g.boxes %}
     <li>
       <a href="/boxes/{{ b.id }}" class="box-card"
+         data-box-id="{{ b.id }}"
          style="--tile-color: {{ b.color or b.room_color or '#4ade80' }};
                 --room-color: {{ b.room_color or '#4ade80' }};">
         <div class="box-card-body">

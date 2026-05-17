@@ -437,6 +437,165 @@ header h1 a { color: var(--accent); text-decoration: none; }
   content: '⏳ ';
   margin-right: 0.25rem;
 }
+
+/* === Loose-tray sidebar (Nondre's first-user thread) ==========
+   Right-edge floating tray of items currently parked in a
+   ``is_loose=1`` box ("in a room but no specific box yet").
+   Persistent across pages so the workflow survives navigation;
+   drag a thumbnail onto any box card / box tile on the page to
+   put it there.
+
+   **Hidden on phones.**  Cross-page drag from a touch device is
+   clunky at best, and the sidebar would just steal screen real
+   estate from the actual content.  Surfaces the same items via
+   /queue + per-box views as before.  Re-enable at 720 px (the
+   project's mobile breakpoint). */
+.loose-tray {
+  display: none;
+}
+@media (min-width: 720px) {
+  .loose-tray {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    position: fixed;
+    right: 1rem;
+    bottom: calc(1rem + var(--safe-bottom, 0px));
+    z-index: 150;
+    max-height: calc(100vh - 6rem);
+    pointer-events: none;
+  }
+  .loose-tray > * { pointer-events: auto; }
+}
+.loose-tray-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.85rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.loose-tray-toggle:hover { filter: brightness(1.08); }
+.loose-tray-toggle-glyph { font-size: 1.05rem; }
+.loose-tray-toggle-count {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.05rem 0.5rem;
+  border-radius: 1rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 1.75rem;
+  text-align: center;
+}
+.loose-tray-open .loose-tray-toggle {
+  border-radius: 2rem 2rem 0 0;
+  box-shadow: none;
+}
+.loose-tray-panel {
+  width: 18rem;
+  max-height: calc(100vh - 8rem);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius) 0 var(--radius) var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow: hidden;
+  margin-bottom: -1px;  /* meet the toggle's bottom border */
+}
+.loose-tray-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.loose-tray-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.4rem;
+}
+.loose-tray-close:hover { color: var(--text); }
+.loose-tray-hint { margin: 0; }
+.loose-tray-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 0.2rem;
+}
+.loose-tray-more { margin: 0; text-align: center; }
+.loose-tray-card {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+}
+.loose-tray-card:hover { border-color: var(--accent); }
+.loose-tray-card:active { cursor: grabbing; }
+.loose-tray-card-dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+.loose-tray-card-thumb {
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.loose-tray-card-thumb-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  font-size: 1.5rem;
+}
+.loose-tray-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.loose-tray-card-name {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 11rem;
+}
+/* Drop target highlight (applied to ``[data-box-id]`` elements
+   when a loose-tray drag is hovering them). */
+.loose-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-dim);
+}
+.loose-drop-success {
+  outline: 2px solid var(--success, #5ec47a);
+  outline-offset: 2px;
+}
+/* When a drag is active, give every existing box-id surface a
+   subtle scaffold tint so the user can find drop targets at a
+   glance — even ones currently scrolled off the visible page. */
+body.loose-drag-active [data-box-id] {
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
 .tenant-switcher-item { margin: 0; }
 .tenant-switcher-item button {
   width: 100%;
