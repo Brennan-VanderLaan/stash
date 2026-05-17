@@ -98,7 +98,7 @@
    Filters (tenant + free-text) hide cards across all columns at
    once.  Status transitions are still the same POST form per card
    — the Kanban is presentational. #}
-{% set fb_buckets = {'open': [], 'accepted': [], 'rejected': [], 'done': []} %}
+{% set fb_buckets = {'open': [], 'accepted': [], 'needs_verification': [], 'rejected': [], 'done': []} %}
 {% for fb in feedback_queue %}
   {% if fb.status in fb_buckets %}
     {% set _ = fb_buckets[fb.status].append(fb) %}
@@ -120,8 +120,12 @@
   </header>
   <p class="text-sm text-muted">
     In-app feedback from the floating widget on every page.
-    Triage by transitioning a card — Accepted = "we'll fix it",
-    Rejected = "won't fix", Done = "shipped".
+    Triage by transitioning a card.  <strong>Needs verification</strong>
+    means a fix has been committed to dev + deployed to staging —
+    visit stash-staging, exercise the bug, hit ✓ if it's gone or
+    ✗ if it's still there.  Verified items auto-flip to
+    <strong>Done</strong> when the fix ships in a tagged production
+    release.  See CICD.md for the full loop.
   </p>
 
   {% if feedback_queue %}
@@ -149,6 +153,7 @@
   <div class="kanban-board">
     {% for col_key, col_title in [
       ('open', 'Open'), ('accepted', 'Accepted'),
+      ('needs_verification', 'Needs verification'),
       ('rejected', 'Rejected'), ('done', 'Done'),
     ] %}
     <div class="kanban-column kanban-column-{{ col_key }}"
@@ -171,6 +176,32 @@
             <span class="kanban-card-when">{{ fb.created_at[:16] }}</span>
           </header>
           <div class="kanban-card-body">{{ fb.body }}</div>
+          {# Fix-commit info — shown on every status that carries
+             a recorded fix.  The link drops the operator into the
+             GitHub commit view for context. #}
+          {% if fb.fix_commit_sha %}
+          <div class="kanban-card-fix">
+            <code class="kanban-card-fix-sha"
+                  title="{{ fb.fix_commit_sha }}">
+              {{ fb.fix_commit_sha[:12] }}
+            </code>
+            {% if fb.fix_summary %}
+            <span class="kanban-card-fix-summary">{{ fb.fix_summary }}</span>
+            {% endif %}
+            {% if fb.verified_in_staging_at %}
+            <span class="pill pill-verified"
+                  title="Verified on stash-staging at {{ fb.verified_in_staging_at }} by {{ fb.verified_in_staging_by }}">
+              ✓ verified on staging
+            </span>
+            {% endif %}
+            {% if fb.released_in %}
+            <span class="pill pill-released"
+                  title="Shipped to production in {{ fb.released_in }}">
+              📦 {{ fb.released_in }}
+            </span>
+            {% endif %}
+          </div>
+          {% endif %}
           <div class="kanban-card-meta">
             {% if fb.source and fb.source != 'user_widget' %}
               <span class="pill pill-source-{{ fb.source }}">{{ fb.source }}</span>
@@ -191,6 +222,20 @@
               · <a href="{{ fb.source_url }}" target="_blank"
                    class="kanban-card-source"
                    title="{{ fb.source_url }}">↗</a>
+              {# Verification-loop UX: when this prod-side /admin
+                 page knows where staging lives (STASH_STAGING_URL
+                 env var), render a one-click "open this same page
+                 on staging" link.  The operator's two-tab dance
+                 (look at staging, then come back here to click
+                 ✓ Verified) is now click → eyeball → click. #}
+              {% set _staging_link = rewrite_host_to_staging(fb.source_url) %}
+              {% if _staging_link %}
+              · <a href="{{ _staging_link }}" target="_blank"
+                   class="kanban-card-staging-link"
+                   title="Open this page on stash-staging to verify the fix">
+                🧪 staging
+              </a>
+              {% endif %}
             {% endif %}
           </div>
           {% if fb.resolved_by %}
@@ -199,6 +244,37 @@
           </div>
           {% endif %}
           <footer class="kanban-card-actions">
+            {# Needs-verification cards get the specialised
+               verify / reopen buttons — those carry the
+               commit-tracking semantics that the generic status
+               buttons don't.  Generic transitions still
+               available for emergency overrides. #}
+            {% if fb.status == 'needs_verification' %}
+              {% if not fb.verified_in_staging_at %}
+              <form method="post" action="/admin/feedback/{{ fb.id }}/verify" style="display:inline;">
+                <button type="submit" class="btn btn-primary btn-sm kanban-card-action"
+                        title="I checked stash-staging — the fix works.  Item auto-flips to Done when the next prod release ships.">
+                  ✓ Verified on staging
+                </button>
+              </form>
+              {% else %}
+              <span class="kanban-card-action-pending text-sm text-muted"
+                    title="Waiting on the next prod release to flip this row to Done.">
+                ⏳ awaiting prod release
+              </span>
+              {% endif %}
+              <form method="post" action="/admin/feedback/{{ fb.id }}/reopen" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm kanban-card-action"
+                        title="Bug is still there on staging — bounce back to Open + clear the fix commit so the AI digs deeper.">
+                  ✗ Still broken
+                </button>
+              </form>
+            {% endif %}
+            {# Generic transitions — every status except the one
+               the card is currently in. ``needs_verification``
+               isn't in the generic list because the
+               specialised buttons above are the canonical path
+               into / out of it. #}
             {% for s in ('open', 'accepted', 'rejected', 'done') %}
               {% if fb.status != s %}
               <form method="post" action="/admin/feedback/{{ fb.id }}/status" style="display:inline;">

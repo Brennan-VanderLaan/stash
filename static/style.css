@@ -3131,10 +3131,59 @@ body.admin-hero-compact .admin-kpi-foot {
   min-height: 12rem;
   max-height: 32rem;
 }
-.kanban-column-open    { border-top: 3px solid var(--accent); }
-.kanban-column-accepted{ border-top: 3px solid var(--info); }
-.kanban-column-rejected{ border-top: 3px solid var(--danger); }
-.kanban-column-done    { border-top: 3px solid var(--success); }
+.kanban-column-open                { border-top: 3px solid var(--accent); }
+.kanban-column-accepted            { border-top: 3px solid var(--info); }
+.kanban-column-needs_verification  { border-top: 3px solid var(--warning); }
+.kanban-column-rejected            { border-top: 3px solid var(--danger); }
+.kanban-column-done                { border-top: 3px solid var(--success); }
+
+/* Fix-commit block on cards that have a recorded fix.  Sits
+   between the body and the meta row so the operator's eye lands
+   on "what was the fix" before "who reported it". */
+.kanban-card-fix {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.4rem 0.55rem;
+  margin: 0.35rem 0;
+  background: var(--panel-2);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+}
+.kanban-card-fix-sha {
+  font-family: ui-monospace, Menlo, monospace;
+  background: var(--bg);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+.kanban-card-fix-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted, var(--muted));
+}
+.pill-verified {
+  background: var(--success-dim, var(--accent-dim));
+  color: var(--success, var(--accent));
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+.pill-released {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.kanban-card-action-pending {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  font-style: italic;
+}
 .kanban-column-head {
   display: flex;
   justify-content: space-between;

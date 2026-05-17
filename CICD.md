@@ -172,6 +172,188 @@ custom hook) picks up.  Same operator surface as the existing
 free-tier-pool bumper.  Lower priority than HA + zero-downtime
 deploys (the user explicitly flagged that as the next ask).
 
+## Verification loop (feedback → fix → confirmed)
+
+The dev pipeline above gets code to staging fast.  The
+verification loop is the human-in-the-loop step that confirms
+the fix actually works before it gets promoted to prod.  Tracked
+on the `/admin` feedback kanban.
+
+### The states
+
+```
+   open  ──────►  accepted  ──────►  needs_verification  ──────►  done
+                                          │   ▲              ▲
+                                          │   │              │
+                              ✗ Still     │   │              │ auto-promoted by
+                              broken      │   │              │ release-finalise GHA
+                              ┌───────────┘   │              │ when fix_commit_sha
+                              ▼               │              │ is in the vX.Y.Z tag's
+                            open              │              │ commit range
+                                              │              │
+                                          ✓ Verified         │
+                                          (operator on       │
+                                           stash-staging)    │
+                                              └──────────────┘
+                                              (just sets the
+                                               verified_in_staging_at
+                                               stamp; status stays
+                                               needs_verification
+                                               until release ships)
+```
+
+Plus `rejected` for "won't fix" — terminal, no transitions out.
+
+### The two environments + where state lives
+
+This loop touches two stash deployments:
+
+- **stash-prod** runs the canonical app at https://stash.swampcats.life.
+  This is where users submit feedback (the floating widget POSTs
+  to prod), where the feedback table lives, where the MCP server
+  the AI talks to lives, and where the /admin kanban + verify /
+  reopen buttons live.
+- **stash-staging** runs the same app at https://stash-staging.swampcats.life
+  on a separate EC2.  Tracks the `:dev` image tag — pushes to
+  the dev branch land here within minutes.  Its own DB
+  (sandbox), its own Stripe (test keys).  This is where the
+  operator goes to **visually look at the fix**, NOT where
+  feedback state is mutated.
+
+The "magic glue" — feedback rows, fix-commit tracking,
+verification stamps, the kanban — lives on prod.  Staging is the
+mirror where the operator confirms with their eyes.
+
+### How it flows
+
+1. **User submits feedback** via the floating widget on a
+   stash-prod page.  Lands in prod's feedback table as
+   `status='open'`.
+2. **AI reads the prod queue** via the prod MCP server's
+   `admin_list_feedback` tool and triages.
+3. **Operator triages** on stash-prod's `/admin` — accept /
+   reject / leave open.  No code change yet.
+4. **AI (or human contributor) commits a fix** on the `dev`
+   branch.  The commit message carries a trailer
+   ```
+   Fixes-feedback: 63, 64
+   ```
+   so any tooling that walks the git log can find which
+   feedback ids the commit addresses.
+5. **AI calls the prod MCP tool**
+   `admin_mark_feedback_needs_verification` once per fixed id
+   with `(feedback_id, fix_commit_sha, fix_summary)`.  The
+   prod-side row's status flips to `needs_verification`; prod's
+   /admin kanban now shows the commit SHA + summary on the card.
+6. **build.yml fires** on the dev push → image tagged `:dev` →
+   watchtower on stash-staging pulls within minutes.  Prod
+   is untouched.
+7. **AI tells the operator** (in chat): "fix is on staging,
+   please verify #63 + #64 at <staging-url-for-the-bug-path>."
+8. **Operator's two-tab dance** — the only manual step:
+   1. Open the bug-path on **stash-staging** in one tab.  The
+      prod-side kanban card surfaces a 🧪 **staging** link
+      (when `STASH_STAGING_URL` is configured) that rewrites
+      the source URL's host to staging's, so this is one click,
+      not a hand-typed URL.
+   2. Exercise the bug.
+   3. Switch back to the **stash-prod** /admin tab.
+   4. On the prod-side kanban card, click one of:
+      - **✓ Verified on staging** — stamps
+        `verified_in_staging_at` + `verified_in_staging_by` on
+        the prod row.  Status stays `needs_verification` (the
+        fix isn't fully done until it ships to prod) but the
+        card now reads "⏳ awaiting prod release".
+      - **✗ Still broken** — bounces back to `open` with the
+        `fix_commit_sha` cleared so the AI digs deeper rather
+        than re-pointing at the same commit.  Optional operator
+        note is appended to `operator_notes` for audit.
+9. **A prod release ships** (dev → main → release-please tag).
+   Operator pings the AI in chat: "I just shipped v1.47.0".  The
+   AI:
+   1. `git log <prev-tag>..v1.47.0 --pretty=%H` to collect the
+      commit SHAs in the release.
+   2. Calls the prod MCP tool
+      `admin_list_feedback_awaiting_release(commit_shas=[...])`
+      which returns rows that are eligible to promote
+      (status=needs_verification + verified_in_staging_at
+      stamped + fix_commit_sha in the list).
+   3. Iterates: for each returned row, calls
+      `admin_mark_feedback_done_on_release(feedback_id, release_tag="v1.47.0")`.
+   4. Reports back to the operator: "Promoted 4 rows to done in
+      v1.47.0: #63, #64, #65, #82".
+
+   **Unverified rows are NOT promoted** — the visual gate is
+   non-negotiable.  Rows in needs_verification with no ✓ stay
+   put until the operator catches up; they'll be eligible for
+   the next release.
+
+   Deliberately MCP-driven and not GHA-automated: the loop's
+   only been exercised in a few releases so far, and an
+   AI-operator conversation is a healthier control surface
+   while patterns stabilise.  Future work: when the cadence is
+   well-understood, a release-finalise.yml GHA can do this same
+   sequence on tag push.
+
+### Why state lives on prod, not staging
+
+The alternative — feedback table on staging, verify buttons on
+staging — would mean the prod-facing /admin doesn't know what's
+fixed, and the AI's MCP integration has to talk to two databases.
+Worse, staging's DB resets on schema migrations or fresh
+deployments, losing operator verification stamps.  Keeping the
+feedback DB on prod means:
+
+- One MCP integration (prod).  The AI doesn't have to know about
+  staging at all.
+- Verification stamps survive staging redeploys.
+- The "what's in flight" view is canonical: every feedback row
+  in `needs_verification` represents a real prod-side commitment
+  to ship a fix.
+
+If the AI ever needs to drive staging programmatically (seed
+test data, run an MCP-driven sweep against the staging build),
+we'd wire a separate `claude_ai_Stash_Staging` MCP integration —
+no state changes flow back from staging to prod via that
+channel, it's a one-way "look at staging" tool.
+
+### The contract
+
+- **AI never marks a row `done` directly.** `done` means "shipped
+  to prod in a tagged release" and the only way there is through
+  `needs_verification → verified_in_staging → release`.
+- **Commit trailer + MCP call go together.** The trailer is for
+  audit + grep; the MCP call updates the DB row.  Skip either
+  and the kanban won't reflect reality.
+- **`fix_commit_sha` is the join key.** It's what
+  `release-finalise.yml` uses to map "commits in this release" →
+  "feedback rows shipped".
+- **Bounce-back-to-open clears the SHA.** A failed verification
+  is not a small fix away from passing — it's "the AI was wrong
+  about what was broken, start over from triage."
+
+### Tooling
+
+- **MCP tool**: `admin_mark_feedback_needs_verification(feedback_id,
+  fix_commit_sha, fix_summary)`.  AI calls this once per fixed id
+  after committing.
+- **MCP tool**: `admin_list_feedback_awaiting_release(commit_shas)`.
+  Returns the rows eligible to promote on release day.
+- **MCP tool**: `admin_mark_feedback_done_on_release(feedback_id,
+  release_tag)`.  AI calls this once per eligible row when the
+  operator says "I shipped v1.X.Y".
+- **MCP tool**: `admin_set_feedback_status` (existing, widened to
+  accept `needs_verification`) — for emergency manual transitions.
+- **Operator UI**: ✓ Verified / ✗ Still broken buttons on the
+  kanban for cards in `needs_verification`.
+
+No GitHub Actions in the verification loop today.  When the
+cadence is well-exercised we can wire a `release-finalise.yml`
+GHA that walks the git log on tag push and calls the same MCP
+tools — but until then, an AI-operator conversation is the
+sane control surface.  See the "future" notes near the end of
+this document.
+
 ## Future: zero-downtime / HA
 
 The user flagged this as the next ask after this CI/CD work:

@@ -66,6 +66,14 @@ _KEK = vault.get_kek()
 # Empty in local dev — labels fall back to the `stash:box:N` custom scheme.
 PUBLIC_URL = os.environ.get("STASH_PUBLIC_URL", "").rstrip("/")
 
+# Sibling deployment running the same code at the dev-branch tip.
+# Used by the /admin verification-loop kanban to render an
+# "🧪 Open on staging" link per card — rewrites the source_url's
+# host to point at staging so the operator can eyeball the fix
+# without manually translating URLs.  Optional; the link only
+# renders when set.  See CICD.md → "verification loop".
+STAGING_URL = os.environ.get("STASH_STAGING_URL", "").rstrip("/")
+
 
 def _load_changelog_html() -> str:
     """Render CHANGELOG.md to HTML. Cached at import time — only changes on container restart."""
@@ -1044,6 +1052,48 @@ def _fresh_threshold(days: int = 7) -> str:
 templates.env.globals["fresh_threshold"] = _fresh_threshold
 
 
+def _rewrite_host_to_staging(url: str) -> str | None:
+    """Map a production URL onto its stash-staging equivalent —
+    used by the /admin verification-loop kanban so the operator
+    can click straight from a feedback card to "the same page on
+    staging" without manually rewriting the host.
+
+    Returns ``None`` if STASH_STAGING_URL isn't configured OR the
+    source URL doesn't parse — callers render an "open on
+    staging" link only when this returns truthy.
+
+    Defensive against off-site source_urls: only rewrites when the
+    source URL's host matches PUBLIC_URL's host.  A feedback row
+    that somehow has source_url=https://attacker.example.com
+    can't trick the operator into clicking through to a
+    spoofed staging-host."""
+    if not STAGING_URL or not url:
+        return None
+    try:
+        from urllib.parse import urlparse, urlunparse
+        src = urlparse(url)
+        if not src.netloc:
+            return None
+        pub = urlparse(PUBLIC_URL) if PUBLIC_URL else None
+        if pub is not None and pub.netloc and src.netloc != pub.netloc:
+            # Cross-origin source — don't rewrite.
+            return None
+        staging = urlparse(STAGING_URL)
+        return urlunparse((
+            staging.scheme or src.scheme,
+            staging.netloc,
+            src.path,
+            src.params,
+            src.query,
+            src.fragment,
+        ))
+    except (ValueError, TypeError):
+        return None
+
+
+templates.env.globals["rewrite_host_to_staging"] = _rewrite_host_to_staging
+
+
 def _sparkline_svg(values, *, width: int = 100, height: int = 24) -> str:
     """Inline-SVG sparkline.  Server-rendered (no JS) so the markup
     is part of the response payload and the meter is visible
@@ -1397,11 +1447,22 @@ def init_db():
             user_agent TEXT,
             viewport_w INTEGER,
             viewport_h INTEGER,
+            -- Status enum: open | accepted | needs_verification |
+            -- done | rejected.  See dao/feedback.py + CICD.md for
+            -- the full transition diagram + verification loop.
             status TEXT NOT NULL DEFAULT 'open',
             operator_notes TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             resolved_at TEXT,
             resolved_by TEXT,
+            -- Verification-loop columns — see migrate_db() for the
+            -- workflow.  Fresh-DB shape carries them; old DBs get
+            -- the ALTER fallback in migrate_db.
+            fix_commit_sha TEXT,
+            fix_summary TEXT,
+            verified_in_staging_at TEXT,
+            verified_in_staging_by TEXT,
+            released_in TEXT,
             -- Where the row came from.  ``user_widget`` = floating
             -- in-app feedback button.  ``mcp`` = created via the
             -- admin_create_feedback MCP tool (typically by an
@@ -1790,6 +1851,44 @@ def migrate_db():
         _add_column_if_missing(
             conn, "feedback", "urgent",
             "INTEGER NOT NULL DEFAULT 0",
+        )
+        # Verification-loop columns — the bridge between "AI
+        # committed a fix" and "human confirmed the fix is real
+        # on staging".  When a commit references a feedback id
+        # via the ``Fixes-feedback`` trailer, the workflow sets:
+        #   * status → 'needs_verification'
+        #   * fix_commit_sha → the commit that should fix the bug
+        #   * fix_summary    → one-line description for the
+        #                       /admin kanban card
+        # Operator visually verifies on stash-staging, clicks ✓
+        # which stamps verified_in_staging_{at,by}.  The status
+        # stays ``needs_verification`` until the next prod release
+        # ships — release-please's tag fires a GHA workflow that
+        # flips verified items in the release range to ``done``.
+        # See CICD.md for the full loop.
+        _add_column_if_missing(
+            conn, "feedback", "fix_commit_sha",
+            "TEXT",
+        )
+        _add_column_if_missing(
+            conn, "feedback", "fix_summary",
+            "TEXT",
+        )
+        _add_column_if_missing(
+            conn, "feedback", "verified_in_staging_at",
+            "TEXT",
+        )
+        _add_column_if_missing(
+            conn, "feedback", "verified_in_staging_by",
+            "TEXT",
+        )
+        # Release the row was shipped in — populated by the
+        # on-release-tag GHA workflow that flips verified items
+        # to ``done``.  Lets the kanban / leaderboard show
+        # "fixed in v1.47.0" without a separate join.
+        _add_column_if_missing(
+            conn, "feedback", "released_in",
+            "TEXT",
         )
 
         _migrate_to_multi_tenant(conn)
@@ -6358,6 +6457,58 @@ def admin_feedback_status(
     return RedirectResponse("/admin#feedback", status_code=303)
 
 
+@app.post("/admin/feedback/{feedback_id}/verify")
+def admin_feedback_verify(request: Request, feedback_id: int):
+    """Operator clicks ✓ Verified on the kanban after eyeballing
+    stash-staging.  Stamps verified_in_staging_at; status stays
+    ``needs_verification`` until the next prod release ships the
+    fix (the on-release GHA flips it to ``done``).
+
+    Refuses the transition for rows not already in
+    ``needs_verification`` — a row that's back to open needs
+    another commit cycle before it's verifiable."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_feedback.mark_verified_in_staging(
+            feedback_id,
+            operator_email=actor.email or "operator",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin#feedback", status_code=303)
+
+
+@app.post("/admin/feedback/{feedback_id}/reopen")
+def admin_feedback_reopen(
+    request: Request,
+    feedback_id: int,
+    note: str = Form(""),
+):
+    """Operator clicks ✗ Still broken on the kanban — the staging
+    visual check failed, the fix didn't actually fix it (or only
+    fixed it partially).  Row goes back to ``open`` with the
+    fix_commit_sha cleared so the AI knows to dig deeper rather
+    than re-pointing at the same commit.
+
+    ``note`` (optional) is prepended to operator_notes with a
+    ``[reopen by <email>]`` prefix so the audit trail of failed
+    verifications survives."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_feedback.reopen_after_failed_verification(
+            feedback_id,
+            operator_email=actor.email or "operator",
+            note=note,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    return RedirectResponse("/admin#feedback", status_code=303)
+
+
 @app.post("/admin/feedback/{feedback_id}/urgent")
 def admin_feedback_urgent(
     request: Request,
@@ -7759,6 +7910,11 @@ def admin_dashboard(
             "oauth_clients": oauth_clients,
             "feedback_queue": feedback_queue,
             "feedback_counts": feedback_counts,
+            # When set, the kanban renders a per-card "open on
+            # staging" link that rewrites the source URL's host
+            # to point at this value.  See verification-loop
+            # docs in CICD.md.
+            "staging_url": STAGING_URL,
             "current_email": actor.email,
             "invite_url": invite_url,
             "onboarding_url": onboarding_url,

@@ -1097,9 +1097,18 @@ def _tool_admin_get_feedback(
     "admin_set_feedback_status",
     description=(
         "Operator-only.  Transition a feedback row to "
-        "accepted / rejected / done / open.  Optional notes append "
-        "to operator_notes; resolved_by stamps with the operator's "
-        "email."
+        "open / accepted / needs_verification / rejected / done.  "
+        "Optional notes append to operator_notes; resolved_by "
+        "stamps with the operator's email.\n\n"
+        "**AI-driven workflow guidance**: when committing a fix "
+        "that references a feedback id (the ``Fixes-feedback`` "
+        "commit trailer), use ``admin_mark_feedback_needs_verification`` "
+        "instead — it carries the commit SHA + fix summary into the "
+        "feedback row so the /admin kanban can show the operator "
+        "exactly which commit is sitting on staging awaiting visual "
+        "verification.  ``done`` should be reserved for "
+        "release-day automation (a fix is only truly done when it "
+        "ships to prod in a tagged release)."
     ),
     input_schema={
         "type": "object",
@@ -1107,7 +1116,10 @@ def _tool_admin_get_feedback(
             "feedback_id": {"type": "integer"},
             "status": {
                 "type": "string",
-                "enum": ["open", "accepted", "rejected", "done"],
+                "enum": [
+                    "open", "accepted", "needs_verification",
+                    "rejected", "done",
+                ],
             },
             "notes": {"type": "string"},
         },
@@ -1129,6 +1141,57 @@ def _tool_admin_set_feedback_status(
         int(feedback_id), status,
         operator_email=actor.email or "operator",
         notes=(notes or "").strip() or None,
+    )
+    return {"ok": True, "feedback": updated}
+
+
+@_tool(
+    "admin_mark_feedback_needs_verification",
+    description=(
+        "Operator-only.  Mark a feedback row as having a fix "
+        "committed that should resolve it — staging will deploy the "
+        "fix automatically (push to dev branch → :dev image → "
+        "watchtower on stash-staging).  The row stays in "
+        "``needs_verification`` until the operator visually confirms "
+        "on staging AND the fix lands in a tagged production release.\n\n"
+        "Intended for the AI-driven commit workflow: after ``git "
+        "commit`` of a fix with a ``Fixes-feedback: <id>`` trailer, "
+        "call this tool for each id with the commit SHA + a one-line "
+        "summary of what was changed.  The /admin kanban surfaces "
+        "the SHA + summary on the card so the operator knows what "
+        "to look for on staging."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "feedback_id": {"type": "integer"},
+            "fix_commit_sha": {
+                "type": "string",
+                "description": "Full-length or short-form (>=7 chars) commit SHA on the dev branch.",
+            },
+            "fix_summary": {
+                "type": "string",
+                "description": "One-line description of the fix (≤240 chars).  Goes on the kanban card.",
+            },
+        },
+        "required": ["feedback_id", "fix_commit_sha", "fix_summary"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_mark_feedback_needs_verification(
+    actor: Actor,
+    feedback_id: int,
+    fix_commit_sha: str,
+    fix_summary: str,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    updated = dao_feedback.mark_needs_verification(
+        int(feedback_id),
+        fix_commit_sha=fix_commit_sha,
+        fix_summary=fix_summary,
+        operator_email=actor.email or "operator",
     )
     return {"ok": True, "feedback": updated}
 
@@ -1172,8 +1235,9 @@ def _tool_admin_set_feedback_urgent(
     "admin_feedback_counts",
     description=(
         "Operator-only.  Per-status counts for the feedback queue "
-        "(open / accepted / rejected / done).  Cheap call; safe to "
-        "poll if an agent wants to wait for new submissions."
+        "(open / accepted / needs_verification / rejected / done).  "
+        "Cheap call; safe to poll if an agent wants to wait for new "
+        "submissions."
     ),
     input_schema={
         "type": "object", "properties": {}, "additionalProperties": False,
@@ -1184,6 +1248,102 @@ def _tool_admin_feedback_counts(actor: Actor) -> dict | list:
     if err:
         return err
     return {"ok": True, "counts": dao_feedback.queue_counts()}
+
+
+@_tool(
+    "admin_list_feedback_awaiting_release",
+    description=(
+        "Operator-only.  Return feedback rows that are ready to be "
+        "promoted to ``done`` for a given production release — i.e. "
+        "status is ``needs_verification``, the operator has clicked "
+        "✓ Verified on staging (verified_in_staging_at stamped), AND "
+        "the row's ``fix_commit_sha`` is in the caller-supplied list "
+        "of commits that landed in the release.\n\n"
+        "Intended workflow: the operator cuts a tagged release (e.g. "
+        "vX.Y.Z), tells the AI \"I just shipped vX.Y.Z\", and the AI "
+        "uses ``git log <prev>..<this>`` to collect commit SHAs in "
+        "the release, calls this tool to find the eligible feedback "
+        "rows, then calls ``admin_mark_feedback_done_on_release`` "
+        "once per id.\n\n"
+        "Returns an empty list if no rows are eligible — common case "
+        "when a release is purely refactor / test / chore commits."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "commit_shas": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Commit SHAs (short or full-length) that landed in the release.",
+            },
+        },
+        "required": ["commit_shas"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_list_feedback_awaiting_release(
+    actor: Actor, commit_shas: list,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    # Case-insensitive match — some tools emit uppercase SHAs.
+    normalised = [
+        str(s).strip().lower()[:64]
+        for s in (commit_shas or []) if s
+    ]
+    rows = dao_feedback.list_awaiting_release(normalised)
+    return {
+        "ok": True,
+        "commits_checked": len(normalised),
+        "feedback": rows,
+    }
+
+
+@_tool(
+    "admin_mark_feedback_done_on_release",
+    description=(
+        "Operator-only.  Flip a verified-on-staging feedback row to "
+        "``done`` because the fix shipped in a tagged production "
+        "release.  Stamps ``released_in`` with the release tag so "
+        "the kanban card carries a 📦 vX.Y.Z badge.\n\n"
+        "**Visual-verification gate is non-negotiable**: this tool "
+        "refuses any row that isn't already in ``needs_verification`` "
+        "with a stamped ``verified_in_staging_at``.  The operator "
+        "must have clicked ✓ Verified on staging before a release "
+        "can promote a row.\n\n"
+        "Intended workflow: see ``admin_list_feedback_awaiting_release``."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "feedback_id": {"type": "integer"},
+            "release_tag": {
+                "type": "string",
+                "description": "Production release tag, e.g. ``v1.47.0``.",
+            },
+        },
+        "required": ["feedback_id", "release_tag"],
+        "additionalProperties": False,
+    },
+)
+def _tool_admin_mark_feedback_done_on_release(
+    actor: Actor,
+    feedback_id: int,
+    release_tag: str,
+) -> dict | list:
+    err = _require_operator(actor)
+    if err:
+        return err
+    try:
+        updated = dao_feedback.mark_done_on_release(
+            int(feedback_id), release_tag=release_tag,
+        )
+    except NotFoundError as exc:
+        return _tool_text_result(f"Not found: {exc}", is_error=True)
+    except ValueError as exc:
+        return _tool_text_result(str(exc), is_error=True)
+    return {"ok": True, "feedback": updated}
 
 
 @_tool(

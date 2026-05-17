@@ -190,3 +190,12 @@ def list_rooms(request: Request) -> dict:
 def list_tags(request: Request) -> dict:
     actor: Actor = request.state.actor
     return {"tags": dao_tags.list_with_counts(actor)}
+
+
+# Release-day verification-loop promotion is driven via the MCP
+# tools ``admin_list_feedback_awaiting_release`` +
+# ``admin_mark_feedback_done_on_release`` — see mcp_server.py.
+# Deliberately no REST endpoint: the operator-AI conversation is
+# the manual control surface today, and an automated GHA path
+# would lock in design choices we want to keep flexible until the
+# loop's been exercised a few times in real releases.

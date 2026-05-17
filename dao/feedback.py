@@ -21,7 +21,16 @@ from dao._base import Actor, NotFoundError, db
 _log = obs.get_logger("dao.feedback")
 
 
-_VALID_STATUSES = {"open", "accepted", "rejected", "done"}
+_VALID_STATUSES = {
+    "open",
+    "accepted",
+    # AI / contributor committed a fix → image deployed to staging
+    # → awaiting operator visual verification + release-day flip
+    # to done.  See CICD.md "verification loop".
+    "needs_verification",
+    "rejected",
+    "done",
+}
 
 
 _VALID_SOURCES = {"user_widget", "mcp"}
@@ -184,16 +193,25 @@ def set_status(
     *, operator_email: str, notes: str | None = None,
 ) -> dict:
     """Operator transitions a row from ``open`` → ``accepted`` /
-    ``rejected`` / ``done``.  Stamps ``resolved_at`` + ``resolved_by``
-    so the queue has a clear audit trail."""
+    ``needs_verification`` / ``rejected`` / ``done``.  Stamps
+    ``resolved_at`` + ``resolved_by`` so the queue has a clear
+    audit trail.
+
+    Most transitions go through this generic surface; the
+    AI-driven "I committed a fix" flow uses the more specific
+    ``mark_needs_verification`` below."""
     if status not in _VALID_STATUSES:
         raise ValueError(f"bad status: {status!r}")
     with db() as conn:
         cur = conn.execute(
             "UPDATE feedback SET status = ?, "
-            "       resolved_at = CASE WHEN ? IN ('accepted', 'rejected', 'done') "
+            "       resolved_at = CASE WHEN ? IN "
+            "                            ('accepted', 'needs_verification', "
+            "                             'rejected', 'done') "
             "                           THEN CURRENT_TIMESTAMP ELSE NULL END, "
-            "       resolved_by = CASE WHEN ? IN ('accepted', 'rejected', 'done') "
+            "       resolved_by = CASE WHEN ? IN "
+            "                            ('accepted', 'needs_verification', "
+            "                             'rejected', 'done') "
             "                           THEN ? ELSE NULL END, "
             "       operator_notes = COALESCE(?, operator_notes) "
             "WHERE id = ?",
@@ -205,6 +223,190 @@ def set_status(
     _log.info("feedback.status feedback_id=%s status=%s by=%s",
               feedback_id, status, operator_email)
     return get(feedback_id)
+
+
+def mark_needs_verification(
+    feedback_id: int, *,
+    fix_commit_sha: str,
+    fix_summary: str,
+    operator_email: str,
+) -> dict:
+    """AI / contributor committed a fix that should resolve this
+    feedback row.  Transitions to ``needs_verification`` and
+    stamps the commit SHA + a one-line summary so the operator
+    can see, from the /admin kanban, exactly which commit is
+    sitting on staging awaiting their visual check.
+
+    Clears any prior staging-verification stamps so a re-fix on
+    a row that was already verified-then-reopened forces the
+    operator to verify the new fix from scratch."""
+    sha = (fix_commit_sha or "").strip()[:64]
+    summary = (fix_summary or "").strip()[:240]
+    if not sha:
+        raise ValueError("fix_commit_sha required")
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE feedback SET "
+            "  status = 'needs_verification', "
+            "  fix_commit_sha = ?, "
+            "  fix_summary = ?, "
+            "  verified_in_staging_at = NULL, "
+            "  verified_in_staging_by = NULL, "
+            "  released_in = NULL, "
+            "  resolved_at = CURRENT_TIMESTAMP, "
+            "  resolved_by = ? "
+            "WHERE id = ?",
+            (sha, summary, operator_email, feedback_id),
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"feedback {feedback_id}")
+        conn.commit()
+    _log.info(
+        "feedback.needs_verification feedback_id=%s sha=%s by=%s",
+        feedback_id, sha[:12], operator_email,
+    )
+    return get(feedback_id)
+
+
+def mark_verified_in_staging(
+    feedback_id: int, *, operator_email: str,
+) -> dict:
+    """Operator visually confirmed on stash-staging that the fix
+    works.  Status stays ``needs_verification`` — the row is
+    still pending the next prod release — but the verification
+    columns are stamped so a release-day GHA can flip eligible
+    rows to ``done`` automatically.
+
+    Refuses to verify rows not already in ``needs_verification``.
+    A row that's back to ``open`` (operator clicked "still
+    broken") needs another commit cycle before it's verifiable
+    again."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status FROM feedback WHERE id = ?",
+            (feedback_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"feedback {feedback_id}")
+        if row["status"] != "needs_verification":
+            raise ValueError(
+                f"can only verify rows in needs_verification; "
+                f"got {row['status']!r}"
+            )
+        conn.execute(
+            "UPDATE feedback SET "
+            "  verified_in_staging_at = CURRENT_TIMESTAMP, "
+            "  verified_in_staging_by = ? "
+            "WHERE id = ?",
+            (operator_email, feedback_id),
+        )
+        conn.commit()
+    _log.info(
+        "feedback.verified_in_staging feedback_id=%s by=%s",
+        feedback_id, operator_email,
+    )
+    return get(feedback_id)
+
+
+def reopen_after_failed_verification(
+    feedback_id: int, *,
+    operator_email: str, note: str | None = None,
+) -> dict:
+    """Operator visually checked staging and the bug is still
+    there.  Status → ``open`` so it lands back on the triage
+    queue; clears fix_commit_sha so the AI knows to dig deeper
+    rather than re-pointing at the same commit."""
+    with db() as conn:
+        appended = (note or "").strip()
+        cur = conn.execute(
+            "UPDATE feedback SET "
+            "  status = 'open', "
+            "  fix_commit_sha = NULL, "
+            "  fix_summary = NULL, "
+            "  verified_in_staging_at = NULL, "
+            "  verified_in_staging_by = NULL, "
+            "  resolved_at = NULL, "
+            "  resolved_by = NULL, "
+            "  operator_notes = "
+            "    CASE WHEN ? = '' THEN operator_notes "
+            "         ELSE TRIM(COALESCE(operator_notes || char(10), '') "
+            "                   || '[reopen by ' || ? || ']: ' || ?) END "
+            "WHERE id = ?",
+            (appended, operator_email, appended, feedback_id),
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"feedback {feedback_id}")
+        conn.commit()
+    _log.info(
+        "feedback.reopen feedback_id=%s by=%s note=%r",
+        feedback_id, operator_email, appended[:60],
+    )
+    return get(feedback_id)
+
+
+def mark_done_on_release(
+    feedback_id: int, *, release_tag: str,
+) -> dict:
+    """Release-day automation: flip a verified-on-staging row to
+    ``done`` because the commit landed in a prod release.  Used
+    by the on-tag-push GHA workflow + the in-app admin button.
+
+    Refuses to flip rows that aren't in needs_verification with
+    a stamped verified_in_staging_at — the operator must have
+    visually confirmed before the auto-promotion is allowed."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status, verified_in_staging_at, fix_commit_sha "
+            "FROM feedback WHERE id = ?",
+            (feedback_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"feedback {feedback_id}")
+        if row["status"] != "needs_verification":
+            raise ValueError(
+                f"can only release rows in needs_verification; "
+                f"got {row['status']!r}"
+            )
+        if not row["verified_in_staging_at"]:
+            raise ValueError(
+                "row not yet verified on staging — operator "
+                "must confirm before auto-release"
+            )
+        conn.execute(
+            "UPDATE feedback SET "
+            "  status = 'done', "
+            "  released_in = ?, "
+            "  resolved_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            ((release_tag or "").strip()[:64], feedback_id),
+        )
+        conn.commit()
+    _log.info(
+        "feedback.done_on_release feedback_id=%s release=%s",
+        feedback_id, release_tag,
+    )
+    return get(feedback_id)
+
+
+def list_awaiting_release(commit_shas: list[str]) -> list[dict]:
+    """Return verified-on-staging rows whose fix_commit_sha is in
+    the given list.  Used by the release-day GHA to find which
+    rows it should auto-flip to ``done`` for a given vX.Y.Z tag.
+    Caller passes the commits the tag covers; we filter the
+    feedback table down to the matching subset that's actually
+    ready to promote."""
+    if not commit_shas:
+        return []
+    placeholders = ",".join("?" * len(commit_shas))
+    with db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM feedback "
+            f"WHERE status = 'needs_verification' "
+            f"  AND verified_in_staging_at IS NOT NULL "
+            f"  AND fix_commit_sha IN ({placeholders})",
+            tuple(commit_shas),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def queue_counts() -> dict[str, int]:

@@ -585,6 +585,287 @@ def test_admin_queue_renders_urgent_pill(client, monkeypatch):
     assert "kanban-card-urgent" in page
 
 
+# ── Verification loop ────────────────────────────────────────────────
+
+
+def _mk_open_feedback(client, body: str = "thing's broken") -> int:
+    """Shorthand: create an open feedback row, return its id."""
+    return client.app_module.dao_feedback.create(
+        tenant_id=client.test_tenant_id,
+        actor_email="user@example.com",
+        body=body,
+    )
+
+
+def test_mark_needs_verification_stamps_commit_metadata(client):
+    """``mark_needs_verification`` transitions the row + records
+    the fix commit SHA + summary that the /admin kanban renders."""
+    fb_id = _mk_open_feedback(client, "tag-suggest is broken")
+    updated = client.app_module.dao_feedback.mark_needs_verification(
+        fb_id,
+        fix_commit_sha="abc1234567890def",
+        fix_summary="Wire JSON content-negotiation on /items/{id}/tags",
+        operator_email="ai-bot",
+    )
+    assert updated["status"] == "needs_verification"
+    assert updated["fix_commit_sha"] == "abc1234567890def"
+    assert "JSON content-negotiation" in updated["fix_summary"]
+    assert updated["resolved_by"] == "ai-bot"
+    assert updated["verified_in_staging_at"] is None
+
+
+def test_mark_needs_verification_rejects_empty_commit_sha(client):
+    """The whole point of needs_verification is "here's the commit
+    to look at."  Refuse the transition without one."""
+    import pytest
+    fb_id = _mk_open_feedback(client)
+    with pytest.raises(ValueError):
+        client.app_module.dao_feedback.mark_needs_verification(
+            fb_id, fix_commit_sha="", fix_summary="oops",
+            operator_email="ai-bot",
+        )
+
+
+def test_mark_verified_in_staging_only_works_from_needs_verification(client):
+    """An ``open`` row can't jump straight to verified — the AI
+    has to commit a fix first.  Refuse the transition."""
+    import pytest
+    fb_id = _mk_open_feedback(client)
+    with pytest.raises(ValueError):
+        client.app_module.dao_feedback.mark_verified_in_staging(
+            fb_id, operator_email="op@example.com",
+        )
+
+
+def test_full_verification_loop_open_to_done(client):
+    """The happy path: open → needs_verification → verified on
+    staging → done on release.  Pins every state stamp + the
+    auto-done-on-release gate (needs both verification flag AND
+    matching commit SHA in the release range)."""
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client, "queue customize hidden on mobile")
+    # 1. AI commits a fix.
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="deadbeef1234",
+        fix_summary="move crop controls under photo",
+        operator_email="ai-bot",
+    )
+    row = dao.get(fb_id)
+    assert row["status"] == "needs_verification"
+    assert row["fix_commit_sha"] == "deadbeef1234"
+    # 2. Operator verifies on staging.
+    dao.mark_verified_in_staging(fb_id, operator_email="op@example.com")
+    row = dao.get(fb_id)
+    assert row["status"] == "needs_verification"  # NOT done yet
+    assert row["verified_in_staging_at"] is not None
+    assert row["verified_in_staging_by"] == "op@example.com"
+    # 3. Release ships including this commit.
+    awaiting = dao.list_awaiting_release(["deadbeef1234", "unrelated"])
+    assert len(awaiting) == 1
+    assert awaiting[0]["id"] == fb_id
+    dao.mark_done_on_release(fb_id, release_tag="v1.47.0")
+    row = dao.get(fb_id)
+    assert row["status"] == "done"
+    assert row["released_in"] == "v1.47.0"
+
+
+def test_done_on_release_refuses_unverified_rows(client):
+    """The visual-verification gate is non-negotiable.  Even if a
+    commit lands in a tagged release, an unverified row stays in
+    needs_verification — the operator's ✓ is the prerequisite."""
+    import pytest
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client)
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="cafef00d", fix_summary="x",
+        operator_email="ai-bot",
+    )
+    with pytest.raises(ValueError, match="not yet verified"):
+        dao.mark_done_on_release(fb_id, release_tag="v1.48.0")
+
+
+def test_list_awaiting_release_filters_by_commit_and_verification(client):
+    """``list_awaiting_release`` only returns rows that are
+    BOTH needs_verification AND verified_in_staging AND match a
+    commit in the input list.  All three filters must hold."""
+    dao = client.app_module.dao_feedback
+    # Row A: verified, matching commit → should appear.
+    a = _mk_open_feedback(client, "A")
+    dao.mark_needs_verification(a, fix_commit_sha="aaa111",
+                                 fix_summary="a", operator_email="ai")
+    dao.mark_verified_in_staging(a, operator_email="op")
+    # Row B: matching commit but NOT verified → should NOT appear.
+    b = _mk_open_feedback(client, "B")
+    dao.mark_needs_verification(b, fix_commit_sha="bbb222",
+                                 fix_summary="b", operator_email="ai")
+    # Row C: verified but commit NOT in input list → should NOT appear.
+    c = _mk_open_feedback(client, "C")
+    dao.mark_needs_verification(c, fix_commit_sha="ccc333",
+                                 fix_summary="c", operator_email="ai")
+    dao.mark_verified_in_staging(c, operator_email="op")
+    # Row D: open, never needs_verification → should NOT appear.
+    _mk_open_feedback(client, "D")
+
+    eligible = dao.list_awaiting_release(["aaa111", "bbb222"])
+    eligible_ids = [r["id"] for r in eligible]
+    assert eligible_ids == [a]
+
+
+def test_reopen_clears_fix_metadata_and_appends_note(client):
+    """Operator's ✗ Still broken bounces the row back to open AND
+    clears the fix_commit_sha so the AI can't just re-point at
+    the same broken commit.  Optional note is prepended to
+    operator_notes with a ``[reopen by …]`` prefix."""
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client, "leak in queue card")
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="badf1x55",
+        fix_summary="patched the leak",
+        operator_email="ai-bot",
+    )
+    dao.reopen_after_failed_verification(
+        fb_id,
+        operator_email="op@example.com",
+        note="still leaks on mobile Safari",
+    )
+    row = dao.get(fb_id)
+    assert row["status"] == "open"
+    assert row["fix_commit_sha"] is None
+    assert row["fix_summary"] is None
+    assert "[reopen by op@example.com]" in (row["operator_notes"] or "")
+    assert "still leaks on mobile Safari" in (row["operator_notes"] or "")
+
+
+def test_admin_verify_route_stamps_staging_verification(client, monkeypatch):
+    """POST /admin/feedback/{id}/verify is the operator's ✓ button
+    on the kanban — stamps verified_in_staging_at/by."""
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client)
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="cafe1234",
+        fix_summary="x", operator_email="ai-bot",
+    )
+    r = client.post(
+        f"/admin/feedback/{fb_id}/verify", follow_redirects=False,
+    )
+    assert r.status_code == 303
+    row = dao.get(fb_id)
+    assert row["verified_in_staging_at"] is not None
+    assert row["verified_in_staging_by"] == "test@example.com"
+
+
+def test_admin_verify_route_400s_on_wrong_status(client, monkeypatch):
+    """Can't verify a row that's not in needs_verification."""
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    fb_id = _mk_open_feedback(client)
+    r = client.post(
+        f"/admin/feedback/{fb_id}/verify", follow_redirects=False,
+    )
+    assert r.status_code == 400
+
+
+def test_admin_reopen_route_bounces_back_to_open(client, monkeypatch):
+    """POST /admin/feedback/{id}/reopen is the ✗ Still broken
+    button — flips back to open + clears fix metadata."""
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client)
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="cafe1234",
+        fix_summary="x", operator_email="ai-bot",
+    )
+    r = client.post(
+        f"/admin/feedback/{fb_id}/reopen",
+        data={"note": "didn't work on mobile"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    row = dao.get(fb_id)
+    assert row["status"] == "open"
+    assert row["fix_commit_sha"] is None
+    assert "didn't work on mobile" in (row["operator_notes"] or "")
+
+
+def test_rewrite_host_to_staging_swaps_host(client, monkeypatch):
+    """The kanban's "🧪 staging" link rewrites a prod-side
+    source_url to its staging equivalent.  Preserves path, query,
+    fragment; only swaps the host."""
+    monkeypatch.setattr(
+        client.app_module, "STAGING_URL",
+        "https://stash-staging.example.com",
+    )
+    monkeypatch.setattr(
+        client.app_module, "PUBLIC_URL",
+        "https://stash.example.com",
+    )
+    rewrite = client.app_module._rewrite_host_to_staging
+    assert rewrite("https://stash.example.com/queue?box=3#card-1") == (
+        "https://stash-staging.example.com/queue?box=3#card-1"
+    )
+
+
+def test_rewrite_host_to_staging_returns_none_when_unset(client, monkeypatch):
+    """No STAGING_URL → no link rendered.  Don't assume; check."""
+    monkeypatch.setattr(client.app_module, "STAGING_URL", "")
+    assert client.app_module._rewrite_host_to_staging(
+        "https://stash.example.com/queue"
+    ) is None
+
+
+def test_rewrite_host_to_staging_refuses_cross_origin_source(client, monkeypatch):
+    """Defence-in-depth: a feedback row with source_url pointing
+    off-domain (e.g. someone copy-pasted a malicious link as a
+    repro URL) should NOT get rewritten — the rewrite is only
+    safe when the source host matches PUBLIC_URL's host."""
+    monkeypatch.setattr(
+        client.app_module, "STAGING_URL",
+        "https://stash-staging.example.com",
+    )
+    monkeypatch.setattr(
+        client.app_module, "PUBLIC_URL",
+        "https://stash.example.com",
+    )
+    assert client.app_module._rewrite_host_to_staging(
+        "https://attacker.example.com/evil"
+    ) is None
+
+
+def test_admin_kanban_renders_needs_verification_column(client, monkeypatch):
+    """The /admin kanban gains a 5th column for needs_verification
+    rows.  Pin the structure so a future template refactor that
+    drops the column fails this test."""
+    monkeypatch.setattr(
+        client.app_module, "_OPERATOR_EMAILS",
+        frozenset({"test@example.com"}),
+    )
+    dao = client.app_module.dao_feedback
+    fb_id = _mk_open_feedback(client, "needs verifying")
+    dao.mark_needs_verification(
+        fb_id, fix_commit_sha="abc1234567",
+        fix_summary="moved the controls",
+        operator_email="ai-bot",
+    )
+    page = client.get("/admin").text
+    assert "Needs verification" in page
+    assert "kanban-column-needs_verification" in page
+    # Card surfaces the fix commit + summary.
+    assert "abc1234567" in page
+    assert "moved the controls" in page
+    # Specialised buttons present.
+    assert "Verified on staging" in page or "✓ Verified" in page
+    assert "Still broken" in page
+
+
 def test_admin_queue_renders_mcp_source_pill(client, monkeypatch):
     """The /admin feedback queue shows a source pill on rows that
     came in via MCP so the operator can spot automated findings
