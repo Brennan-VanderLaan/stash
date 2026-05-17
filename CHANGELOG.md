@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.0...v1.45.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ingest:** emergency — global drop overlay stuck on every page ([a9b4f2d](https://github.com/Brennan-VanderLaan/stash/commit/a9b4f2d69e8723bc5b503a0e0f85271b57decc9f))
+
 ## [1.45.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.44.0...v1.45.0) (2026-05-17)
 
 
