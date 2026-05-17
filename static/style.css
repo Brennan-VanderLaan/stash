@@ -6943,7 +6943,15 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   transform: translateZ(0) scale(var(--rain-scale, 1));
   will-change: transform, opacity;
   animation-name: leaderboard-rain-fall;
-  animation-timing-function: cubic-bezier(0.35, 0.1, 0.55, 1);
+  /* Linear timing — feedback #55 round 2: the previous cubic-
+     bezier(0.35, 0.1, 0.55, 1) has its second control point at
+     y=1, x=0.55, which makes the curve plateau near the top of
+     its range for the last ~45% of the animation.  Visually this
+     reads as "star hovers around the same y-position for ages
+     then suddenly disappears" — the user reported it as stars
+     getting cut off half way down.  Linear timing makes the
+     descent steady and the off-screen exit clean. */
+  animation-timing-function: linear;
   animation-fill-mode: forwards;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
   user-select: none;
@@ -6961,18 +6969,18 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 @keyframes leaderboard-rain-fall {
-  /* Fade in as the star enters the viewport from above (-3rem
-     top + 0 translate = invisible above the top edge), then stay
-     fully opaque all the way down.  The previous keyframe had an
-     ``85% opacity 1`` step + ``100% opacity 0`` fade that made
-     stars vanish mid-screen before they reached the bottom —
-     feedback #55: "stars get cut off instead of falling all the
-     way to the bottom of the screen."  The translateY(110vh)
-     already carries the star clear of the viewport so an abrupt
-     end is fine; no fade-out needed. */
+  /* Star starts ``top: -3rem`` (above the viewport) and translates
+     a generous 130vh down so it exits well below the visible
+     viewport before the animation completes.  With linear timing
+     the descent is uniform — the user sees the star at every
+     y-position before it leaves the screen.
+
+     Fade in at the top (0% → 8%) so the entry isn't a hard pop;
+     no fade out — the translateY overshoot carries the star
+     completely off the bottom while still at full opacity. */
   0%   { transform: translateY(0)     scale(var(--rain-scale, 1)); opacity: 0; }
   8%   { opacity: 1; }
-  100% { transform: translateY(110vh) scale(var(--rain-scale, 1)); opacity: 1; }
+  100% { transform: translateY(130vh) scale(var(--rain-scale, 1)); opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   /* Respect the accessibility setting.  Skip the shower entirely
