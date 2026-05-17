@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* **billing:** webhook handlers crashed with AttributeError('get') on StripeObject ([7baa83d](https://github.com/Brennan-VanderLaan/stash/commit/7baa83dd2ee8067dd893a648304608a1a1a351e9))
 * **leaderboard:** star-rain still appeared to cut off mid-screen ([#55](https://github.com/Brennan-VanderLaan/stash/issues/55) round 2) ([791659a](https://github.com/Brennan-VanderLaan/stash/commit/791659aaaab9f2e6d5618e9f78cfea86626f0a89))
 
 ## [1.46.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.0...v1.46.1) (2026-05-17)
