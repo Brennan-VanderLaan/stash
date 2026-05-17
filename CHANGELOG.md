@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.43.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.42.0...v1.43.0) (2026-05-17)
+
+
+### Features
+
+* **ux:** leaderboard star-rain + always-visible account menu with sign-out ([7c3a386](https://github.com/Brennan-VanderLaan/stash/commit/7c3a386e943fbdc905be4c14223e3e1771c17755))
+
 ## [1.42.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.41.0...v1.42.0) (2026-05-17)
 
 
