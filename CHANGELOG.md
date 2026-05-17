@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.51.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.2...v1.51.0) (2026-05-17)
+
+
+### Features
+
+* **ci:** mirror release images to :dev so staging shows cut releases ([d4bc8dc](https://github.com/Brennan-VanderLaan/stash/commit/d4bc8dc7a9e50c8fb78e0e03103b1b7e79ed485d))
+* **maintenance:** auto-refresh when backend rolls over to a new version ([4b74cc9](https://github.com/Brennan-VanderLaan/stash/commit/4b74cc934533aec32e65213e6c2b7436d0e9c4d6))
+
 ## [1.50.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.1...v1.50.2) (2026-05-17)
 
 
