@@ -82,6 +82,84 @@ def _stripe():
     return stripe, cfg
 
 
+# Module-level cache: env value → resolved Stripe Price id.  Keyed
+# on the operator-supplied input so a re-read of the env var (with
+# the same value) is free.  Only the product→price lookup needs
+# the network round-trip; explicit ``price_*`` ids pass through.
+_PRICE_RESOLUTION_CACHE: dict[str, str] = {}
+
+
+def _resolve_price_id(stripe_module, configured: str) -> str:
+    """Resolve a Stripe Price id from ``STRIPE_PRICE_ID_PRO``.
+
+    Easy operator mix-up: the Stripe Dashboard's product page shows
+    both the product id (``prod_*``) and the price ids attached to
+    it (``price_*``) right next to each other, and pasting the
+    product id is the natural "I see Stash Pro, I'll grab that id"
+    move.  Checkout sessions need the Price id though — the price
+    is what carries the amount, interval, and currency the customer
+    actually pays.
+
+    If ``configured`` already looks like a Price id (the common
+    case) we pass it through unchanged.  If it's a Product id
+    (``prod_*``), we look up the product's ``default_price`` and
+    use that — a one-time API call per process startup.  Everything
+    else (typo, deleted object, wrong-mode key) we pass through so
+    Stripe surfaces its own error naturally.
+
+    Cached on the configured value so reloads of ``_config()``
+    don't re-hit the network."""
+    if configured in _PRICE_RESOLUTION_CACHE:
+        return _PRICE_RESOLUTION_CACHE[configured]
+    if not configured.startswith("prod_"):
+        _PRICE_RESOLUTION_CACHE[configured] = configured
+        return configured
+    # It's a product id.  Pull the product + use its default price.
+    try:
+        product = stripe_module.Product.retrieve(configured)
+    except Exception as exc:
+        # Don't poison the cache on a transient failure — a retry
+        # should be able to succeed.
+        raise BillingNotConfiguredError(
+            f"STRIPE_PRICE_ID_PRO is set to product '{configured}' "
+            f"but that product can't be retrieved from Stripe: "
+            f"{exc}.  Double-check it exists in the same Stripe "
+            f"account as STRIPE_SECRET_KEY (live vs test mode is "
+            f"a common mismatch).",
+        ) from exc
+    default_price = product.get("default_price")
+    if not default_price:
+        raise BillingNotConfiguredError(
+            f"STRIPE_PRICE_ID_PRO is set to product '{configured}' "
+            f"but that product has no default price.  Either set "
+            f"STRIPE_PRICE_ID_PRO to the Price id (starts with "
+            f"'price_') from the product's Pricing section in the "
+            f"Stripe Dashboard, or open the product in Stripe and "
+            f"set one of its prices as the default.",
+        )
+    # ``default_price`` is normally a string id, but with ``expand``
+    # parameters it can be a nested object.  Handle both shapes
+    # rather than assume.
+    resolved = (
+        default_price
+        if isinstance(default_price, str)
+        else default_price.get("id")
+    )
+    if not resolved or not str(resolved).startswith("price_"):
+        raise BillingNotConfiguredError(
+            f"Product '{configured}' has a default_price of "
+            f"'{resolved}' which doesn't look like a Price id.  "
+            f"Re-set STRIPE_PRICE_ID_PRO to a concrete 'price_*' "
+            f"value from the Stripe Dashboard.",
+        )
+    _log.info(
+        "billing.price_resolved product_id=%s -> price_id=%s",
+        configured, resolved,
+    )
+    _PRICE_RESOLUTION_CACHE[configured] = resolved
+    return resolved
+
+
 # ── Checkout + portal sessions ─────────────────────────────────────
 
 
@@ -101,11 +179,12 @@ def create_checkout_session(
     if actor.tenant_id is None:
         raise NotFoundError("no active tenant")
     stripe, cfg = _stripe()
+    price_id = _resolve_price_id(stripe, cfg["price_id"])
     customer_id = _ensure_stripe_customer(actor.tenant_id, actor.email)
     session = stripe.checkout.Session.create(
         mode="subscription",
         customer=customer_id,
-        line_items=[{"price": cfg["price_id"], "quantity": 1}],
+        line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
         # client_reference_id lets the webhook map an event back to

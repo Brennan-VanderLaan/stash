@@ -81,6 +81,21 @@ def _make_fake_stripe_module():
             return json.loads(payload)
     fake.Webhook = Webhook
 
+    # Used by the prod_→price_ resolution flow when an operator
+    # accidentally pastes a product id in ``STRIPE_PRICE_ID_PRO``.
+    # ``fake.products`` is a dict the test seeds before triggering
+    # checkout.
+    fake.products = {}
+
+    class Product:
+        @staticmethod
+        def retrieve(product_id):
+            fake.calls.append(("Product.retrieve", product_id))
+            if product_id not in fake.products:
+                raise RuntimeError(f"No such product: {product_id}")
+            return fake.products[product_id]
+    fake.Product = Product
+
     return fake
 
 
@@ -154,6 +169,76 @@ def test_upgrade_redirects_to_stripe_checkout(client, billing):
     assert kwargs["line_items"][0]["price"] == "price_pro_fake"
     assert kwargs["client_reference_id"] == str(client.test_tenant_id)
     assert kwargs["mode"] == "subscription"
+
+
+def test_upgrade_resolves_product_id_to_default_price(client, billing, monkeypatch):
+    """Operator pastes a product id (``prod_*``) in
+    ``STRIPE_PRICE_ID_PRO`` instead of a price id (``price_*``) —
+    the dashboard shows both side-by-side and it's an easy mix-up.
+    The DAO transparently looks up the product's default price and
+    uses that, so the checkout still succeeds.  This pins the
+    behaviour: a ``prod_*`` env value works AND the checkout
+    session carries the resolved ``price_*`` id (not the original
+    product id)."""
+    # Bust the module-level cache from any prior test run so the
+    # resolution actually hits our fake Product.retrieve.
+    import dao.billing as dao_billing
+    dao_billing._PRICE_RESOLUTION_CACHE.clear()
+    monkeypatch.setenv("STRIPE_PRICE_ID_PRO", "prod_StashPro")
+    billing.products["prod_StashPro"] = {
+        "id": "prod_StashPro",
+        "default_price": "price_resolved_from_product",
+    }
+
+    r = client.post("/usage/upgrade", follow_redirects=False)
+    assert r.status_code == 303
+
+    # Resolution happened via Product.retrieve, and the Checkout
+    # session got the price id (not the product id).
+    retrieves = [c for c in billing.calls if c[0] == "Product.retrieve"]
+    assert retrieves == [("Product.retrieve", "prod_StashPro")]
+    create_calls = [c for c in billing.calls
+                    if c[0] == "checkout.Session.create"]
+    assert len(create_calls) == 1
+    assert create_calls[0][1]["line_items"][0]["price"] == "price_resolved_from_product"
+
+
+def test_upgrade_503s_when_product_has_no_default_price(
+    client, billing, monkeypatch,
+):
+    """``prod_*`` env value with no default_price set on the
+    product surfaces a clear ``BillingNotConfiguredError`` (→ 503
+    at the route layer).  Without this, the operator would see a
+    cryptic 'No such price: prod_xxx' Stripe error from a deep
+    stack."""
+    import dao.billing as dao_billing
+    dao_billing._PRICE_RESOLUTION_CACHE.clear()
+    monkeypatch.setenv("STRIPE_PRICE_ID_PRO", "prod_NoDefaultPrice")
+    billing.products["prod_NoDefaultPrice"] = {
+        "id": "prod_NoDefaultPrice",
+        "default_price": None,
+    }
+
+    r = client.post("/usage/upgrade", follow_redirects=False)
+    assert r.status_code == 503
+    # No checkout session created — fail-fast before the network.
+    create_calls = [c for c in billing.calls
+                    if c[0] == "checkout.Session.create"]
+    assert len(create_calls) == 0
+
+
+def test_upgrade_passes_price_ids_through_unchanged(client, billing):
+    """The common case: ``STRIPE_PRICE_ID_PRO=price_*`` passes
+    through without an extra Product.retrieve call (the resolver
+    short-circuits on the ``price_`` prefix).  Pins the no-extra-
+    network-call behaviour so a future refactor doesn't accidentally
+    add a round-trip per checkout."""
+    import dao.billing as dao_billing
+    dao_billing._PRICE_RESOLUTION_CACHE.clear()
+    r = client.post("/usage/upgrade", follow_redirects=False)
+    assert r.status_code == 303
+    retrieves = [c for c in billing.calls if c[0] == "Product.retrieve"]
+    assert retrieves == []
 
 
 def test_upgrade_creates_stripe_customer_once(client, billing):
