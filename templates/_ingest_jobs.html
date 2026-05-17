@@ -24,7 +24,17 @@
        to failed). #}
     {% if j.status == 'failed' %}
     <form method="post" action="/ingest/{{ j.id }}/retry">
-      <button type="submit" class="btn btn-secondary btn-sm" title="Retry">Retry</button>
+      <button type="submit" class="btn btn-secondary btn-sm" title="Retry the AI vision pass">Retry</button>
+    </form>
+    {# #60: convert a failed job into a blank pending_item the user
+       fills in by hand — no AI involvement.  Particularly useful
+       when Gemini's content filter refuses an image and the user
+       knows exactly what it is. #}
+    <form method="post" action="/ingest/{{ j.id }}/skip-ai">
+      <button type="submit" class="btn btn-secondary btn-sm"
+              title="Skip the AI and enter the item details by hand">
+        Skip AI →
+      </button>
     </form>
     {% endif %}
     {% if j.status in ['failed', 'done', 'processing'] %}

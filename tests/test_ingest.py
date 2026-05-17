@@ -75,6 +75,55 @@ def test_ingest_content_filter_block_surfaces_friendly_message(client):
     assert "no attribute" not in page
 
 
+def test_ingest_skip_ai_converts_failed_job_to_blank_pending(client):
+    """Feedback #60: when the AI fails (content filter, parse
+    error, transient blip) the user should be able to convert the
+    failed job into a manual-entry pending_item without losing the
+    upload.  POST /ingest/{job}/skip-ai inserts a blank pending
+    keyed at the photo, marks the job done, redirects to /queue.
+    The user lands on a sort card with their photo, ready to fill
+    in name + tags by hand."""
+    from vision import VisionBlockedError
+    with patch(
+        "app.vision.detect_items",
+        side_effect=VisionBlockedError(
+            "Gemini refused this photo via safety filter.",
+            debug="prompt_feedback=BLOCKED",
+        ),
+    ):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"\xff\xd8x"), "image/jpeg")},
+        )
+    # Job landed in failed state, no pending_item yet.
+    assert "failed" in client.get("/ingest").text
+    assert "Queue is empty" in client.get("/queue").text
+
+    r = client.post("/ingest/1/skip-ai", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/queue"
+
+    # /queue now has a sort card with the original photo and an
+    # empty name (user fills in by hand).
+    queue = client.get("/queue").text
+    assert "sort-card" in queue
+    # The failed job is no longer surfaced — it was marked done.
+    assert "failed" not in client.get("/ingest").text
+
+
+def test_ingest_skip_ai_rejects_non_failed_jobs(client):
+    """Manual-entry conversion is failed-only.  A still-pending or
+    processing job shouldn't get yanked into the queue by an
+    accidental click — that would race the AI worker."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="ok", description="")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    # Job is 'done' (AI succeeded).  Skip-AI should 404.
+    r = client.post("/ingest/1/skip-ai", follow_redirects=False)
+    assert r.status_code == 404
+
+
 def test_ingest_empty_response_surfaces_friendly_message(client):
     """``response.text`` is None with no block_reason — model glitch
     or rate limit.  User sees the "no items detected and no

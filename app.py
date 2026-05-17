@@ -4119,6 +4119,47 @@ def ingest_dismiss(request: Request, job_id: int):
     return RedirectResponse("/ingest", status_code=303)
 
 
+@app.post("/ingest/{job_id}/skip-ai")
+def ingest_skip_ai(request: Request, job_id: int):
+    """Feedback #60: a content-filter block (or any other AI failure)
+    leaves the user staring at "Retry / Dismiss" and the error
+    message saying "you can also skip the AI suggestion and enter
+    the item details by hand" — but there's no UI affordance to
+    actually do that.
+
+    This route closes the gap.  Convert a failed ingest job into a
+    blank pending_item with the photo attached, mark the job as
+    done, and bounce the user to /queue.  They land on a sort card
+    with their photo, no AI suggestion, ready to fill in name +
+    description + tags + crop entirely by hand.  Identical
+    downstream flow to a successful AI ingest — the only thing
+    that's different is the AI never ran."""
+    actor: Actor = request.state.actor
+    try:
+        row = dao_ingest_jobs.get_for_retry(actor, job_id)
+    except NotFoundError:
+        raise HTTPException(404, "Job not found or not failed")
+    except ForbiddenError:
+        raise HTTPException(403)
+    # Insert a blank pending_item — name placeholder forces the
+    # user to fill in something meaningful (the sort card's Accept
+    # button is disabled until ``name`` is non-empty in the form),
+    # and we omit the bbox so the cropper opens at full-frame.
+    dao_ingest_jobs.insert_pending_item(
+        row["tenant_id"] or actor.tenant_id,
+        name="",
+        description="",
+        photo=row["photo"],
+        bbox=(None, None, None, None),
+        suggested_box_id=row.get("target_box_id"),
+    )
+    # Mark the job done so it disappears from the active list.
+    # item_count=1 keeps the stats honest — one pending_item was
+    # produced, even though it came from the manual-entry path.
+    dao_ingest_jobs.mark_done(job_id, 1)
+    return RedirectResponse("/queue", status_code=303)
+
+
 def _queue_view_context(actor: Actor) -> dict:
     """Load the data needed to render the queue page (or just its cards
     fragment).  Both /queue and /queue/items share the same shape so a
