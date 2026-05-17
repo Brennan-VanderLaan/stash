@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.3](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.2...v1.45.3) (2026-05-17)
+
+
+### Bug Fixes
+
+* **deploy:** oauth2-proxy CSRF mismatch — polling endpoints overwrote ([512d8d3](https://github.com/Brennan-VanderLaan/stash/commit/512d8d3b101da515edbe2b5284442ef4916e8b94))
+
 ## [1.45.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.1...v1.45.2) (2026-05-17)
 
 
