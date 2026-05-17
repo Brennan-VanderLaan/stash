@@ -405,12 +405,29 @@
     var toast   = document.getElementById('global-drop-toast');
     if (!overlay || !toast) return;
 
-    // Counter pattern: dragenter / dragleave fire on every child
-    // element you cross while dragging, so a naive show/hide
-    // flickers as the cursor crosses the page.  Counting up on
-    // enter + down on leave + only hiding at zero gives a steady
-    // overlay until the gesture truly ends.
-    var dragCounter = 0;
+    // ── Drag-state tracking via dragover timeout ─────────────────
+    // EMERGENCY FIX (2026-05-17): the previous implementation used
+    // a dragenter / dragleave counter to balance show/hide.  Real
+    // browsers fire those events with surprising asymmetries —
+    // dragging out of the window without a dragleave (common on
+    // Chrome when crossing into a different application), nested
+    // children firing both enter and leave on the same crossing,
+    // a stale drag state from VS Code or DevTools that never
+    // emits a final dragleave at all — all leave the counter
+    // stuck above zero and the overlay frozen on screen, blocking
+    // the whole app.
+    //
+    // New approach: ``dragover`` fires continuously (~60 Hz) while
+    // a drag is over the page.  Show the overlay on the first
+    // ``dragover`` that carries files, and reset a short
+    // 200 ms "hide if I don't hear from you" timer on every
+    // subsequent ``dragover``.  When the drag leaves the page
+    // for any reason — clean dragleave, off-window, ESC, browser
+    // bug — the timer fires and we hide.  No counter to get out
+    // of sync.
+    var visible = false;
+    var hideTimer = null;
+    var DRAG_IDLE_MS = 200;
 
     function hasFiles(e) {
       if (!e.dataTransfer) return false;
@@ -431,12 +448,24 @@
       return false;
     }
 
-    window.addEventListener('dragenter', function (e) {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragCounter++;
+    function showOverlay() {
+      if (visible) return;
+      visible = true;
       overlay.hidden = false;
-    });
+    }
+    function hideOverlay() {
+      visible = false;
+      overlay.hidden = true;
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    }
+    function scheduleHide() {
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideOverlay, DRAG_IDLE_MS);
+    }
+
     window.addEventListener('dragover', function (e) {
       if (!hasFiles(e)) return;
       // preventDefault on dragover is what tells the browser
@@ -444,17 +473,13 @@
       // event never fires.
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
-    });
-    window.addEventListener('dragleave', function (e) {
-      if (!hasFiles(e)) return;
-      dragCounter = Math.max(0, dragCounter - 1);
-      if (dragCounter === 0) overlay.hidden = true;
+      showOverlay();
+      scheduleHide();
     });
     window.addEventListener('drop', function (e) {
+      hideOverlay();
       if (!hasFiles(e)) return;
       e.preventDefault();
-      dragCounter = 0;
-      overlay.hidden = true;
       var files = Array.prototype.slice.call(
         (e.dataTransfer && e.dataTransfer.files) || []
       );
@@ -467,6 +492,20 @@
       }
       uploadAll(images);
     });
+    // Safety nets — every event that could legitimately mean
+    // "the drag is over" hides the overlay.  Defensive layering
+    // because each individual event is unreliable in some browser
+    // / OS combo.
+    window.addEventListener('dragend', hideOverlay);
+    window.addEventListener('mouseleave', hideOverlay);
+    window.addEventListener('blur', hideOverlay);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && visible) hideOverlay();
+    });
+    // Click-to-dismiss escape hatch — if the overlay somehow
+    // still gets stuck (browser bug we haven't anticipated), the
+    // user can always click it away rather than reload the page.
+    overlay.addEventListener('click', hideOverlay);
 
     function showToast(msg, kind, linkHref, linkLabel) {
       toast.innerHTML = '';

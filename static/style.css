@@ -382,11 +382,30 @@ header h1 a { color: var(--accent); text-decoration: none; }
   display: flex;
   align-items: center;
   justify-content: center;
+  /* ``pointer-events: none`` is load-bearing.  If the overlay
+     ever gets stuck on screen (browser drag-state quirk), the
+     user can still click through to the app underneath.  The
+     dragover-timeout in base.html should hide it within 200 ms
+     anyway, but this is the belt-and-suspenders guarantee that
+     a stuck overlay never blocks the whole app. */
   pointer-events: none;
   backdrop-filter: blur(2px);
 }
+/* CRITICAL — without this rule the ``display: flex`` above
+   overrides the UA's ``[hidden] { display: none }`` and the
+   overlay renders on every page load (the emergency-fix
+   regression: users couldn't use the app because the dim + blur
+   was always on screen).  Higher specificity (class + attribute)
+   beats the class-only rule above without needing !important. */
+.global-drop-overlay[hidden] {
+  display: none;
+}
 .global-drop-hint {
-  pointer-events: none;
+  /* The hint card IS clickable — clicking it dismisses the
+     overlay (escape hatch).  Everything else stays
+     click-through to the underlying app. */
+  pointer-events: auto;
+  cursor: pointer;
   text-align: center;
   padding: 2rem 2.5rem;
   border: 3px dashed var(--accent);
@@ -508,6 +527,12 @@ header h1 a { color: var(--accent); text-decoration: none; }
   gap: 0.6rem;
   overflow: hidden;
   margin-bottom: -1px;  /* meet the toggle's bottom border */
+}
+/* Same gotcha as ``.global-drop-overlay[hidden]`` — the ``display:
+   flex`` above would otherwise win against the UA's hidden rule,
+   leaving the panel visible whether collapsed or expanded. */
+.loose-tray-panel[hidden] {
+  display: none;
 }
 .loose-tray-header {
   display: flex;
