@@ -1,0 +1,37 @@
+name: pr-checks
+# Fast in-process test pass.  Runs on every PR + on every push to
+# the dev branch.  Goal: <60 s feedback for the dev loop.  Heavier
+# Playwright UI suite + the full pytest run live in main-tests.yml
+# and only fire when the merge target is main.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  fast-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Fast pass: every test except the Playwright-driven UI suite
+      # (which is gated to ``-m "not ui"`` via pytest.ini's marker
+      # config).  xdist-parallel via the project pytest.ini default.
+      - name: Run unit + integration tests
+        run: pytest -m "not ui" --tb=short

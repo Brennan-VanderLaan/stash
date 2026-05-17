@@ -182,26 +182,63 @@ docker compose up -d
 Visit `https://<your-domain>` — you should be bounced to Google sign-in, and
 after sign-in see Stash.
 
-## Updates
+## Production: which image tag to pin
 
-Click **Check for updates** on the Maintenance page. The app calls
-watchtower's HTTP API over the internal network; watchtower pulls newer
-images for any container labeled
-`com.centurylinklabs.watchtower.enable=true` (stash, caddy, and oauth2-proxy
-in this stack), then stops and recreates them.
+Production pins to an **explicit version tag** — never a floating
+tag.  The full SDLC (dev → staging → release → prod) is in
+`CICD.md` at the repo root; the operator-side bit here is:
 
-The browser may flash a connection error mid-update — that's the app being
-recreated. Refresh after ~30s and the version on the Maintenance page will be
-the new one.
+1. **Find the latest release** on GitHub:
+   https://github.com/Brennan-VanderLaan/stash/releases
+2. **Edit `.env`** on the prod box to point `STASH_IMAGE` at that
+   exact tag:
+   ```
+   STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:v1.47.0
+   ```
+3. **Pull + restart** the stash container:
+   ```bash
+   docker compose pull stash
+   docker compose up -d stash
+   ```
+4. Watch logs for a minute; hit `/healthz`; sanity-check the app.
 
-## Rollback
+There is **no `:latest` tag**.  The build pipeline deliberately
+doesn't publish one — every prod cutover is an explicit operator
+action so a bad commit on main can't auto-roll-out the way it
+used to.
 
-Edit `.env` to pin `STASH_IMAGE` to a specific tag (e.g.
-`ghcr.io/brennan-vanderlaan/stash:v0.2.1`) and run:
+### Updates triggered from the app
 
-```bash
-docker compose pull && docker compose up -d
-```
+The **Check for updates** button on `/admin/maintenance` calls
+watchtower's HTTP API over the internal network.  Watchtower
+will pull whatever tag each container's compose entry points at
+(stash is pinned to a version per above; caddy + oauth2-proxy
+are on their own image streams).
+
+The browser may flash a connection error mid-update — that's the
+container being recreated. Refresh after ~30s and the version on
+the Maintenance page will be the new one.
+
+## Staging
+
+stash-staging runs on a separate EC2 instance, tracking the `:dev`
+image tag.  Watchtower on that box polls `:dev` every poll
+interval (default 5 min) and pulls automatically.  Push to `dev`
+→ build.yml fires → `:dev` updated → staging pulls within
+minutes, no operator action required.
+
+The matching `:dev-sha-<short>` immutable tag is published in the
+same build so you can pin staging to a specific commit for
+forensics or A/B testing — just edit staging's `.env` the same
+way you would for prod.
+
+## Rollback (prod)
+
+If a release goes badly, point `STASH_IMAGE` at the previous
+known-good version tag and re-run the pull + restart from above.
+GHCR retains every released image; the major / minor floating
+tags (`:1`, `:1.47`) let you pin to "latest stable in this minor"
+without re-finding the exact patch number.
 
 ## Backup
 

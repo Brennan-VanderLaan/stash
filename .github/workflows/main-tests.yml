@@ -1,0 +1,51 @@
+name: main-tests
+# Full test suite — runs on PRs that target main, and on every push
+# to main (defence in depth in case someone bypasses the PR gate).
+# Includes the Playwright UI suite, which needs Chromium installed.
+# Slower (~5-8 min) than pr-checks.yml; the trade-off is that any
+# code path heading into a production release has been exercised
+# in a real browser at both mobile + desktop viewports.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # Bump the cache key when the Playwright version pins
+          # change in requirements-dev.txt so a stale browser
+          # doesn't break the new SDK.
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt') }}
+
+      - name: Install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+
+      # Full pass: unit + integration + UI.  pytest.ini already
+      # opts every test in tests/ui/ into the ``ui`` marker; this
+      # invocation runs everything.
+      - name: Run full test suite
+        run: pytest --tb=short

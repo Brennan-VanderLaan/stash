@@ -1,8 +1,36 @@
 name: build
+# Build the production container image and push to GHCR.
+#
+# Two trigger paths:
+#
+# 1. ``push: dev``        → image tagged ``:dev`` (floating) AND
+#                           ``:dev-<short-sha>`` (immutable history).
+#                           Watchtower on stash-staging polls ``:dev``
+#                           and auto-pulls.  This is the "staging
+#                           always tracks dev tip" pipe.
+#
+# 2. ``push: tags v*.*.*`` → image tagged ``:vX.Y.Z``, ``:X.Y``, ``:X``.
+#                            NO ``:latest`` — production pins to an
+#                            explicit version in its compose env so
+#                            "what's running" is greppable and a
+#                            release is a deliberate operator action.
+#                            Tags are pushed automatically by
+#                            release-please when its Release PR lands
+#                            on main.
+#
+# No build runs on push to main itself.  Main pushes go through
+# release-please.yml, which opens a Release PR; merging that PR
+# creates the version tag, and that tag firing this workflow is the
+# canonical "production image is ready" signal.
+#
+# Test gate: a build only happens if the relevant test suite passes.
+# Dev pushes run the fast (non-UI) suite; version tags assume the
+# full suite already passed on the main PR that produced them, but
+# we re-run the fast suite here as a sanity check.
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -15,7 +43,31 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # ── Gate ──────────────────────────────────────────────────────────
+  # Run the fast in-process suite before any image push.  If this
+  # fails, no image goes out — staging stays on the previous build.
+  # Full pytest (incl. Playwright UI) runs in main-tests.yml on the
+  # PR that promotes dev → main, so we don't need to re-pay for it
+  # here on every dev push.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run fast tests
+        run: pytest -m "not ui" --tb=short
+
+  # ── Image build ───────────────────────────────────────────────────
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,16 +92,33 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
 
+      # Tag strategy:
+      #
+      # dev branch push:
+      #   :dev               (floating — watchtower target on staging)
+      #   :dev-sha-abc1234   (immutable — for rollback / forensics)
+      #
+      # Version tag push (v1.42.0):
+      #   :v1.42.0           (exact version)
+      #   :1.42              (minor pin)
+      #   :1                 (major pin)
+      #   NO :latest         (intentional — see workflow header)
+      #
+      # Conditions on each ``type=`` line use the same syntax as
+      # docker/metadata-action: ``enable={{is_branch_X}}`` returns
+      # the matched ref so the tag is emitted only when its trigger
+      # actually fired.
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=sha,prefix=dev-sha-,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - uses: docker/build-push-action@v6
         with:
@@ -60,10 +129,8 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             GIT_SHA=${{ github.sha }}
-          # Layered cache strategy: try GHA cache first (fast, free, but
-          # 10 GB LRU evictable), fall back to a dedicated `cache` tag in
-          # GHCR (persistent across branches, no eviction). Both are
-          # populated on every successful main build.
+          # Layered cache: GHA cache (fast, free, 10 GB LRU) +
+          # GHCR registry cache (persistent, no eviction).
           cache-from: |
             type=gha
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:cache
