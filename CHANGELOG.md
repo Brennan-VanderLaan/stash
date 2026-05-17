@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.50.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.49.0...v1.50.0) (2026-05-17)
+
+
+### Features
+
+* **ci:** close the loop — tag → main → prod redeploy webhook ([d589f67](https://github.com/Brennan-VanderLaan/stash/commit/d589f6782b01e423eb43c4b2281cc0f6114f4c08))
+* **ci:** move release-please to watch dev — one PR per release ([ba141cd](https://github.com/Brennan-VanderLaan/stash/commit/ba141cd33fbb5d233cdc22c77e56f1740468bb09))
+
+
+### Bug Fixes
+
+* **ci:** unblock tag-triggered builds — needs/if + release-please PAT ([7d3db53](https://github.com/Brennan-VanderLaan/stash/commit/7d3db532a38a278afc135450e459ee50db623caa))
+
 ## [1.49.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.48.0...v1.49.0) (2026-05-17)
 
 
