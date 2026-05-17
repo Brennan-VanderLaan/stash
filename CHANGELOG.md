@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.45.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.44.0...v1.45.0) (2026-05-17)
+
+
+### Features
+
+* **items:** loose-tray sidebar + drag-to-assign across pages ([f92795a](https://github.com/Brennan-VanderLaan/stash/commit/f92795a1dc72e87366ca64a37a5e9620ee7b396d))
+
+
+### Bug Fixes
+
+* **billing:** auto-resolve Stripe product id → default price for checkout ([47813cd](https://github.com/Brennan-VanderLaan/stash/commit/47813cd836d4e75d89ff3f77fbb21faff6062f3c))
+
 ## [1.44.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.43.0...v1.44.0) (2026-05-17)
 
 
