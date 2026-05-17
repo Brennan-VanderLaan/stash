@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.46.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.1...v1.46.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **leaderboard:** star-rain still appeared to cut off mid-screen ([#55](https://github.com/Brennan-VanderLaan/stash/issues/55) round 2) ([791659a](https://github.com/Brennan-VanderLaan/stash/commit/791659aaaab9f2e6d5618e9f78cfea86626f0a89))
+
 ## [1.46.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.0...v1.46.1) (2026-05-17)
 
 
