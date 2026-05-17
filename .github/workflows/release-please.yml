@@ -1,8 +1,20 @@
 name: release-please
+# release-please watches the ``dev`` branch (NOT main).
+#
+# Why dev: dev is the source of truth for features in this repo.
+# Watching dev means release-please's Release PR opens on dev, and
+# merging it cuts the tag directly — no separate "dev → main"
+# promotion step that produces a second PR.  See CICD.md for the
+# full rationale + the trade-offs we considered.
+#
+# main becomes a deployment-state marker (kept around for branch
+# protection and historical view) — not where release decisions
+# happen.  The v*.*.* tag is the source of "this is the released
+# code"; prod pins to a tag, not to main.
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
 
 permissions:
   contents: write
@@ -16,3 +28,4 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: dev

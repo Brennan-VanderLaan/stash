@@ -205,6 +205,18 @@ def main() -> None:
     today = date.today().isoformat()
 
     commits = commits_since(tag) if tag else []
+
+    # Special case: we're sitting right ON the latest release tag
+    # (happens when build.yml fires immediately after release-please
+    # merges its Release PR — HEAD is the release commit itself).
+    # Don't render a fake "1.X.Y+1-dev" preview that predicts a
+    # release we just finished; ship the clean manifest version and
+    # an unmodified CHANGELOG.md.  Next non-bump dev push refreshes
+    # the preview naturally.
+    if not commits:
+        json.dump({"version": current, "markdown": ""}, sys.stdout)
+        return
+
     bump = predict_bump(commits)
     next_version = bump_version(current, bump)
     pending_version = f"{next_version}-dev.{short_sha}"

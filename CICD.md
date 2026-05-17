@@ -23,36 +23,33 @@ Living document.  Pairs with `Spec.md` (product surface) and
                          optional polling fallback in deploy/README.md)
               │
               ▼
-   real-world QA + manual smoke + end-to-end suite (future)
+   real-world QA + visual verification on /admin feedback kanban
               │
               ▼
-   ┌──────────────────┐
-   │  dev → main PR   │  ── PR ─→  main         (pr-checks + main-tests:
-   └──────────────────┘                          full pytest + UI suite)
-              │ approve + merge
-              ▼
-   ┌──────────────────┐
-   │      main        │  ── push ─→ release-please.yml
-   └──────────────────┘                  │
-                                         │  opens a Release PR with the
-                                         │  changelog the conventional
-                                         ▼  commits produce
-                                ┌────────────────────────┐
-                                │  chore(main): release  │  ← merge me
-                                │      vX.Y.Z PR         │     to ship
-                                └────────────────────────┘
-                                         │ merge
-                                         ▼
-                              release-please cuts tag vX.Y.Z
-                                         │
-                                         ▼
-                                  build.yml fires
-                              builds :vX.Y.Z + :X.Y + :X
-                                         │
-                                         ▼
-                       Operator on prod: pin STASH_IMAGE,
-                              pull + restart
+                  release-please.yml watching dev opens
+                  ┌────────────────────────┐
+                  │  chore(dev): release   │  ← merge me to ship
+                  │      vX.Y.Z PR         │    (release-tests.yml
+                  └────────────────────────┘     runs full Playwright
+                              │ merge            on this PR specifically)
+                              ▼
+                  release-please cuts tag vX.Y.Z at dev tip
+                              │
+                              ▼
+                       build.yml fires on the tag
+                       builds :vX.Y.Z + :X.Y + :X
+                              │
+                              ▼
+                  Operator on prod: pin STASH_IMAGE,
+                         pull + restart
 ```
+
+**One PR per release.**  release-please watches ``dev``, so its
+Release PR opens on dev and merging it cuts the tag directly —
+no separate "dev → main" promotion step.  ``main`` exists as a
+ceremonial / branch-protection anchor but no longer carries
+release decisions; the v*.*.* tags are the source of truth and
+prod pins to a tag.
 
 No `:latest` tag anywhere.  Staging tracks `:dev` (mutable, that's
 fine — it's the "staging channel" not "the canonical latest
@@ -93,10 +90,10 @@ release time.
 
 | File | Trigger | What it does |
 |---|---|---|
-| `pr-checks.yml` | PR to `main` or `dev` | Fast pytest pass (`-m "not ui"`).  ~30 s.  Required check for any PR.  No `push: dev` trigger — dev pushes are gated by build.yml's embedded test job, so running pr-checks on the same push would double-bill the suite. |
-| `main-tests.yml` | PR to `main` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on `dev → main` PRs.  No `push: main` trigger — branch protection guarantees the PR gate already ran. |
-| `build.yml` | push to `dev`, tag `v*.*.*` | Build + push image.  Dev pushes are gated by the fast tests as belt-and-suspenders (catches direct-to-dev pushes that skipped the PR).  Tag pushes skip the gate — the dev → main PR already ran the full suite, so re-testing here would just delay the production image. |
-| `release-please.yml` | push to `main` | Opens / updates the Release PR with the assembled changelog.  Merging the Release PR creates the version tag. |
+| `pr-checks.yml` | PR to `main` or `dev` (skipped for `release-please--*` head) | Fast pytest pass (`-m "not ui"`).  ~30 s.  Required check for feature PRs.  Skipped on the Release PR (release-tests.yml runs the full suite there). |
+| `release-tests.yml` | PR to `dev` with head `release-please--*` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on the Release PR specifically — that PR's merge is the release ceremony. |
+| `build.yml` | push to `dev`, tag `v*.*.*` | Build + push image.  Dev pushes are gated by the fast tests (catches direct-to-dev pushes that skipped the PR).  Tag pushes skip the gate — the Release PR already ran the full Playwright suite. |
+| `release-please.yml` | push to `dev` | Opens / updates the Release PR (on dev) with the assembled changelog.  Merging it creates the version tag at dev's tip. |
 | `pr-title.yml` | PR open / edit | Validates conventional-commit PR title (gate for release-please assembling clean changelog sections). |
 
 ### Asymmetric test gates, on purpose
@@ -104,32 +101,31 @@ release time.
 The fast path to a production image looks like:
 
 ```
-   dev → main PR    main-tests runs full suite ──┐
-        │ merge                                  │ gated here
-        ▼                                        │
-        main      (no tests, no build)           │
-        │                                        │
-        ▼                                        │
-   release-please opens Release PR               │
-        │ merge                                  │
-        ▼                                        │
-   release-please tags vX.Y.Z                    │
-        │                                        │
-        ▼                                        │
-   build.yml fires on the tag    (no gate) ◄─────┘
+   feature PR → dev     pr-checks (fast tests, ~30s)
+        │ merge
+        ▼
+   dev push           build.yml's test job (fast, gates :dev image)
+        │
+        ▼
+   release-please Release PR
+   (on dev, head ``release-please--…``)   release-tests runs ──┐
+        │ merge                            full Playwright     │ gated here
+        ▼                                  suite               │
+   release-please tags vX.Y.Z at dev tip                       │
+        │                                                      │
+        ▼                                                      │
+   build.yml fires on the tag    (no gate) ◄────────────────────┘
 ```
 
-Anything that lands on `main` is already known-good — branch
-protection makes the PR gate non-negotiable.  Re-running tests on
-`push: main` or on the tag push would just spend minutes
-verifying what's already verified, and the *only* effect is
-delaying the production image.  Speed of release is the win;
-correctness is held by the PR gate, not by repetition.
+The Release PR is the only place the full Playwright suite
+runs — that's the "are you sure you want to ship this?" gate.
+Feature PRs get the fast suite via pr-checks; direct dev pushes
+get the fast suite via build.yml's embedded test job.  Tag
+builds skip tests entirely because the Release PR they came from
+already exercised the full suite.
 
-The dev-push build keeps its fast-test gate because direct
-pushes to `dev` are allowed (PR requirement on `dev` is optional
-for solo / small teams) and we don't want a broken commit
-landing on staging just because someone bypassed the PR flow.
+Net: full Playwright fires exactly once per release.  Fast tests
+fire on every feature change.  No double-billing anywhere.
 
 ## Branch protection
 
@@ -138,36 +134,33 @@ them once via the **Settings → Branches → Branch protection rules**
 UI (or via Terraform / the `repository` API).  Documented here so
 the next person doesn't have to re-figure-out what we want.
 
-### `main`
-- **Require a pull request before merging**: ✓
-- **Require approvals**: 1 (lower bound; bump as the team grows)
-- **Dismiss stale approvals on new commit**: ✓
-- **Require status checks to pass before merging**: ✓
-  - `pr-checks / fast-tests`
-  - `main-tests / full-suite`
-  - `pr-title / lint`
-- **Require branches to be up to date before merging**: ✓
-- **Restrict who can push to matching branches**: ✓
-  - Allow: repo admins (for emergency hotfixes) + `release-please[bot]` (for the Release PR merge that creates the tag)
-- **Do not allow bypassing the above settings**: ✓
-- **Block force pushes**: ✓
-- **Block deletions**: ✓
-
 ### `dev`
 - **Require a pull request before merging**: optional — depends on team size.  For solo / very-small teams, direct push is fine.  Add the PR requirement once there are multiple committers and "I want a second pair of eyes" matters.
 - **Require status checks to pass**: ✓ when PRs are enabled
-  - `pr-checks / fast-tests`
+  - `pr-checks / fast-tests` (feature PRs)
+  - `release-tests / full-suite` (Release PR specifically — the merge ceremony)
+- **Allow auto-merge**: ✓ — release-please's Release PR can be set to auto-merge when checks pass.
 - **Block force pushes**: ✓
 - **Block deletions**: ✓
+- **Allow** `release-please[bot]` to bypass review requirements on Release PRs.
+
+### `main`
+- Largely ceremonial under the new model.  Release decisions happen on `dev` via release-please's Release PR; `main` is kept for branch-protection anchoring + historical browsing.  Optional protections if you want main to keep mirroring the latest released code:
+- **Require a pull request before merging**: ✓
+- **Restrict who can push**: only admins.  `main` no longer auto-updates (nothing pushes to it).
+- **Block force pushes**: ✓
+- **Block deletions**: ✓
+
+If you want `main` to track the latest release, fast-forward it manually after each tag (or add a small workflow that does it).
 
 ### Default branch
 Settings → General → **Default branch** → set to `dev`.
 
 This is what makes `git clone` land you on `dev` by default, and
-what GitHub uses as the base for new PRs.  Combined with the
-protections on `main`, the natural workflow is "branch from dev,
-PR to dev, accumulate features, cut a release when ready by
-PR'ing dev → main".
+what GitHub uses as the base for new PRs.  The natural workflow
+is "branch from dev, PR to dev, accumulate features.  When the
+rolling release-please PR on dev looks good, merge that — it
+cuts the tag directly."
 
 ## Image tags
 
@@ -185,26 +178,22 @@ without a fresh build.
 
 ## Cutting a release
 
-The hands-on bit.  Two paths — the canonical one through GitHub
-and the emergency one over SSH.
+### Canonical: one PR, one merge
 
-### Canonical: through GitHub
-
-1. Open a PR `dev → main`.  GitHub auto-runs `pr-checks` +
-   `main-tests`.  Wait for green.
-2. Get approval (or self-approve if you're flying solo + the
-   branch protection allows).
-3. Merge the PR.
-4. release-please.yml runs on the `main` push.  Within a minute or
-   two, it'll have opened (or updated) a PR titled
-   `chore(main): release X.Y.Z`.  The body of that PR is the
-   assembled changelog — read it, sanity-check it.
-5. Merge the Release PR.  release-please tags `vX.Y.Z`, the tag
-   fires `build.yml`, and the image lands in GHCR within ~5 min.
-6. On the prod box, point `STASH_IMAGE` in `deploy/.env` at the
-   new tag:
+1. Land conventional commits on `dev` as you work.  Each push
+   updates the rolling Release PR that release-please maintains
+   on `dev` (titled `chore(dev): release X.Y.Z`).
+2. When you're ready to ship, open that Release PR and read the
+   assembled changelog.
+3. Merge the Release PR.  `release-tests.yml` fires the full
+   Playwright suite on it; once green, hit merge.
+4. release-please cuts the `vX.Y.Z` tag at `dev`'s tip, which
+   fires `build.yml` and publishes `:vX.Y.Z` + `:X.Y` + `:X` to
+   GHCR within ~5 min.
+5. On the prod box, point `STASH_IMAGE` in `deploy/.env` at the
+   new floating-minor tag:
    ```
-   STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:v1.47.0
+   STASH_IMAGE=ghcr.io/brennan-vanderlaan/stash:1.49
    ```
    then:
    ```
@@ -213,20 +202,21 @@ and the emergency one over SSH.
    ```
    Watch logs for a minute, hit `/healthz`, sanity-check the app.
 
-### Emergency: hotfix from main
+### Emergency: hotfix straight to dev
 
-If prod is broken and dev has unrelated work-in-progress:
+Same as the canonical flow — the only difference is urgency.
 
-1. Branch from `main` (not `dev`) — call it `hotfix/<short-desc>`.
-2. Make the fix, write a regression test, PR back to `main`
-   directly.
-3. Get the PR through `main-tests` green.
-4. Merge.  release-please will produce a Release PR for the patch
-   bump (e.g. `v1.47.1`).
-5. Merge the Release PR.  Cut over prod as above.
-6. **Back-port to dev**: open a PR `main → dev` to keep the dev
-   branch from drifting behind.  Otherwise the next regular
-   release loses the hotfix.
+1. Branch from `dev` — call it `hotfix/<short-desc>`.
+2. Make the fix, write a regression test, PR back to `dev`.
+3. Get the PR through `pr-checks`.  Merge.
+4. release-please updates the Release PR with the new fix at the
+   top.  Run `release-tests` and merge it.
+5. Cut over prod as in step 5 above — with `:1.49` floating-minor
+   pin, the in-app maintenance button is enough; you don't even
+   need to edit `.env`.
+
+There's no longer a "branch from main" path — main isn't where
+releases happen.  Hotfixes and features both flow through dev.
 
 ### "Cut release" in-app
 
@@ -333,7 +323,8 @@ mirror where the operator confirms with their eyes.
         `fix_commit_sha` cleared so the AI digs deeper rather
         than re-pointing at the same commit.  Optional operator
         note is appended to `operator_notes` for audit.
-9. **A prod release ships** (dev → main → release-please tag).
+9. **A prod release ships** (release-please's Release PR on dev
+   merges, tag fires).
    Operator pings the AI in chat: "I just shipped v1.47.0".  The
    AI:
    1. `git log <prev-tag>..v1.47.0 --pretty=%H` to collect the

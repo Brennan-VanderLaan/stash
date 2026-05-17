@@ -1,23 +1,31 @@
-name: main-tests
-# Full test suite — runs ONLY on PRs that target main.
+name: release-tests
+# Full test suite — fires on release-please's Release PR (head
+# branch matches ``release-please--*``).  That PR's merge is the
+# release ceremony; full-Playwright validation belongs here, not
+# on every feature PR (those get pr-checks's fast suite).
+#
+# Why filter by head_ref instead of branches: release-please's
+# Release PR targets ``dev`` like every other PR, so a base-branch
+# filter alone would match them all and double-bill the suite.
+# The ``startsWith(head_ref, 'release-please--')`` check on the
+# job is precise.
 #
 # Includes the Playwright UI suite, which needs Chromium installed.
 # Slower (~5-8 min) than pr-checks.yml; the trade-off is that any
 # code path heading into a production release has been exercised
 # in a real browser at both mobile + desktop viewports.
-#
-# No ``push: main`` trigger by design.  Branch protection on main
-# requires this workflow to pass on the PR, so anything that
-# actually lands has already been tested.  Re-running on the push
-# would just delay release-please.yml from opening the next
-# Release PR — the slow path to a production tag is the one we're
-# trying to keep tight.
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
   full-suite:
+    if: startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

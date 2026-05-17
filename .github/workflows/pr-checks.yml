@@ -1,13 +1,17 @@
 name: pr-checks
-# Fast in-process test pass on every PR.  Goal: <60 s feedback so
-# a contributor doesn't have to context-switch waiting for green.
-# Heavier Playwright UI suite + the full pytest run live in
-# main-tests.yml and only fire when the merge target is main.
+# Fast in-process test pass on feature PRs.  Goal: <60 s feedback
+# so a contributor doesn't have to context-switch waiting for
+# green.  Heavier Playwright UI suite lives in release-tests.yml
+# and only fires on release-please's Release PR.
 #
 # NOT triggered on push.  Direct ``dev`` pushes are gated by
 # build.yml's own fast-test job before the image goes out — see
 # the "Test gate (asymmetric, by design)" comment block there.
 # Running pr-checks on the same push would double-bill the suite.
+#
+# Release PRs (head ``release-please--*``) are skipped because
+# release-tests.yml runs the full suite on them — a fast subset
+# on top would be pure duplication.
 
 on:
   pull_request:
@@ -18,6 +22,7 @@ permissions:
 
 jobs:
   fast-tests:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
