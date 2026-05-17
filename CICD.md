@@ -228,6 +228,40 @@ Same as the canonical flow — the only difference is urgency.
 There's no longer a "branch from main" path — main isn't where
 releases happen.  Hotfixes and features both flow through dev.
 
+### Setting up the release-please PAT
+
+By default, GHA workflows triggered by a `GITHUB_TOKEN`-driven
+push are deliberately invisible to other workflows.  release-please
+uses `GITHUB_TOKEN` when it creates the version tag, which means
+**without a PAT, `build.yml` and `main-sync.yml` don't fire on
+the tag push**.  You'd be stuck firing them manually each release
+with `gh workflow run build.yml --ref v1.X.Y` and `gh workflow
+run main-sync.yml --ref v1.X.Y`.
+
+To close the loop:
+
+1. **Generate a fine-grained PAT** at https://github.com/settings/personal-access-tokens
+   - Resource owner: yourself (or the org).
+   - Repository access: **Only select repositories** → `stash`.
+   - Permissions:
+     - **Contents**: Read and Write
+     - **Pull requests**: Read and Write
+   - Expiration: as long as you're comfortable with (1 year is
+     fine for solo / small-team operations; rotate before it
+     lapses or release-please breaks silently).
+2. **Copy the `github_pat_…` value** — only shown once.
+3. **Add a repo secret** at Settings → Secrets and variables →
+   Actions → New repository secret:
+   - Name: `RELEASE_PLEASE_TOKEN`
+   - Value: the `github_pat_…` from step 2.
+4. **No code change needed** — `release-please.yml` already reads
+   `secrets.RELEASE_PLEASE_TOKEN || github.token`, so the PAT
+   takes over automatically once it's present.
+
+After this is wired, every Release PR merge fires the full chain:
+tag → `build.yml` builds image → `main-sync.yml` ff's main + POSTs
+prod webhook.  No manual workflow_dispatch calls.
+
 ### "Cut release" in-app
 
 (Deferred.)  Planned: a `/admin` button that, when clicked,
