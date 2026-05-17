@@ -148,6 +148,10 @@ _PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("GET", "/api/v1/boxes", None),
     ("GET", "/api/v1/items", None),
     ("POST", "/api/v1/items/10/move", {"box_id": 1}),
+    # CI redeploy webhook: bearer-only, operator-only.  Test the
+    # unauth wall here; the non-operator + happy-path coverage
+    # lives in test_api.py near the other /api/v1 surface tests.
+    ("POST", "/api/v1/admin/redeploy", None),
     ("GET", "/shared", None),
     ("GET", "/shared/box/1", None),
     ("GET", "/uploads/anything.jpg", None),

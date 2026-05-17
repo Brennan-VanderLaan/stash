@@ -651,3 +651,102 @@ def test_usage_revoke_cuts_token_immediately(client):
     r2 = client.get("/api/v1/me",
                     headers={"Authorization": f"Bearer {token}"})
     assert r2.status_code == 401
+
+
+# ── CI redeploy webhook (/api/v1/admin/redeploy) ───────────────────
+
+
+def _mint_operator_token(app_mod, tenant_id, op_email):
+    """Mint a bearer token whose creator is in STASH_OPERATOR_EMAILS.
+    The actor-middleware reads the creator email back at request time
+    and sets is_operator=True, so the resulting token authenticates
+    as an operator without needing to plumb is_operator through the
+    DAO's mint path."""
+    from dao import Actor, api_tokens as dao_api_tokens
+    op_actor = Actor(
+        email=op_email, tenant_id=tenant_id, role="maintainer",
+        is_operator=True, memberships=((tenant_id, "maintainer"),),
+        shares=(),
+    )
+    return dao_api_tokens.create(op_actor, name="ci-redeploy")["plaintext"]
+
+
+def test_redeploy_unauthenticated_rejected(tmp_path, monkeypatch):
+    """No bearer → 401 from the global wall.  This endpoint is in
+    the bearer-only /api/v1 surface."""
+    app_mod, _ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        r = c.post("/api/v1/admin/redeploy")
+    assert r.status_code in (401, 403)
+
+
+def test_redeploy_non_operator_bearer_is_forbidden(tmp_path, monkeypatch):
+    """A regular tenant maintainer bearer is rejected with 403.
+    Opacity (404) is HTML-only; the API surface uses 403 uniformly."""
+    app_mod, ids = _bootstrap_two_tenants(tmp_path, monkeypatch)
+    token = _mint_token(app_mod, ids["t1"], "owner@t1.example")
+    with TestClient(app_mod.app) as c:
+        r = c.post("/api/v1/admin/redeploy",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
+def test_redeploy_503_when_watchtower_not_configured(tmp_path, monkeypatch):
+    """If WATCHTOWER_URL is empty on this deploy, the route 503s
+    rather than silently no-opping.  GHA hitting a misconfigured
+    box should fail loudly so the operator can fix the env."""
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    monkeypatch.delenv("WATCHTOWER_URL", raising=False)
+    app_mod, ids = _bootstrap_two_tenants(
+        tmp_path, monkeypatch, keep_operators=True,
+    )
+    # Add op as a tenant member of T1 so token mint succeeds.
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'op@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint_operator_token(app_mod, ids["t1"], "op@example.com")
+    with TestClient(app_mod.app) as c:
+        r = c.post("/api/v1/admin/redeploy",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 503
+    assert "WATCHTOWER_URL" in r.json()["detail"]
+
+
+def test_redeploy_happy_path_triggers_watchtower(tmp_path, monkeypatch):
+    """Operator bearer + WATCHTOWER_URL set → 200, and the
+    watchtower-trigger background task runs.  We stub the
+    trigger function so the test doesn't make real network calls."""
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", "op@example.com")
+    monkeypatch.setenv("WATCHTOWER_URL", "http://watchtower:8080")
+    monkeypatch.setenv("WATCHTOWER_TOKEN", "test-watchtower-token")
+    app_mod, ids = _bootstrap_two_tenants(
+        tmp_path, monkeypatch, keep_operators=True,
+    )
+    with app_mod.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'op@example.com', 'maintainer', CURRENT_TIMESTAMP)",
+            (ids["t1"],),
+        )
+        conn.commit()
+    token = _mint_operator_token(app_mod, ids["t1"], "op@example.com")
+
+    calls: list[bool] = []
+    def fake_trigger():
+        calls.append(True)
+    monkeypatch.setattr(app_mod, "_trigger_watchtower_update", fake_trigger)
+
+    with TestClient(app_mod.app) as c:
+        r = c.post("/api/v1/admin/redeploy",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "triggered": "watchtower"}
+    # BackgroundTasks fire after the response is sent — by the time
+    # TestClient returns control, the task has run.
+    assert calls == [True], "watchtower trigger should have been called once"

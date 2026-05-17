@@ -8381,6 +8381,46 @@ def admin_maintenance_cleanup(request: Request):
     )
 
 
+# ── CI redeploy webhook ─────────────────────────────────────────────
+#
+# Bearer-authenticated companion to ``POST /admin/maintenance/update``
+# above.  Same effect (forwards to watchtower's HTTP API) but
+# reachable from outside the in-app UI — the build.yml workflow POSTs
+# here on every successful ``:dev`` image push so staging redeploys
+# event-driven instead of waiting on watchtower's poll loop.
+#
+# Auth surface: standard ``/api/v1/`` bearer-token path through the
+# current_actor middleware.  The token must be minted from an
+# email in STASH_OPERATOR_EMAILS — the same gate as the HTML
+# route.  Operator opacity (404 instead of 403) doesn't apply
+# here because the API surface treats forbidden as 403 uniformly;
+# the curious tenant-maintainer attack-surface concern is HTML-only.
+#
+# Failure shapes:
+#   * Missing / invalid bearer       → 401 (middleware)
+#   * Non-operator bearer            → 403
+#   * WATCHTOWER_URL not configured  → 503 (deploy bug, not a no-op)
+#   * watchtower POST itself fails   → the background task swallows
+#       the error (the container can be killed mid-call); the caller
+#       always sees 202 ``triggered``.  GHA logs the curl response;
+#       if the webhook chain is broken we want loud failure on the
+#       reachability check (401/403/503), not silent on the
+#       fire-and-forget step.
+@app.post("/api/v1/admin/redeploy")
+def api_admin_redeploy(request: Request, background: BackgroundTasks):
+    actor: Actor = request.state.actor
+    if not actor.is_operator:
+        raise HTTPException(403, "Operator-only endpoint")
+    if not WATCHTOWER_URL:
+        raise HTTPException(
+            503,
+            "Watchtower URL not configured on this deployment — "
+            "set WATCHTOWER_URL + WATCHTOWER_TOKEN in .env",
+        )
+    background.add_task(_trigger_watchtower_update)
+    return {"ok": True, "triggered": "watchtower"}
+
+
 def _produce_full_backup_zip() -> tuple[bytes, str]:
     """Build the deployment-wide backup zip in memory.  Returns
     ``(bytes, filename)``.  Pure function — no auth, no HTTP.

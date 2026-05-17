@@ -155,3 +155,43 @@ jobs:
           cache-to: |
             type=gha,mode=max
             type=registry,ref=${{ env.REGISTRY }}/${{ steps.img.outputs.name }}:cache,mode=max
+
+      # ── Notify staging ────────────────────────────────────────────
+      # Event-driven redeploy: after the :dev image lands in GHCR,
+      # POST to staging's operator-only ``/api/v1/admin/redeploy``
+      # endpoint with a bearer token.  That endpoint background-
+      # triggers watchtower's HTTP API to pull + recreate the stash
+      # container.  End-to-end latency from "git push origin dev"
+      # to "running on staging" drops from ~5-8 min (poll-driven)
+      # to ~30-60 s after this step completes.
+      #
+      # Tag-triggered builds (production releases) intentionally
+      # do NOT hit this hook — production cutover is a deliberate
+      # operator action via the in-app /admin/maintenance button.
+      #
+      # ``continue-on-error: true`` because the image is already
+      # published at this point; if staging is down or the secret
+      # is mid-rotation we don't want to fail an otherwise-green
+      # build.  Watchtower's periodic-poll fallback (if enabled
+      # on staging's .env as belt-and-suspenders) will catch up
+      # within its interval anyway.
+      #
+      # Secrets required (Settings → Secrets and variables → Actions):
+      #   STAGING_REDEPLOY_URL    — full URL incl. /api/v1/admin/redeploy
+      #   STAGING_REDEPLOY_TOKEN  — bearer minted on the staging stash
+      #                             from an operator email account
+      - name: Trigger staging redeploy
+        if: github.ref == 'refs/heads/dev'
+        continue-on-error: true
+        env:
+          URL: ${{ secrets.STAGING_REDEPLOY_URL }}
+          TOKEN: ${{ secrets.STAGING_REDEPLOY_TOKEN }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+            echo "::warning::STAGING_REDEPLOY_URL or STAGING_REDEPLOY_TOKEN not set — skipping webhook"
+            exit 0
+          fi
+          curl -fsSL --max-time 30 -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "$URL"
