@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.49.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.48.0...v1.49.0) (2026-05-17)
+
+
+### Features
+
+* **ci:** bake pending-release preview into :dev images for staging ([8e164fb](https://github.com/Brennan-VanderLaan/stash/commit/8e164fb00e4b3fc144c47b5f53e4429298465db4))
+* **ci:** event-driven staging redeploy webhook + drop dup pr-checks on dev push ([370e368](https://github.com/Brennan-VanderLaan/stash/commit/370e368368eb5f2b80ae1a376d9d58450329b91f))
+* **ci:** pending-release preview baked into :dev images for staging ([cddee10](https://github.com/Brennan-VanderLaan/stash/commit/cddee103f4e1fe2bed28fd24e8a59de46b30a332))
+* **deploy:** wire dev → staging auto-update via env-driven watchtower ([8957892](https://github.com/Brennan-VanderLaan/stash/commit/895789207c9829b2d67b84ce8bcdf32e39a84f3f))
+
 ## [1.48.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.47.0...v1.48.0) (2026-05-17)
 
 
