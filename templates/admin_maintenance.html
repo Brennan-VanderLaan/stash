@@ -176,4 +176,11 @@
   </form>
 </section>
 
+{# Background watcher: passive polling that catches version
+   rollovers triggered from outside this page (e.g. release pipeline
+   firing the prod redeploy webhook).  Co-exists with the button-
+   driven watcher above — whichever detects the change first wins,
+   the other becomes a harmless no-op. #}
+<script src="/static/version-watch.js" defer></script>
+
 {% endblock %}

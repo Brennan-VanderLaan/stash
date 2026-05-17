@@ -457,6 +457,56 @@ header h1 a { color: var(--accent); text-decoration: none; }
   margin-right: 0.25rem;
 }
 
+/* === Version-update toast (auto-refresh on backend rollover) ===
+   Sits on /maintenance + /admin/maintenance.  When the page is
+   open during a release rollover, version-watch.js polls the
+   /maintenance/version endpoint, detects when the running version
+   shifts (watchtower pulled a new image + recreated the container),
+   and shows this toast for a beat before reloading.
+
+   Slide-down + fade-in transition so it doesn't pop in abruptly —
+   the operator gets a moment to see "Updated to X.Y.Z" before the
+   page actually refreshes.
+*/
+.version-update-toast {
+  position: fixed;
+  top: calc(1rem + var(--safe-top, 0px));
+  left: 50%;
+  transform: translate(-50%, -150%);
+  z-index: 9001;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.65rem 1.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success, #5ec47a);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 0.9rem;
+  max-width: min(26rem, calc(100vw - 2rem));
+  opacity: 0;
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms ease-out;
+}
+.version-update-toast.visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+.version-update-toast-spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: version-update-spin 0.6s linear infinite;
+}
+@keyframes version-update-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* === Loose-tray sidebar (Nondre's first-user thread) ==========
    Right-edge floating tray of items currently parked in a
    ``is_loose=1`` box ("in a room but no specific box yet").

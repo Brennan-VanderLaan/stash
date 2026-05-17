@@ -68,4 +68,11 @@
 </div>
 {% endif %}
 
+{# Background watcher: detects when the backend rolls over to a
+   new version (watchtower pulled a release, container restarted)
+   and gently reloads so the operator sees the new state in
+   real time.  See static/version-watch.js for the polling +
+   toast logic. #}
+<script src="/static/version-watch.js" defer></script>
+
 {% endblock %}
