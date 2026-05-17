@@ -79,13 +79,16 @@ jobs:
         run: pytest -m "not ui" --tb=short
 
   # ── Image build ───────────────────────────────────────────────────
-  # On dev pushes: needs the test gate above.
-  # On tag pushes: ``test`` was skipped (per its ``if``), but GHA
-  # treats a skipped dependency as satisfied — the build runs
-  # immediately.  Production image goes out as fast as buildx +
-  # GHCR push can manage.
+  # On dev pushes: needs the test gate above (runs after test passes).
+  # On tag pushes: ``test`` is skipped per its ``if``.  GHA's
+  # DEFAULT behaviour with ``needs:`` is "skipped dependency →
+  # skipped job", which would silently kill the production build.
+  # The explicit ``if:`` below overrides that: build runs when
+  # test succeeded OR test was skipped.  ``!cancelled()`` makes
+  # sure a workflow-level cancel still stops everything cleanly.
   build:
     needs: test
+    if: ${{ !cancelled() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 so git history + tags are present.  The

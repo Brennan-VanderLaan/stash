@@ -24,8 +24,27 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Token strategy:
+      #
+      #   * If RELEASE_PLEASE_TOKEN is set (fine-grained PAT scoped
+      #     to this repo with Contents: Write + Pull requests: Write),
+      #     use it.  Tags pushed under that PAT's identity DO fire
+      #     downstream workflows (build.yml, main-sync.yml) the way
+      #     a human ``git push`` would.
+      #
+      #   * Without the PAT, falls through to ``github.token`` (the
+      #     same as ``secrets.GITHUB_TOKEN``).  Tags still get
+      #     created and the Release PR still opens, BUT — by
+      #     deliberate GHA design — pushes from GITHUB_TOKEN do NOT
+      #     trigger other workflows.  build.yml and main-sync.yml
+      #     would have to be triggered manually via
+      #     ``gh workflow run --ref vX.Y.Z`` after each release.
+      #
+      # See CICD.md → "Setting up the release-please PAT" for the
+      # one-time setup.
       - uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           target-branch: dev
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
