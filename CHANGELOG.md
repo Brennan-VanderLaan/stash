@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.47.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.3...v1.47.0) (2026-05-17)
+
+
+### Features
+
+* **admin:** redesign leaderboard-handles section as sortable table ([#65](https://github.com/Brennan-VanderLaan/stash/issues/65)) ([62bf0e5](https://github.com/Brennan-VanderLaan/stash/commit/62bf0e576cb12a34a4173e66a96ee2fe684045f7))
+
+
+### Bug Fixes
+
+* **crop:** 500 on Accept when photo bytes don't decode as an image ([864b0f7](https://github.com/Brennan-VanderLaan/stash/commit/864b0f7694d9b93fc65f9794313736ee4d699160))
+* **locations:** location-settings dialog rendered inline at all times ([#63](https://github.com/Brennan-VanderLaan/stash/issues/63)) ([81dcd2d](https://github.com/Brennan-VanderLaan/stash/commit/81dcd2dffc80248125656ad48aab2ac1d0be7256))
+
 ## [1.46.3](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.2...v1.46.3) (2026-05-17)
 
 
