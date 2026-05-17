@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.4](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.3...v1.45.4) (2026-05-17)
+
+
+### Bug Fixes
+
+* **security:** CSP form-action — allow Stripe Checkout + Portal redirects ([3147db5](https://github.com/Brennan-VanderLaan/stash/commit/3147db57aa340b857305b6d4727c44c96f6ffc88))
+
 ## [1.45.3](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.2...v1.45.3) (2026-05-17)
 
 
