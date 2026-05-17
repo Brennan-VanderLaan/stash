@@ -203,6 +203,77 @@ def test_no_bbox_means_no_crop_and_source_equals_photo(client):
     assert row["photo"] == row["source_photo"]
 
 
+def test_unparseable_image_falls_through_to_uncropped(client):
+    """Production regression 2026-05-17: a user uploaded a file
+    that didn't decode as an image (corrupted upload, wrong
+    format, or skip-AI flow on garbage bytes).  POST /queue/N/assign
+    crashed with ``PIL.UnidentifiedImageError`` → 500 → user
+    couldn't accept the item at all.
+
+    Pin the resilient behaviour: ``crop_photo`` catches the parse
+    failure, returns the original ``photo_name`` unchanged, and the
+    Accept flow completes normally.  The item lands in its target
+    box with the (un-crop-able) photo intact.  "No crop applied" is
+    a safer degradation than 500ing on the user's mid-sort click."""
+    client.post("/boxes", data={"name": "Box"})
+    # Bypass the regular ingest path so we can plant non-image
+    # bytes as the pending_item's photo.  The ingest worker
+    # normally encodes via save_photo_bytes which would refuse
+    # this; here we exercise the route's defensive behaviour for
+    # data that already exists on disk in a bad state.
+    import sys
+    app_mod = sys.modules["app"]
+    tenant_id = client.test_tenant_id
+    garbage_name = "corrupted-not-an-image.jpg"
+    target = app_mod.UPLOAD_DIR / str(tenant_id) / garbage_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Encrypt some non-image bytes so _read_encrypted returns
+    # bytes that PIL can't parse.
+    app_mod._write_encrypted(tenant_id, garbage_name, b"this is not an image, lol")
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO pending_items "
+            "(name, description, photo, "
+            " bbox_y_min, bbox_x_min, bbox_y_max, bbox_x_max, "
+            " tenant_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("garbage", "d", garbage_name, 0, 0, 500, 500, tenant_id),
+        )
+        pending_id = cur.lastrowid
+        conn.commit()
+
+    # Accept with the AI-bbox crop coords — exercise the crop_photo
+    # path on the broken upload.
+    r = client.post(
+        f"/queue/{pending_id}/assign",
+        data={
+            "box_id": "1", "name": "garbage",
+            "crop_y_min": "0", "crop_x_min": "0",
+            "crop_y_max": "500", "crop_x_max": "500",
+        },
+        follow_redirects=False,
+    )
+    # Pre-fix this was a 500.  Post-fix it's a clean 303 →
+    # /queue.
+    assert r.status_code == 303, (
+        f"crop_photo fallback didn't catch the unparseable image; "
+        f"got status {r.status_code} (expected 303)"
+    )
+
+    # Item exists, photo points at the original (uncropped) file.
+    with app_mod.db() as conn:
+        row = conn.execute(
+            "SELECT photo, source_photo FROM items "
+            "WHERE name = 'garbage' AND tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["photo"] == garbage_name, (
+        "crop fell through — photo should equal the original "
+        "(un-crop-able) filename rather than a cropped derivative"
+    )
+
+
 # ── Re-crop ──────────────────────────────────────────────────────────
 
 def test_recrop_changes_crop_region(client):

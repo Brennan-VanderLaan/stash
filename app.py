@@ -2249,11 +2249,33 @@ def crop_photo(tenant_id: int, photo_name: str, bbox: tuple[int, int, int, int])
     pre-generates the companion thumbnail so a re-crop is reflected
     immediately on the next page render — without the thumbnail side, lazy
     /thumbs generation can fall back to serving the source under an
-    immutable cache header, leaving stale crops visible."""
+    immutable cache header, leaving stale crops visible.
+
+    Resilience: if the decrypted bytes aren't a parsable image (a
+    corrupted upload, a non-image file that bypassed type checks at
+    upload time, an envelope-decryption mismatch), return the
+    original ``photo_name`` unchanged so the Accept flow can still
+    complete.  The route layer doesn't need to know about this —
+    "no crop applied" is a safe degradation.  Logs a warning so the
+    operator can see the file in question on a follow-up sweep."""
     plaintext = _read_encrypted(tenant_id, photo_name)
     import io as _io
-    from PIL import Image, ImageOps
-    img = ImageOps.exif_transpose(Image.open(_io.BytesIO(plaintext)))
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    try:
+        img = ImageOps.exif_transpose(Image.open(_io.BytesIO(plaintext)))
+    except (UnidentifiedImageError, OSError) as exc:
+        # PIL raises UnidentifiedImageError for genuinely unknown
+        # formats and a plain OSError for "truncated", "broken
+        # data", or "unsupported BMP/JPEG variant" cases.  Both
+        # mean the same thing to us: the bytes can't be cropped,
+        # so we proceed without cropping.  500'ing the user's
+        # Accept click on a corrupted upload is too aggressive —
+        # they lose work for a file-level glitch.
+        _LOG_ROUTE.warning(
+            "crop_photo.skip tenant_id=%s photo=%s err=%r",
+            tenant_id, photo_name, exc,
+        )
+        return photo_name
     w, h = img.size
     y_min, x_min, y_max, x_max = bbox
     # Convert 0-1000 normalized coords to pixels
