@@ -38,29 +38,33 @@ Living document.  Pairs with `Spec.md` (product surface) and
               ┌───────────────┴───────────────┐
               ▼                               ▼
        build.yml fires on the tag      main-sync.yml fires on the tag
-       builds :vX.Y.Z + :X.Y + :X       │
-                                        ├─► fast-forwards main to tag
-                                        │
-                                        └─► POSTs /api/v1/admin/redeploy
-                                            on prod (operator bearer
-                                            token; same webhook plumbing
-                                            as staging)
-                                                    │
-                                                    ▼
-                                        prod's watchtower pulls the
-                                        new image at whichever tag
-                                        prod is pinned to
-                                        (typically :1 or :X.Y)
+              │                               │
+              ├─► builds :vX.Y.Z              └─► ff main to the tag
+              │   + :X.Y + :X
+              │
+              └─► POSTs /api/v1/admin/redeploy
+                  on prod, AFTER the docker push
+                  (must fire post-push or watchtower
+                  re-checks an unchanged digest and
+                  silently no-ops — that's how v1.50.1
+                  failed before this was fixed)
+                              │
+                              ▼
+                  prod's watchtower pulls the new
+                  image at whichever tag prod is
+                  pinned to (typically :1 or :X.Y)
 ```
 
 **One PR per release, zero manual prod cutover.**  release-please
 watches ``dev``, so its Release PR opens on dev and merging it
-cuts the tag directly.  The tag fires both ``build.yml`` (image
-build) and ``main-sync.yml`` (ff main + ping prod).  Prod's
-``STASH_IMAGE`` pin decides how aggressive the auto-update is —
-``:1`` follows every minor + patch within 1.x, ``:1.49`` only
-tracks patches within 1.49.x, ``:v1.49.0`` freezes prod entirely
-(webhook becomes a no-op).
+cuts the tag directly.  ``build.yml`` builds the image and pings
+prod's redeploy webhook in the same job (so the ping always
+follows the push).  ``main-sync.yml`` ff's main in parallel for
+the "what's released right now" view.  Prod's ``STASH_IMAGE``
+pin decides how aggressive the auto-update is — ``:1`` follows
+every minor + patch within 1.x, ``:1.49`` only tracks patches
+within 1.49.x, ``:v1.49.0`` freezes prod entirely (webhook
+becomes a no-op).
 
 No `:latest` tag.  Staging tracks `:dev`, prod tracks the operator-
 chosen pin.  The "deliberate operator action" is now merging the
@@ -103,7 +107,7 @@ release time.
 | `release-tests.yml` | PR to `dev` with head `release-please--*` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on the Release PR specifically — that PR's merge is the release ceremony. |
 | `build.yml` | push to `dev`, tag `v*.*.*` | Build + push image.  Dev pushes are gated by the fast tests (catches direct-to-dev pushes that skipped the PR).  Tag pushes skip the gate — the Release PR already ran the full Playwright suite. |
 | `release-please.yml` | push to `dev` | Opens / updates the Release PR (on dev) with the assembled changelog.  Merging it creates the version tag at dev's tip. |
-| `main-sync.yml` | tag `v*.*.*` | Fast-forwards main to the tagged commit + POSTs to prod's `/api/v1/admin/redeploy` webhook.  Closes the "tag → main → prod" loop without an operator in the middle. |
+| `main-sync.yml` | tag `v*.*.*` | Fast-forwards main to the tagged commit.  The prod redeploy webhook moved into `build.yml` (post-push) so it can't race the image upload. |
 | `pr-title.yml` | PR open / edit | Validates conventional-commit PR title (gate for release-please assembling clean changelog sections). |
 
 ### Asymmetric test gates, on purpose
@@ -259,8 +263,9 @@ To close the loop:
    takes over automatically once it's present.
 
 After this is wired, every Release PR merge fires the full chain:
-tag → `build.yml` builds image → `main-sync.yml` ff's main + POSTs
-prod webhook.  No manual workflow_dispatch calls.
+tag → `build.yml` builds image + POSTs prod webhook (in order, so
+the webhook can't race the upload) → `main-sync.yml` ff's main in
+parallel.  No manual workflow_dispatch calls.
 
 ### "Cut release" in-app
 

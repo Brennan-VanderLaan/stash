@@ -243,3 +243,34 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
             "$URL"
+
+      # ── Notify prod (tag pushes only) ─────────────────────────────
+      # Must fire from INSIDE build.yml (not from main-sync.yml as a
+      # parallel workflow on the same tag push) because watchtower
+      # only sees a new digest after this build's push step actually
+      # completes.  main-sync.yml's webhook step raced ahead of the
+      # docker push by ~20 s and watchtower saw "no change," so the
+      # redeploy silently no-op'd — that's how v1.50.1 didn't land
+      # on prod.
+      #
+      # main-sync.yml still handles the "ff main to tagged commit"
+      # half (no race there — main can be updated whenever).
+      #
+      # Secrets required (Settings → Secrets and variables → Actions):
+      #   PROD_REDEPLOY_URL    — e.g. https://stash.<domain>/api/v1/admin/redeploy
+      #   PROD_REDEPLOY_TOKEN  — bearer minted on prod by an operator account
+      - name: Trigger prod redeploy
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        env:
+          URL: ${{ secrets.PROD_REDEPLOY_URL }}
+          TOKEN: ${{ secrets.PROD_REDEPLOY_TOKEN }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+            echo "::warning::PROD_REDEPLOY_URL or PROD_REDEPLOY_TOKEN not set — skipping webhook"
+            exit 0
+          fi
+          curl -fsSL --max-time 30 -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "$URL"

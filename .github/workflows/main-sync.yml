@@ -1,33 +1,26 @@
 name: main-sync
 # When a v*.*.* tag is created (which only happens when the
-# rolling Release PR on dev merges, per the new release-please
-# config), this workflow:
+# rolling Release PR on dev merges, per the release-please
+# config), this workflow fast-forwards ``main`` to the tagged
+# commit so main always reflects the latest released code.
 #
-#   1. Fast-forwards ``main`` to the tagged commit, so main
-#      always reflects the latest released code.
-#   2. POSTs to prod's ``/api/v1/admin/redeploy`` webhook so
-#      watchtower on prod pulls the new image.
+# The prod redeploy webhook used to live here too, but it had a
+# race: this workflow fires immediately on the tag push, before
+# build.yml has finished pushing the new image to GHCR.
+# Watchtower would re-check ``:1`` and see no new digest, so the
+# redeploy silently no-op'd.  The webhook moved into build.yml's
+# post-push step where it's guaranteed to fire AFTER the image
+# is actually in the registry.
 #
-# Why both steps in one workflow (not "ff main on tag, then
-# prod-redeploy on push: main"): a push using GITHUB_TOKEN
-# deliberately doesn't trigger downstream workflows.  Chaining
-# would require a PAT just so the main push fires prod-redeploy.
-# One workflow with both steps avoids that and keeps the
-# "tag → main → prod" promotion atomic.
-#
-# Prod-side prerequisites (one-time):
-#   * STASH_IMAGE on prod pinned to a tag that moves with releases:
-#     - ``:1``       — track any 1.x.y (auto-applies minors + patches)
-#     - ``:1.49``    — track only 1.49.x patches (no minor auto-bump)
-#     - ``:v1.49.0`` — frozen; webhook is a no-op
-#   * GHA secrets:
-#     - PROD_REDEPLOY_URL    e.g. https://stash.swampcats.life/api/v1/admin/redeploy
-#     - PROD_REDEPLOY_TOKEN  bearer minted on prod by an operator account
+# Prerequisites (one-time):
 #   * main branch protection must allow github-actions[bot] to
-#     push (Settings → Branches → Branch protection rules → main
-#     → "Restrict who can push" allowlist), OR main protection
-#     can be removed entirely since release decisions don't
-#     happen there anymore.
+#     push.  Achieved by dropping the ``pull_request`` rule from
+#     the "Protect Main" ruleset — see CICD.md.
+#   * dev must be linearly ahead of main (i.e., main must be an
+#     ancestor of dev).  Verify with:
+#       git merge-base --is-ancestor origin/main origin/dev
+#     If this returns non-zero, fast-forward dev to main first:
+#       git checkout dev && git merge --ff-only origin/main && git push
 
 on:
   push:
@@ -45,41 +38,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.ref }}
 
-      # Webhook fires FIRST.  Image is already in GHCR at this
-      # point (build.yml runs in parallel and is fast enough); the
-      # webhook tells prod's watchtower to re-check the pinned tag.
-      # Putting this step before the main-ff step decouples the
-      # two — a FF failure (e.g. main diverged) doesn't block the
-      # prod redeploy.
-      #
-      # Missing/empty secret skips cleanly (warning only).
-      # ``continue-on-error: true`` because the image is already
-      # built; a transient webhook failure shouldn't tank the
-      # workflow.  Operator can hit "Check for updates" on
-      # /admin/maintenance to catch up if needed.
-      - name: Trigger prod redeploy
-        continue-on-error: true
-        env:
-          URL: ${{ secrets.PROD_REDEPLOY_URL }}
-          TOKEN: ${{ secrets.PROD_REDEPLOY_TOKEN }}
-        run: |
-          if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
-            echo "::warning::PROD_REDEPLOY_URL or PROD_REDEPLOY_TOKEN not set — skipping webhook"
-            exit 0
-          fi
-          curl -fsSL --max-time 30 -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json" \
-            "$URL"
-
-      # Best-effort: fast-forward main to the tagged commit so
-      # "main" reflects the latest released code.  Fails benignly
-      # if main has diverged (e.g. one-time bootstrap mismatch
-      # where merge commits landed on main but not dev) — in that
-      # case the webhook above has already done the load-bearing
-      # work.  Operator can manually align main when convenient
-      # by force-pushing dev to main (after temporarily dropping
-      # the non_fast_forward rule).
+      # Fast-forward main to the tagged commit so it reflects
+      # the latest released code.  ``continue-on-error: true``
+      # means a diverged-main warns rather than fails the
+      # workflow — prod's redeploy webhook is independent
+      # (lives in build.yml after the image push) and doesn't
+      # depend on this step succeeding.
       - name: Fast-forward main to tagged commit
         continue-on-error: true
         run: |
