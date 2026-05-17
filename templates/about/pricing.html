@@ -17,6 +17,19 @@
   <article class="about-plan">
     <h2>Free</h2>
     <p class="about-plan-price">$0 / month</p>
+    {% if free_tier_capacity %}
+    <p class="about-plan-capacity text-sm">
+      {% if free_tier_capacity.is_full %}
+        <strong>Free tier full right now.</strong>
+        Leave us an email on the <a href="/signup">signup page</a>
+        and we'll let you know when a slot opens.
+      {% else %}
+        <strong>{{ free_tier_capacity.available_slots }}</strong>
+        of {{ free_tier_capacity.total_slots }} free spots open
+        right now.
+      {% endif %}
+    </p>
+    {% endif %}
     <ul>
       <li>{{ "{:,}".format(free_ai) }} AI calls per month</li>
       <li>{{ free_mb }} MB total photo storage</li>

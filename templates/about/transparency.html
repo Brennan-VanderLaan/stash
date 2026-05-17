@@ -286,6 +286,27 @@
 
 <section class="about-section">
   <h2>How the free tier is funded</h2>
+  {% if free_tier_capacity %}
+  <p class="about-capacity-line text-sm">
+    {% if free_tier_capacity.is_full %}
+      <strong>Right now: free tier full.</strong>
+      {{ free_tier_capacity.used_slots }} of
+      {{ free_tier_capacity.total_slots }} slots taken.  This is
+      the constraint the page is about — once the active-Pro pool
+      can fund more EBS, the operator bumps the slot count and
+      new signups open.  Leave an email on the
+      <a href="/signup">signup page</a> to be notified.
+    {% else %}
+      <strong>Right now: {{ free_tier_capacity.available_slots }}
+      of {{ free_tier_capacity.total_slots }} free slots open.</strong>
+      ({{ free_tier_capacity.used_slots }} taken.)  Each slot is
+      100 MB on EBS — the operator scales the pool up when the
+      active-Pro base + EBS volume grows, scales it down only by
+      closing new signups (existing free accounts are
+      grandfathered, see below).
+    {% endif %}
+  </p>
+  {% endif %}
   <p>
     The free tier <strong>is not magic.</strong>  Every free user
     occupies disk + serves bandwidth + costs the same B2 backup

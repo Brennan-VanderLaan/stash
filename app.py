@@ -6133,6 +6133,7 @@ def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
             "pro_price_display": _pro_price_display(),
             "pro_caps": pro_caps,
             "free_caps": free_caps,
+            "free_tier_capacity": dao_quotas.free_tier_capacity(),
             "ai_art_enabled": _ai_art_enabled(),
             "hide_feedback_widget": True,
         },

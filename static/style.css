@@ -1786,6 +1786,14 @@ body.about-public {
               var(--panel),
               var(--accent-dim));
 }
+.about-plan-capacity,
+.about-capacity-line {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.75rem;
+  border-left: 3px solid var(--accent, #4ade80);
+  background: var(--panel-2, rgba(74, 222, 128, 0.06));
+  border-radius: 0 4px 4px 0;
+}
 
 .about-table {
   width: 100%;
