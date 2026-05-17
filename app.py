@@ -3770,8 +3770,21 @@ def _process_ingest_job_locked(
                   job_id, len(detected))
     except Exception as e:
         _log.exception("ingest.worker.failed job_id=%s", job_id)
+        # Prefer the human-readable ``user_message`` from
+        # ``VisionError`` subclasses (content-filter blocks,
+        # JSON-parse failures, empty responses).  Falls back to
+        # ``str(e)`` for everything else.  Without this branch a
+        # content-filtered image surfaced to the user as "'NoneType'
+        # object has no attribute 'strip'" — the cryptic
+        # AttributeError that prompted the "missing strip error"
+        # bug report.
+        from vision import VisionError as _VisionError
+        if isinstance(e, _VisionError):
+            user_msg = e.user_message
+        else:
+            user_msg = str(e) or type(e).__name__
         try:
-            dao_ingest_jobs.mark_failed(job_id, str(e))
+            dao_ingest_jobs.mark_failed(job_id, user_msg)
         except Exception:
             _log.exception("ingest.worker.mark_failed_also_failed job_id=%s",
                            job_id)

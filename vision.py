@@ -66,6 +66,50 @@ class BoxMatch(BaseModel):
     reason: str = Field(description="One sentence explaining the choice")
 
 
+class VisionError(RuntimeError):
+    """Base class for vision-pipeline failures the ingest worker can
+    surface back to the user with a readable explanation.  Carries
+    a ``user_message`` separate from ``str(exc)`` so the wire-level
+    detail (model name, raw API error) stays in logs while the
+    queue card shows something the human can act on."""
+
+    def __init__(self, user_message: str, *, debug: str | None = None):
+        super().__init__(debug or user_message)
+        self.user_message = user_message
+
+
+class VisionBlockedError(VisionError):
+    """Gemini's content filter refused the image.  Surfaces as the
+    "Google blocked this photo" path in the queue UI — the user's
+    options are upload-a-different-photo or skip-AI-entirely."""
+
+
+def _classify_block_reason(prompt_feedback) -> str | None:
+    """Convert Gemini's ``BlockReason`` enum to a plain-English
+    fragment ("safety filter", "personal information", etc.).
+    Returns ``None`` if no recognised block reason is set so the
+    caller can fall through to the generic "no response" path."""
+    if prompt_feedback is None:
+        return None
+    raw = getattr(prompt_feedback, "block_reason", None)
+    if raw is None:
+        return None
+    # ``block_reason`` can be an enum, an int, or a string depending
+    # on the SDK version.  Stringify defensively and lower-case
+    # so the match table doesn't have to enumerate every shape.
+    name = str(getattr(raw, "name", raw)).upper().replace("BLOCKREASON.", "")
+    mapping = {
+        "SAFETY": "safety filter",
+        "PROHIBITED_CONTENT": "prohibited-content filter",
+        "BLOCKLIST": "Google's content blocklist",
+        "OTHER": "Google's content filter",
+        "PROHIBITED": "prohibited-content filter",
+        "SPII": "personal-information filter",
+        "IMAGE_SAFETY": "image safety filter",
+    }
+    return mapping.get(name, f"Google's content filter ({name.lower()})")
+
+
 def detect_items(
     image_bytes: bytes,
     media_type: str = "image/jpeg",
@@ -132,7 +176,61 @@ def detect_items(
         ],
     )
 
-    text = response.text.strip()
+    # ── Failure shapes that don't raise but produce no usable text ──
+    # The previous failure mode was that ``response.text`` returned
+    # ``None`` when Gemini blocked the image for content reasons,
+    # and the next line ``response.text.strip()`` crashed with
+    # "'NoneType' object has no attribute 'strip'" — a cryptic
+    # AttributeError that bubbled all the way to the user as the
+    # ingest job's error message ("missing strip error" per the
+    # operator report).  Real users now get a readable message
+    # naming the actual problem.
+    text = response.text
+    if text is None or not str(text).strip():
+        # Reason 1: explicit content-filter block.  Easiest to
+        # detect via the ``prompt_feedback`` block_reason.
+        block_label = _classify_block_reason(
+            getattr(response, "prompt_feedback", None)
+        )
+        if block_label:
+            raise VisionBlockedError(
+                f"Gemini refused this photo via {block_label}.  "
+                "Re-shoot the item from a different angle, crop the "
+                "frame tighter on the object, or replace the photo "
+                "with one that's less likely to trip the filter.  "
+                "You can also skip the AI suggestion and enter the "
+                "item details by hand.",
+                debug=f"prompt_feedback={response.prompt_feedback!r}",
+            )
+        # Reason 2: per-candidate finish_reason carries the block on
+        # some SDK versions even when prompt_feedback is empty.
+        finish_reason = None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            finish_reason = getattr(candidates[0], "finish_reason", None)
+        finish_name = str(
+            getattr(finish_reason, "name", finish_reason)
+        ).upper()
+        if "SAFETY" in finish_name or "PROHIBITED" in finish_name:
+            raise VisionBlockedError(
+                "Gemini stopped processing this photo for content-"
+                "safety reasons.  Re-shoot the item from a different "
+                "angle, crop tighter on the object, or enter the item "
+                "details by hand and skip the AI suggestion.",
+                debug=f"finish_reason={finish_reason!r}",
+            )
+        # Reason 3: empty response with no obvious block.  Could be
+        # a model glitch, rate limit, or a corrupted image.  At
+        # least name the symptom so the user knows it's worth a
+        # retry instead of staring at a NoneType error.
+        raise VisionError(
+            "Gemini returned an empty response for this photo — no "
+            "items detected and no explanation given.  Hit Retry to "
+            "try again, or replace the photo if the issue persists.",
+            debug=f"response={response!r}",
+        )
+
+    text = text.strip()
     # Strip markdown code fences if present
     if text.startswith("```"):
         text = text.split("```")[1]
@@ -140,7 +238,20 @@ def detect_items(
             text = text[4:]
         text = text.strip()
 
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        # Gemini sometimes returns prose explaining why it didn't
+        # comply ("I can't help with that image…") instead of JSON.
+        # Surface a hint at the first 200 chars so the user can see
+        # what Gemini actually said.
+        snippet = text[:200].replace("\n", " ").strip()
+        raise VisionError(
+            "Gemini's response wasn't valid JSON — the model returned "
+            f'free-form text instead.  Snippet: "{snippet}".  Retry, or '
+            "replace the photo with a clearer shot.",
+            debug=f"json_error={exc!r} text={text!r}",
+        ) from exc
     items = []
     for entry in data.get("items", []):
         bbox = entry.get("bbox")

@@ -42,6 +42,63 @@ def test_ingest_failure_is_recorded_not_raised(client):
     assert "Queue is empty" in client.get("/queue").text
 
 
+def test_ingest_content_filter_block_surfaces_friendly_message(client):
+    """Gemini's content filter refusing an image used to surface as
+    "'NoneType' object has no attribute 'strip'" because the worker
+    blindly called ``response.text.strip()`` on a filtered response.
+    Verify the new ``VisionBlockedError`` user-facing message lands
+    on the failed-job card instead of the cryptic AttributeError."""
+    from vision import VisionBlockedError
+    with patch(
+        "app.vision.detect_items",
+        side_effect=VisionBlockedError(
+            "Gemini refused this photo via safety filter.  Re-shoot "
+            "the item from a different angle, crop the frame tighter "
+            "on the object, or replace the photo with one that's "
+            "less likely to trip the filter.  You can also skip the "
+            "AI suggestion and enter the item details by hand.",
+            debug="prompt_feedback=<BlockReason.SAFETY: 1>",
+        ),
+    ):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
+            follow_redirects=False,
+        )
+    page = client.get("/ingest").text
+    # The readable explanation (not the AttributeError) lands on
+    # the failed-job card.
+    assert "Gemini refused this photo via safety filter" in page
+    assert "enter the item details by hand" in page
+    # The raw 'NoneType has no strip' string never reaches the user.
+    assert "NoneType" not in page
+    assert "no attribute" not in page
+
+
+def test_ingest_empty_response_surfaces_friendly_message(client):
+    """``response.text`` is None with no block_reason — model glitch
+    or rate limit.  User sees the "no items detected and no
+    explanation" message + a hint to retry."""
+    from vision import VisionError
+    with patch(
+        "app.vision.detect_items",
+        side_effect=VisionError(
+            "Gemini returned an empty response for this photo — no "
+            "items detected and no explanation given.  Hit Retry to "
+            "try again, or replace the photo if the issue persists.",
+            debug="response=<empty>",
+        ),
+    ):
+        client.post(
+            "/ingest",
+            files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")},
+            follow_redirects=False,
+        )
+    page = client.get("/ingest").text
+    assert "Gemini returned an empty response" in page
+    assert "Hit Retry to try again" in page
+
+
 def test_ingest_done_jobs_disappear_from_ingest_view(client):
     with patch("app.vision.detect_items", return_value=[
         DetectedItem(name="thing", description="d")
