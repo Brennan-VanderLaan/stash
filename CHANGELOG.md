@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.42.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.41.0...v1.42.0) (2026-05-17)
+
+
+### Features
+
+* **public:** show free-tier slot count on /about/pricing + transparency ([c10b9f9](https://github.com/Brennan-VanderLaan/stash/commit/c10b9f9ef78088e5e615804db5b5ae7a3dc08666))
+
 ## [1.41.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.40.0...v1.41.0) (2026-05-16)
 
 
