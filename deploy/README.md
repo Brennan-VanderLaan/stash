@@ -227,41 +227,90 @@ environments lives entirely in `.env`:
 
 | Variable | Prod | Staging |
 |---|---|---|
-| `STASH_IMAGE` | `:vX.Y.Z` (explicit tag, bumped per release) | `:dev` (floating, watchtower auto-pulls) |
-| `WATCHTOWER_PERIODIC_POLLS` | `false` (manual cutover only) | `true` (auto-pull on a timer) |
-| `WATCHTOWER_POLL_INTERVAL` | `86400` (effectively off; doesn't matter when periodic polls are disabled) | `300` (poll every 5 min) |
+| `STASH_IMAGE` | `:vX.Y.Z` (explicit tag, bumped per release) | `:dev` (floating, GHA webhook drives the pull) |
 | `DOMAIN` | `stash.example.com` | `stash-staging.example.com` |
 | Stripe keys | `sk_live_…` / live `whsec_…` | `sk_test_…` / test mode `whsec_…` |
 | `STASH_KEK` | unique to prod — **do not share** | unique to staging — independent backup |
+| `WATCHTOWER_PERIODIC_POLLS` | `false` (manual cutover only) | `false` primary; flip `true` only as belt-and-suspenders |
+| `WATCHTOWER_POLL_INTERVAL` | `86400` (irrelevant when polls off) | `1800` if polling fallback is enabled |
 
 Everything else (OAuth client, KEK generation procedure, Caddy,
 oauth2-proxy) is identical; staging just gets its own values.
 
-### How the auto-update works
+### How the auto-update works (event-driven, primary path)
 
 ```
-   dev branch push  ──►  build.yml fires (.github/workflows)
+   dev branch push  ──►  build.yml: fast tests + buildx push
                               │
                               ▼
                   GHCR :dev tag updated
-                              │  (every WATCHTOWER_POLL_INTERVAL)
-                              ▼
-                staging's watchtower polls GHCR
                               │
-                   manifest differs from running image?
-                              │  yes
-                              ▼
-                pull :dev + recreate stash container
+                              ▼  curl POST with bearer
+                              │   (continue-on-error: true)
+                              │
+                  staging /api/v1/admin/redeploy
                               │
                               ▼
-                  staging is on the new code
+                   background task: POST to
+                   watchtower /v1/update inside
+                   the staging docker network
+                              │
+                              ▼
+                  watchtower pulls :dev,
+                  recreates stash container
+                              │
+                              ▼
+                  staging on new code, ~30-60 s
+                  after build.yml's webhook step
 ```
 
 End-to-end latency from `git push origin dev` to "running on
 staging" is roughly: build.yml runtime (~3-5 min for the image
-build + GHCR push) + up to `WATCHTOWER_POLL_INTERVAL` seconds for
-watchtower to notice the new manifest.  With the recommended
-300 s poll, worst case is ~8 min; typical is closer to 5.
+build + GHCR push) + the curl POST + watchtower's pull time
+(~30-60 s for a small layer diff).  Typical is ~5 min total.
+
+### Wiring the webhook (one-time setup)
+
+1. **Mint a bearer token on staging.**  Sign in to
+   `https://stash-staging.<your-domain>/usage` as a Google
+   account that's in `STASH_OPERATOR_EMAILS` on the staging
+   box.  Under **API tokens**, create one named e.g. `gha-redeploy`.
+   Copy the `stash_…` plaintext — you'll never see it again.
+2. **Add two GitHub Actions secrets** at Settings → Secrets and
+   variables → Actions:
+   - `STAGING_REDEPLOY_URL` = `https://stash-staging.<your-domain>/api/v1/admin/redeploy`
+   - `STAGING_REDEPLOY_TOKEN` = the `stash_…` value from step 1
+3. **Smoke-test from your laptop** before relying on GHA:
+   ```bash
+   curl -fsSL -X POST \
+     -H "Authorization: Bearer stash_..." \
+     https://stash-staging.<your-domain>/api/v1/admin/redeploy
+   ```
+   Expected: `{"ok":true,"triggered":"watchtower"}` and a
+   container recreate visible in `docker compose logs -f stash`
+   on the staging box within seconds.
+4. **First real exercise.**  Push a no-op to `dev`; watch
+   build.yml in GitHub Actions go green.  The final step
+   ("Trigger staging redeploy") should print the same
+   `{"ok":true,...}` response.  Then `docker compose logs -f stash`
+   on the box shows the recreate.
+
+### Polling fallback (optional)
+
+The webhook is fire-and-forget with `continue-on-error: true` —
+if GHA's network blips, the build still succeeds and the image
+is in GHCR, but staging won't auto-update until the next webhook
+fires.  If you want belt-and-suspenders catch-up:
+
+```
+WATCHTOWER_PERIODIC_POLLS=true
+WATCHTOWER_POLL_INTERVAL=1800   # 30 min
+```
+
+A 30-minute fallback poll is long enough that the webhook is
+still the dominant path (so you don't pay GHCR bandwidth on
+no-op polls every 5 min) but short enough that a missed delivery
+self-heals within half an hour.
 
 ### Pinning staging to a specific dev commit
 
@@ -277,23 +326,23 @@ WATCHTOWER_PERIODIC_POLLS=false
 
 then `docker compose pull stash && docker compose up -d stash`.
 Re-enable the auto-poll later by flipping `STASH_IMAGE` back to
-`:dev` and `WATCHTOWER_PERIODIC_POLLS=true`.
+`:dev`.  The webhook still fires on subsequent dev pushes; you
+can either ignore it (compose's pinned image won't change since
+the tag is immutable) or revoke the GHA token via /usage if you
+want hard isolation.
 
 ### Verifying the wiring on a fresh staging box
 
-1. `docker compose up -d` (will error fast if STASH_IMAGE is unset
-   — that's deliberate).
+1. `docker compose up -d` — will error fast if STASH_IMAGE is
+   unset (that's deliberate; see compose comment).
 2. `docker compose logs watchtower | head -20` — confirm the
-   "Started Watchtower version …" line includes both
-   `Scheduling first run …` AND a poll interval matching your
-   `WATCHTOWER_POLL_INTERVAL`.
+   "Started Watchtower version …" line and that
+   `WATCHTOWER_HTTP_API_UPDATE` is enabled.
 3. `docker compose exec stash python -c "import os; print(os.environ.get('STASH_PUBLIC_URL'))"`
    — sanity-check the env reached the container.
-4. Push a no-op commit to `dev` (e.g. a typo fix in a comment),
-   wait for build.yml to go green in GitHub Actions, then watch
-   `docker compose logs -f watchtower` on the staging box — you
-   should see "Found new ghcr.io/…/stash:dev image" within the
-   poll interval.
+4. Run the smoke-test curl from "Wiring the webhook" step 3 — the
+   `{"ok":true,...}` reply confirms operator-auth + watchtower
+   plumbing are both green.
 
 ## Rollback (prod)
 

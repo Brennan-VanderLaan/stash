@@ -1,14 +1,17 @@
 name: pr-checks
-# Fast in-process test pass.  Runs on every PR + on every push to
-# the dev branch.  Goal: <60 s feedback for the dev loop.  Heavier
-# Playwright UI suite + the full pytest run live in main-tests.yml
-# and only fire when the merge target is main.
+# Fast in-process test pass on every PR.  Goal: <60 s feedback so
+# a contributor doesn't have to context-switch waiting for green.
+# Heavier Playwright UI suite + the full pytest run live in
+# main-tests.yml and only fire when the merge target is main.
+#
+# NOT triggered on push.  Direct ``dev`` pushes are gated by
+# build.yml's own fast-test job before the image goes out — see
+# the "Test gate (asymmetric, by design)" comment block there.
+# Running pr-checks on the same push would double-bill the suite.
 
 on:
   pull_request:
     branches: [main, dev]
-  push:
-    branches: [dev]
 
 permissions:
   contents: read

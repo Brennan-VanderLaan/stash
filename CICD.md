@@ -13,10 +13,14 @@ Living document.  Pairs with `Spec.md` (product surface) and
               ▼
    ┌──────────────────┐
    │      dev         │  ── push ─→  build.yml  (fast tests +
-   └──────────────────┘                          build :dev + :dev-sha-X)
+   └──────────────────┘                          build :dev + :dev-sha-X +
+                                                 POST /api/v1/admin/redeploy
+                                                 to staging w/ bearer token)
               │
               ▼
-   stash-staging EC2  ── watchtower polls :dev ─→ auto-pulls + restarts
+   stash-staging EC2  ── redeploy webhook → watchtower → pull :dev → restart
+                        (event-driven, ~30-60 s after build completes;
+                         optional polling fallback in deploy/README.md)
               │
               ▼
    real-world QA + manual smoke + end-to-end suite (future)
@@ -60,7 +64,7 @@ loop after one too many "main merged → prod broke" surprises.
 
 | File | Trigger | What it does |
 |---|---|---|
-| `pr-checks.yml` | PR to `main` or `dev`, push to `dev` | Fast pytest pass (`-m "not ui"`).  ~30 s.  Required check for any PR. |
+| `pr-checks.yml` | PR to `main` or `dev` | Fast pytest pass (`-m "not ui"`).  ~30 s.  Required check for any PR.  No `push: dev` trigger — dev pushes are gated by build.yml's embedded test job, so running pr-checks on the same push would double-bill the suite. |
 | `main-tests.yml` | PR to `main` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on `dev → main` PRs.  No `push: main` trigger — branch protection guarantees the PR gate already ran. |
 | `build.yml` | push to `dev`, tag `v*.*.*` | Build + push image.  Dev pushes are gated by the fast tests as belt-and-suspenders (catches direct-to-dev pushes that skipped the PR).  Tag pushes skip the gate — the dev → main PR already ran the full suite, so re-testing here would just delay the production image. |
 | `release-please.yml` | push to `main` | Opens / updates the Release PR with the assembled changelog.  Merging the Release PR creates the version tag. |
