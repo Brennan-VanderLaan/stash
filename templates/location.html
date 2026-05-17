@@ -525,15 +525,22 @@
   // Wheel = zoom anchored on cursor (Google Maps / Figma style).
   // No modifier required, since pan happens via click+drag below.
   //
-  // The boundary release matters: at ZOOM_MIN the floorplan is
-  // already "fit", so a scroll-down wheel event has nowhere to
-  // zoom out to.  Without releasing, ``preventDefault`` consumed
-  // every wheel notch and the user couldn't scroll past the
-  // floorplan to read the rest of the page (feedback #19,
-  // "it keeps trying to zoom out … when you are all the way
-  // zoomed out I want it to start scrolling again").  Same
-  // logic at ZOOM_MAX on the other end, for completeness.
-  viewport.addEventListener('wheel', (e) => {
+  // Listener is attached to the STAGE (the image element), not the
+  // surrounding viewport.  When zoom < 1 the stage is smaller than
+  // the viewport — wheel events over the padding around the image
+  // fire on the viewport but bubble through unhandled, so the
+  // browser scrolls the page naturally.  Feedback #52: "I only
+  // want to zoom if I'm over the actual floorplan, not off to the
+  // side of the floorplan, the scrolling on this page is really
+  // annoying because you get stuck on the floorplan a lot" — the
+  // previous listener on ``viewport`` hijacked every wheel notch
+  // anywhere inside the viewport rect, even the dead padding.
+  //
+  // The boundary release from feedback #19 ("when you are all the
+  // way zoomed out I want it to start scrolling again") still
+  // applies AT the image: at ZOOM_MIN, a zoom-out wheel notch
+  // over the image releases to page scroll.
+  stage.addEventListener('wheel', (e) => {
     const wantsZoomOut = e.deltaY > 0;
     const wantsZoomIn  = e.deltaY < 0;
     const atMin = zoom <= ZOOM_MIN + 0.001;

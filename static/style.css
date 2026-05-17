@@ -2119,6 +2119,50 @@ body.about-public {
 .about-cost-row-labor  td { background: var(--info-dim); }
 .about-cost-row-remainder td { background: var(--accent-dim); }
 
+/* Mobile (#57) — the 4-column ledger tables on /about/transparency
+   crushed the "What it covers" description column into a 60-px
+   sliver on 384-px phones, rendering one word per line.  Two
+   stacked treatments depending on cell type:
+
+   * The numeric cells (Today / At scale / Stripe / etc.) sit in
+     ``.about-cost-table td:nth-child(2)`` and have
+     ``white-space: nowrap`` set above, so they can't be shrunk.
+     Wrap the whole table in horizontal scroll so the user can
+     pan to the description column instead of reading one-word
+     lines.
+   * Tighten cell padding so the unscrolled viewport shows as
+     much as possible up-front. */
+@media (max-width: 720px) {
+  .about-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* min-width prevents the description column from collapsing
+       below readable width.  Lets the user scroll to read it
+       instead of squinting at one-word lines. */
+    min-width: 0;
+  }
+  .about-table thead, .about-table tbody, .about-table tr {
+    /* ``display: block`` on .about-table broke the implicit
+       table layout — re-establish via inline-table on the rows
+       so the columns still align. */
+    display: table-row-group;
+  }
+  .about-table tr { display: table-row; }
+  .about-table th, .about-table td {
+    padding: 0.45rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  /* Pin a sane minimum width for description columns ("Where it
+     goes" / "What it covers") so the column doesn't get squeezed
+     by the other three; the horizontal scroll above lets the user
+     pan to read them. */
+  .about-table td:last-child,
+  .about-table th:last-child {
+    min-width: 14rem;
+  }
+}
+
 .about-contact-card {
   background: var(--panel, #16331f);
   border: 1px solid var(--border, #2a5a3a);
@@ -3607,6 +3651,92 @@ summary.card-summary-soft::-webkit-details-marker { display: none; }
   padding-top: 0.7rem;
   margin-top: 0.3rem;
   border-top: 1px dashed var(--border);
+}
+
+/* === Add-box disclosure on /rooms/{id}/boxes (#51) ============
+   ``+ Add box`` summary doubles as the primary CTA; the inline
+   form expands on click.  Keeps the page clean when collapsed
+   while making the affordance obvious. */
+.room-add-box {
+  margin: 0;
+}
+.room-add-box > summary {
+  list-style: none;
+  display: inline-flex;
+  cursor: pointer;
+}
+.room-add-box > summary::-webkit-details-marker { display: none; }
+.room-add-box-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+  max-width: 28rem;
+}
+
+/* #50 — inline "create this AI-suggested box" button on
+   /queue cards.  Sits in the recommendation line where the
+   plain "(create it first)" hint used to live. */
+.sort-recommend-create {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-left: 0.3rem;
+  vertical-align: baseline;
+}
+.sort-recommend-create strong {
+  font-weight: 700;
+}
+
+/* #53 — "Misc" pill on loose boxes in the room boxes list.
+   Distinguishes them from regular boxes at a glance so the user
+   knows the catch-all is there. */
+.box-misc-pill {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.6rem;
+  background: var(--accent-dim);
+  color: var(--accent-strong, var(--accent));
+  font-weight: 600;
+  margin-right: 0.3rem;
+  vertical-align: 1px;
+}
+.box-card-loose {
+  /* Subtle border treatment so the loose box reads as "different
+     kind of box" without being visually competitive with regular
+     ones. */
+  border-style: dashed;
+}
+
+/* #53 — "Fresh" / "Needs review" badge on item tiles created in
+   the last 7 days.  Top-right corner of the photo so the badge
+   sits over an empty area without obscuring the item's identity. */
+.item-tile-fresh-badge {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 50%;
+  width: 1.4rem;
+  height: 1.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.item-tile-fresh {
+  /* The badge sits inside .item-tile-photo (relative positioning
+     comes from that container's existing rule); double-up here in
+     case a future refactor flattens the structure. */
+  position: relative;
+}
+.item-tile-fresh .item-tile-photo {
+  position: relative;
 }
 
 .location-card-preview {
@@ -6831,10 +6961,18 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   white-space: nowrap;
 }
 @keyframes leaderboard-rain-fall {
+  /* Fade in as the star enters the viewport from above (-3rem
+     top + 0 translate = invisible above the top edge), then stay
+     fully opaque all the way down.  The previous keyframe had an
+     ``85% opacity 1`` step + ``100% opacity 0`` fade that made
+     stars vanish mid-screen before they reached the bottom —
+     feedback #55: "stars get cut off instead of falling all the
+     way to the bottom of the screen."  The translateY(110vh)
+     already carries the star clear of the viewport so an abrupt
+     end is fine; no fade-out needed. */
   0%   { transform: translateY(0)     scale(var(--rain-scale, 1)); opacity: 0; }
-  10%  { opacity: 1; }
-  85%  { opacity: 1; }
-  100% { transform: translateY(110vh) scale(var(--rain-scale, 1)); opacity: 0; }
+  8%   { opacity: 1; }
+  100% { transform: translateY(110vh) scale(var(--rain-scale, 1)); opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   /* Respect the accessibility setting.  Skip the shower entirely

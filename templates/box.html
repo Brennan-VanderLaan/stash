@@ -156,16 +156,28 @@
   </div>
 
   {% if items_with_tags %}
+  {% set _fresh = fresh_threshold() %}
   <div class="item-grid">
     {% for entry in items_with_tags %}
     {% set it = entry.item %}
-    <button type="button" class="item-tile" data-item-id="{{ it.id }}"
-            title="{{ it.name }}">
+    {# "Fresh" / "Needs review" badge (#53) — items created in the
+       last 7 days (UTC) get a corner pill so the user can see at
+       a glance which items are recent ingest output that hasn't
+       been opened or audited yet. ``created_at`` is ISO-8601 with
+       a space separator; string comparison sorts chronologically. #}
+    {% set is_fresh = it.created_at and it.created_at > _fresh %}
+    <button type="button"
+            class="item-tile{% if is_fresh %} item-tile-fresh{% endif %}"
+            data-item-id="{{ it.id }}"
+            title="{{ it.name }}{% if is_fresh %} — recently added, may need review{% endif %}">
       <div class="item-tile-photo">
         {% if it.photo %}
         <img src="/thumbs/{{ it.photo }}" alt="" loading="lazy">
         {% else %}
         <span class="item-tile-placeholder">📦</span>
+        {% endif %}
+        {% if is_fresh %}
+        <span class="item-tile-fresh-badge" aria-label="Needs review">✨</span>
         {% endif %}
       </div>
       <span class="item-tile-name">{{ it.name }}</span>

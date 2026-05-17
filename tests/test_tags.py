@@ -39,6 +39,54 @@ def test_add_tag_to_existing_item(client):
     assert "fragile" in client.get("/boxes/1").text
 
 
+def test_add_item_tag_returns_json_for_ajax(client):
+    """Feedback #58: the tag-suggest pill on /boxes/{id} POSTs to
+    /items/{id}/tags with ``Accept: application/json`` and parses
+    the response with ``r.json()``.  Before this fix the route
+    always returned a 303 redirect to the box page (HTML), so
+    fetch followed the redirect and ``r.json()`` died parsing
+    "<!DOCTYPE html>" — the "doc error thing" the user reported.
+
+    Pins the content-negotiation: ``Accept: application/json``
+    returns 200 JSON with the new tag listed; no-Accept (default
+    form post) still returns a 303 for the no-JS path."""
+    _box(client)
+    _item(client, 1, "mug")
+    r = client.post(
+        "/items/1/tags",
+        data={"tag": "fragile"},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, (
+        f"AJAX tag-add should return 200 JSON, got {r.status_code}"
+    )
+    body = r.json()
+    assert body["ok"] is True
+    assert body["item_id"] == 1
+    assert body["box_id"] == 1
+    assert body["tags"] == ["fragile"]
+    # And the tag actually landed.
+    assert "fragile" in client.get("/boxes/1").text
+
+
+def test_add_item_tag_accepts_comma_separated_tags_via_ajax(client):
+    """``parse_tag_input`` handles "fragile, kitchen" → two tags.
+    The AJAX path returns the full list so the UI can render
+    multiple chips off a single apply."""
+    _box(client)
+    _item(client, 1, "mug")
+    r = client.post(
+        "/items/1/tags",
+        data={"tag": "fragile, kitchen"},
+        headers={"Accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body["tags"]) == {"fragile", "kitchen"}
+
+
 def test_remove_tag_from_item(client):
     _box(client)
     _item(client, 1, "mug", "fragile")

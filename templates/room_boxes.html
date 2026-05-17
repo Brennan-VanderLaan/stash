@@ -7,7 +7,33 @@
 {% block content %}
 
 <div class="card">
-  <div class="card-title room-chip card-title-tight" style="--room-color: {{ room.color or '#4ade80' }};">{{ room.name }}</div>
+  <div class="card-header">
+    <div class="card-title room-chip card-title-tight" style="--room-color: {{ room.color or '#4ade80' }};">{{ room.name }}</div>
+    <details class="room-add-box">
+      <summary class="btn btn-primary btn-sm">+ Add box</summary>
+      {# Feedback #51: ``need add box button``.  Inline disclosure
+         keeps the page clean when collapsed; on open, a minimal
+         form lets the user name a box and post it to the current
+         room.  ``next`` lands them back on this page so they see
+         the new box in the list. #}
+      <form method="post" action="/boxes" class="room-add-box-form">
+        <input type="hidden" name="room_id" value="{{ room.id }}">
+        <input type="hidden" name="next" value="/rooms/{{ room.id }}/boxes">
+        <label>
+          <span class="text-sm text-muted">Box name</span>
+          <input type="text" name="name" required
+                 placeholder="e.g. Holiday decorations"
+                 autocomplete="off" autofocus>
+        </label>
+        <label>
+          <span class="text-sm text-muted">Notes (optional)</span>
+          <input type="text" name="notes" autocomplete="off"
+                 placeholder="What's in this box?">
+        </label>
+        <button type="submit" class="btn btn-primary btn-block">Create box in {{ room.name }}</button>
+      </form>
+    </details>
+  </div>
   <p class="text-sm text-muted">
     in <a href="/locations/{{ room.location_id }}">{{ room.location_name }}</a>
     · {{ boxes | length }} box{{ '' if boxes | length == 1 else 'es' }}
@@ -18,13 +44,16 @@
 <ul class="box-list">
   {% for b in boxes %}
   <li>
-    <a href="/boxes/{{ b.id }}" class="box-card"
+    <a href="/boxes/{{ b.id }}" class="box-card{% if b.is_loose %} box-card-loose{% endif %}"
        data-box-id="{{ b.id }}"
        style="--tile-color: {{ b.color or room.color or '#4ade80' }};
               --room-color: {{ room.color or '#4ade80' }};">
       <div class="box-card-body">
         <div class="box-card-head">
-          <div class="box-name">{{ b.name }}</div>
+          <div class="box-name">
+            {% if b.is_loose %}<span class="box-misc-pill" aria-label="Loose / Misc box">📦 Misc</span>{% endif %}
+            {{ b.name }}
+          </div>
           <span class="box-card-count">{{ b.item_count }}</span>
         </div>
         {# Always render so every tile in the grid lines up at the same
@@ -51,6 +80,10 @@
 {% else %}
 <div class="empty empty-mascot" data-mascot="boxes">
   <p>No boxes assigned to this room yet.</p>
+  <p class="text-sm text-muted">
+    Tap <strong>+ Add box</strong> above to create your first one
+    in <strong>{{ room.name }}</strong>.
+  </p>
 </div>
 {% endif %}
 

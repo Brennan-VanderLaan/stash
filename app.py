@@ -1010,6 +1010,28 @@ templates.env.globals["loose_items_for"] = _loose_items_for
 templates.env.globals["loose_count_for"] = _loose_count_for
 
 
+def _fresh_threshold(days: int = 7) -> str:
+    """Jinja global — ISO timestamp of N days ago in UTC.  Templates
+    compare ``item.created_at > fresh_threshold()`` to render a
+    "✨ New" badge on recent items (feedback #53: "mark
+    unseen/untouched/unprocessed marker on the things that haven't
+    been looked over").  v1 uses created_at directly — a real
+    ``reviewed_at`` column lands later if the simple recency
+    heuristic doesn't fit the user's actual workflow.
+
+    String comparison works because the DB stores ``created_at`` as
+    ISO-8601 with a space separator (``YYYY-MM-DD HH:MM:SS``) which
+    sorts lexically the same as chronologically."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # Match SQLite's CURRENT_TIMESTAMP format (no tz suffix, space
+    # separator) so the lexical comparison is apples-to-apples.
+    return cutoff.strftime("%Y-%m-%d %H:%M:%S")
+
+
+templates.env.globals["fresh_threshold"] = _fresh_threshold
+
+
 def _sparkline_svg(values, *, width: int = 100, height: int = 24) -> str:
     """Inline-SVG sparkline.  Server-rendered (no JS) so the markup
     is part of the response payload and the meter is visible
@@ -2962,6 +2984,7 @@ def create_box(
     location: str = Form(""),
     notes: str = Form(""),
     room_id: str = Form(""),
+    next: str = Form(""),
 ):
     actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
@@ -2984,7 +3007,15 @@ def create_box(
         dao_boxes.create(actor, name, location, notes, room_id=rid)
     except ForbiddenError:
         raise HTTPException(403)
-    return RedirectResponse("/home", status_code=303)
+    # Feedback #51: the room-boxes page needs an "Add box" button
+    # that lands the user BACK on /rooms/{id}/boxes (so they see
+    # their new box in the list) rather than the generic /home
+    # default.  ``next`` is a hidden form field; the open-redirect
+    # guard rejects off-app values.
+    return RedirectResponse(
+        _safe_internal_redirect(next, default="/home"),
+        status_code=303,
+    )
 
 
 def _known_locations(actor: Actor) -> list[str]:
@@ -3385,6 +3416,18 @@ async def add_item(
 
 @app.post("/items/{item_id}/tags")
 def add_item_tag(request: Request, item_id: int, tag: str = Form(...)):
+    """Attach one or more tags to an item.  Content-negotiates:
+    AJAX callers (``Accept: application/json``, the tag-suggest
+    pills on /boxes/{id}) get a JSON success object; form POSTs
+    get a 303 back to the box page.
+
+    Feedback #58: the tag-suggest pill posted here with
+    ``Accept: application/json`` and the route's
+    ``RedirectResponse(...)`` was a 303 to an HTML page —
+    fetch followed the redirect, landed on /boxes/{id}'s HTML,
+    then ``r.json()`` died parsing "<!DOCTYPE html>" as JSON
+    ("doc error").  The bulk /boxes/{id}/tag-all route already
+    had this content-negotiation; ports it here."""
     entries = parse_tag_input(tag)
     if not entries:
         raise HTTPException(400, "Tag required")
@@ -3396,7 +3439,16 @@ def add_item_tag(request: Request, item_id: int, tag: str = Form(...)):
         raise HTTPException(404)
     except ForbiddenError:
         raise HTTPException(403)
-    return RedirectResponse(f"/boxes/{item['box_id']}#item-{item_id}", status_code=303)
+    if _wants_json(request):
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "box_id": item["box_id"],
+            "tags": [format_tag(n, v) for n, v in entries],
+        }
+    return RedirectResponse(
+        f"/boxes/{item['box_id']}#item-{item_id}", status_code=303,
+    )
 
 
 @app.post("/items/{item_id}/tags/{tag_id}/delete")
@@ -4174,6 +4226,88 @@ def queue_match(request: Request, pending_id: int):
         )
     except (NotFoundError, ForbiddenError):
         raise HTTPException(404)
+    return RedirectResponse("/queue", status_code=303)
+
+
+@app.post("/queue/{pending_id}/create-suggested-box")
+def queue_create_suggested_box(request: Request, pending_id: int):
+    """Feedback #50: "AI suggestions for new boxes should link to a
+    /createnewbox thingy."
+
+    When the AI matcher returns ``match='new'`` it parks the
+    suggested box name + location on the pending row but leaves
+    the creation to the user — who has to leave /queue, hit
+    /home, scroll for the create-box affordance, fill in name +
+    room, come back to /queue, find their item, pick the new box,
+    accept.  Five steps for a single AI-driven suggestion.
+
+    This route compresses that to one click: turn the suggested
+    name + location into a real ``boxes`` row, rewire the pending
+    item to point at it (so the picker pre-selects it), and 303
+    back to /queue.  The user is one Accept away from done.
+
+    Room resolution: if ``suggested_new_box_location`` matches a
+    room name in the tenant, the new box gets that ``room_id``.
+    Otherwise the location is denormalised onto ``boxes.location``
+    as plain text — same shape as the create-box-without-a-room
+    path on /home."""
+    actor: Actor = request.state.actor
+    try:
+        row = dao_pending.get_by_id(actor, pending_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    name = (row.get("suggested_new_box_name") or "").strip()
+    if not name:
+        raise HTTPException(
+            400,
+            "This pending item has no AI-suggested new box to create.",
+        )
+    location_text = (row.get("suggested_new_box_location") or "").strip()
+    # Try to resolve the suggested location to a room in this
+    # tenant.  Match is case-insensitive (the AI's casing may not
+    # match the user's exactly).  Falls through to plain-text
+    # location on the box row when no room matches.
+    room_id: int | None = None
+    if location_text:
+        with db() as conn:
+            r = conn.execute(
+                "SELECT id FROM rooms "
+                "WHERE tenant_id = ? AND LOWER(name) = LOWER(?) "
+                "LIMIT 1",
+                (actor.tenant_id, location_text),
+            ).fetchone()
+        if r is not None:
+            room_id = int(r["id"])
+    try:
+        new_box_id = dao_boxes.create(
+            actor, name, location_text, "", room_id=room_id,
+        )
+    except ForbiddenError:
+        raise HTTPException(403)
+    # Repoint the pending row at the freshly-created box so the
+    # queue picker pre-selects it on the next render.  Clears the
+    # ``suggested_new_box_*`` fields so the "create it first"
+    # banner doesn't re-appear after the box exists.
+    try:
+        dao_pending.update_suggestion(
+            actor, pending_id,
+            suggested_box_id=new_box_id,
+            suggested_new_box_name=None,
+            suggested_new_box_location=None,
+            suggestion_reason=(
+                f"AI suggested + created: {name}"
+                + (f" in {location_text}" if location_text else "")
+            ),
+        )
+    except (NotFoundError, ForbiddenError):
+        raise HTTPException(404)
+    if _wants_json(request):
+        return {
+            "ok": True,
+            "box_id": new_box_id,
+            "name": name,
+            "room_id": room_id,
+        }
     return RedirectResponse("/queue", status_code=303)
 
 

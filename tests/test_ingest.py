@@ -613,6 +613,113 @@ def test_match_proposes_new_box(client):
     assert "No existing box fits" in page
 
 
+def test_create_suggested_box_endpoint_makes_box_and_repoints_pending(client):
+    """Feedback #50: turn the AI's "new box X" suggestion into a
+    one-click create.  POST /queue/{id}/create-suggested-box reads
+    the pending row's ``suggested_new_box_name`` +
+    ``suggested_new_box_location``, creates the box, and rewires
+    the pending so the picker pre-selects it.  No more "leave
+    /queue, create the box manually, come back" five-step flow."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="ski boot", description="left ski boot")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    suggestion = BoxMatch(
+        match="new",
+        new_box_name="Ski gear",
+        new_box_location="Garage",
+        reason="winter equipment doesn't fit existing boxes",
+    )
+    with patch("vision.suggest_box", return_value=suggestion):
+        client.post("/queue/1/match")
+
+    # Trigger the create-suggested-box endpoint.
+    r = client.post(
+        "/queue/1/create-suggested-box", follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/queue"
+
+    # New box exists.
+    with client.app_module.db() as conn:
+        box_row = conn.execute(
+            "SELECT id, name, location FROM boxes WHERE name = 'Ski gear'"
+        ).fetchone()
+    assert box_row is not None
+    assert box_row["name"] == "Ski gear"
+    assert box_row["location"] == "Garage"
+
+    # Pending now points at the new box; the "create it first"
+    # banner shouldn't render anymore.
+    page = client.get("/queue").text
+    assert "Ski gear" in page
+    # The original new-box suggestion was cleared; the rewired
+    # suggested_box_id makes Ski gear the pre-selected option.
+    assert 'value="{}" selected'.format(box_row["id"]) in page
+
+
+def test_create_suggested_box_400s_when_no_new_box_suggested(client):
+    """Calling the endpoint on a pending row that has no
+    ``suggested_new_box_name`` is operator error — surface 400 so
+    a misclick doesn't silently no-op."""
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="mug", description="ceramic")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    # No /match call → no suggested_new_box_name on the row.
+    r = client.post(
+        "/queue/1/create-suggested-box", follow_redirects=False,
+    )
+    assert r.status_code == 400
+
+
+def test_create_suggested_box_resolves_existing_room_by_name(client):
+    """When ``suggested_new_box_location`` matches an existing
+    room name (case-insensitive), the new box gets that
+    ``room_id`` — so it shows up under the right room in the
+    picker + box list immediately."""
+    # Seed a location + room.
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO locations (name, tenant_id) VALUES ('Home', ?)",
+            (client.test_tenant_id,),
+        )
+        location_id = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO rooms "
+            "(name, location_id, tenant_id, x, y, w, h) "
+            "VALUES ('garage', ?, ?, 0, 0, 0.1, 0.1)",
+            (location_id, client.test_tenant_id),
+        )
+        room_id = int(cur.lastrowid)
+        conn.commit()
+
+    with patch("app.vision.detect_items", return_value=[
+        DetectedItem(name="snow shovel", description="")
+    ]):
+        client.post("/ingest", files={"photos": ("p.jpg", io.BytesIO(b"x"), "image/jpeg")})
+    # Note: case-mismatch — AI says "Garage", room is "garage".
+    suggestion = BoxMatch(
+        match="new", new_box_name="Winter tools",
+        new_box_location="Garage",
+        reason="winter equipment",
+    )
+    with patch("vision.suggest_box", return_value=suggestion):
+        client.post("/queue/1/match")
+
+    client.post("/queue/1/create-suggested-box")
+
+    with client.app_module.db() as conn:
+        box_row = conn.execute(
+            "SELECT id, room_id FROM boxes WHERE name = 'Winter tools'"
+        ).fetchone()
+    assert box_row is not None
+    assert box_row["room_id"] == room_id, (
+        "Box should have been parented to the case-insensitive "
+        "room match"
+    )
+
+
 def test_assign_to_existing_box(client):
     client.post("/boxes", data={"name": "Kitchen"})
     with patch("app.vision.detect_items", return_value=[

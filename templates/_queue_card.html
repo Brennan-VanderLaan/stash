@@ -78,8 +78,27 @@
       {% if p.suggested_box_name %}
         → <strong>{{ p.suggested_box_name }}</strong>
       {% elif p.suggested_new_box_name %}
-        → new box <strong>{{ p.suggested_new_box_name }}</strong>
-        <span class="text-muted text-sm">(create it first)</span>
+        {# Feedback #50: "AI suggestions for new boxes should link
+           to a /createnewbox thingy."  The inline button POSTs
+           ``formnovalidate`` to skip the parent form's required-
+           field checks (the user might not have picked a box_id
+           yet — that's the whole point), creates the box from
+           the AI's suggested name + location, then rewires the
+           pending row so the picker pre-selects the new box. #}
+        → new box
+        <button type="submit"
+                formaction="/queue/{{ p.id }}/create-suggested-box"
+                formmethod="post"
+                formnovalidate
+                class="btn btn-secondary btn-sm sort-recommend-create"
+                title="Create this box now (and pre-select it for this item)">
+          ✨ Create <strong>{{ p.suggested_new_box_name }}</strong>
+          {% if p.suggested_new_box_location %}
+          <span class="text-muted text-sm">
+            in {{ p.suggested_new_box_location }}
+          </span>
+          {% endif %}
+        </button>
       {% endif %}
     </div>
     {% if p.suggestion_reason %}
