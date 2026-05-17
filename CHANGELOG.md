@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.46.3](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.2...v1.46.3) (2026-05-17)
+
+
+### Bug Fixes
+
+* cropper.js was CSP-blocked + vision error decode for label-art ([e469829](https://github.com/Brennan-VanderLaan/stash/commit/e469829c8841ad57e13eddd2fcfc1fb98175ac8b))
+
 ## [1.46.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.1...v1.46.2) (2026-05-17)
 
 
