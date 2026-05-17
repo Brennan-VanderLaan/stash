@@ -368,6 +368,75 @@ header h1 a { color: var(--accent); text-decoration: none; }
   background: var(--hover);
   color: var(--danger, #d97a7a);
 }
+
+/* === Global drag-drop ingest overlay + toast =================
+   Triggered from the file-drag handlers in base.html.  Visible
+   on dragenter (anywhere on the page), hides on drop / leave.
+   Mobile users don't see it because touch doesn't drag files —
+   the regular /ingest page stays the canonical mobile entry. */
+.global-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+.global-drop-hint {
+  pointer-events: none;
+  text-align: center;
+  padding: 2rem 2.5rem;
+  border: 3px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  max-width: min(28rem, calc(100vw - 2rem));
+}
+.global-drop-glyph {
+  font-size: 3.5rem;
+  margin-bottom: 0.5rem;
+}
+.global-drop-title {
+  margin: 0 0 0.4rem;
+  font-size: 1.25rem;
+  color: var(--accent);
+}
+.global-drop-sub { margin: 0; }
+
+.global-drop-toast {
+  position: fixed;
+  bottom: calc(1rem + var(--safe-bottom, 0px));
+  right: 1rem;
+  z-index: 9001;
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 0.9rem;
+  max-width: min(26rem, calc(100vw - 2rem));
+}
+.global-drop-toast a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  margin-left: 0.2rem;
+}
+.global-drop-toast a:hover { text-decoration: underline; }
+.global-drop-toast[data-kind="success"] {
+  border-left-color: var(--success, #5ec47a);
+}
+.global-drop-toast[data-kind="error"] {
+  border-left-color: var(--danger, #d97a7a);
+}
+.global-drop-toast[data-kind="progress"]::before {
+  content: '⏳ ';
+  margin-right: 0.25rem;
+}
 .tenant-switcher-item { margin: 0; }
 .tenant-switcher-item button {
   width: 100%;

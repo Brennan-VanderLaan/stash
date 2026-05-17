@@ -178,6 +178,168 @@
 
   <main class="{% block main_class %}{% endblock %}">{% block content %}{% endblock %}</main>
 
+  {# Global drag-drop ingest target.  Drop one or more image files
+     anywhere on the page → POST /ingest as a bulk upload.  Stays
+     on the current page; success shows a corner toast linking to
+     /ingest so the user can watch the AI work.  Public pages
+     (landing, /about/*, /signup) don't get this — the guard checks
+     for a signed-in actor.  Mobile users don't see the overlay
+     because touch doesn't drag files; the regular /ingest page
+     stays the canonical entry point on phones. #}
+  {% if request.state.actor and request.state.actor.email %}
+  <div id="global-drop-overlay" class="global-drop-overlay" hidden aria-hidden="true">
+    <div class="global-drop-hint">
+      <div class="global-drop-glyph" aria-hidden="true">📥</div>
+      <h2 class="global-drop-title">{{ _("Drop photos to ingest") }}</h2>
+      <p class="global-drop-sub text-sm text-muted">
+        {{ _("The AI will scan them, suggest box assignments, and queue them in the Sort tab for your review.") }}
+      </p>
+    </div>
+  </div>
+  <div id="global-drop-toast" class="global-drop-toast" role="status" hidden></div>
+  <script>
+  (function () {
+    var overlay = document.getElementById('global-drop-overlay');
+    var toast   = document.getElementById('global-drop-toast');
+    if (!overlay || !toast) return;
+
+    // Counter pattern: dragenter / dragleave fire on every child
+    // element you cross while dragging, so a naive show/hide
+    // flickers as the cursor crosses the page.  Counting up on
+    // enter + down on leave + only hiding at zero gives a steady
+    // overlay until the gesture truly ends.
+    var dragCounter = 0;
+
+    function hasFiles(e) {
+      if (!e.dataTransfer) return false;
+      // Safari + Firefox expose ``items`` with a ``kind`` field;
+      // Chrome populates it too.  ``types`` is the universal
+      // fallback for older browsers.
+      var items = e.dataTransfer.items;
+      if (items && items.length) {
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].kind === 'file') return true;
+        }
+        return false;
+      }
+      var types = e.dataTransfer.types || [];
+      for (var i = 0; i < types.length; i++) {
+        if (types[i] === 'Files') return true;
+      }
+      return false;
+    }
+
+    window.addEventListener('dragenter', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounter++;
+      overlay.hidden = false;
+    });
+    window.addEventListener('dragover', function (e) {
+      if (!hasFiles(e)) return;
+      // preventDefault on dragover is what tells the browser
+      // "yes, I'll accept the drop here" — without it the drop
+      // event never fires.
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('dragleave', function (e) {
+      if (!hasFiles(e)) return;
+      dragCounter = Math.max(0, dragCounter - 1);
+      if (dragCounter === 0) overlay.hidden = true;
+    });
+    window.addEventListener('drop', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounter = 0;
+      overlay.hidden = true;
+      var files = Array.prototype.slice.call(
+        (e.dataTransfer && e.dataTransfer.files) || []
+      );
+      var images = files.filter(function (f) {
+        return f.type && f.type.indexOf('image/') === 0;
+      });
+      if (images.length === 0) {
+        showToast('No image files found in the drop.', 'error');
+        return;
+      }
+      uploadAll(images);
+    });
+
+    function showToast(msg, kind, linkHref, linkLabel) {
+      toast.innerHTML = '';
+      toast.dataset.kind = kind || 'info';
+      var span = document.createElement('span');
+      span.textContent = msg;
+      toast.appendChild(span);
+      if (linkHref) {
+        toast.appendChild(document.createTextNode(' · '));
+        var a = document.createElement('a');
+        a.href = linkHref;
+        a.textContent = linkLabel || 'View';
+        toast.appendChild(a);
+      }
+      toast.hidden = false;
+      clearTimeout(toast._timer);
+      // Progress toasts stick until replaced; success/error
+      // dismiss after a comfortable read.
+      if (kind !== 'progress') {
+        toast._timer = setTimeout(function () { toast.hidden = true; }, 8000);
+      }
+    }
+
+    function uploadAll(images) {
+      var n = images.length;
+      var word = (n === 1 ? 'photo' : 'photos');
+      showToast('Uploading ' + n + ' ' + word + '…', 'progress');
+      var fd = new FormData();
+      images.forEach(function (f) { fd.append('photos', f, f.name); });
+      fd.append('scope', 'auto');
+      fetch('/ingest', {
+        method: 'POST',
+        body: fd,
+        // ``redirect: 'manual'`` keeps the user on the current page
+        // instead of following the route's 303 → /ingest.  The
+        // toast carries an "Open Ingest" link so the user can
+        // jump there explicitly.
+        redirect: 'manual',
+      }).then(function (r) {
+        // manual redirect on a same-origin 303 returns
+        // ``r.type === 'opaqueredirect'`` with ``r.status === 0`` —
+        // treat as success since 303 is the documented happy path.
+        if (r.ok || r.type === 'opaqueredirect' || r.status === 0) {
+          showToast(
+            n + ' ' + word + ' queued for AI processing',
+            'success',
+            '/ingest',
+            'Open Ingest'
+          );
+        } else if (r.status === 429) {
+          showToast(
+            'AI quota exceeded — try after the next reset window.',
+            'error'
+          );
+        } else if (r.status === 413) {
+          showToast(
+            'Too big — one of those files exceeded the upload limit.',
+            'error'
+          );
+        } else if (r.status === 401 || r.status === 403) {
+          showToast(
+            "Couldn't upload — session expired.  Reload the page and try again.",
+            'error'
+          );
+        } else {
+          showToast('Upload failed (HTTP ' + r.status + ').', 'error');
+        }
+      }).catch(function (err) {
+        showToast('Upload failed: ' + (err.message || err), 'error');
+      });
+    }
+  })();
+  </script>
+  {% endif %}
+
   {# Compute "what page am I on" for tab-bar highlighting.  The
      server has the URL — let it stamp ``active`` instead of doing
      a fragile JS pass on every page load.  Path-prefix matching
