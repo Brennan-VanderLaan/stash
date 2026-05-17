@@ -60,6 +60,35 @@ production").  Prod pins to explicit `:vX.Y.Z`, manual cutover —
 the whole point of this thread is to keep prod cutover in the
 loop after one too many "main merged → prod broke" surprises.
 
+### Pending-release preview on staging
+
+Staging's `:dev` images carry a synthetic "if I released right
+now, this is what would ship" preview at the top of the
+`/maintenance` changelog page.  Generated at build time by
+`tools/pending_changelog.py`:
+
+1. Walks conventional commits from the most recent `v*.*.*`
+   tag to `HEAD`.
+2. Predicts the next semver bump (any `feat!`/BREAKING → major,
+   any `feat` → minor, otherwise patch).
+3. Renders a markdown section that mirrors release-please's Node
+   release-type config (Features / Bug Fixes / Performance
+   Improvements / Reverts).  The `chore` / `ci` / `docs` / etc.
+   types are deliberately hidden — same as what the actual
+   `dev → main` Release PR will display.
+4. Prepends to `CHANGELOG.md` inside the build context.
+
+The image's `VERSION` env-var becomes e.g. `1.49.0-dev.b0220ad`
+so the running-version display under "Version" reads the same
+way.  Tag-triggered (production) builds skip this entire path —
+they ship release-please's exact CHANGELOG.md + manifest version.
+
+Net effect: a maintainer browsing staging's `/maintenance` page
+sees the in-flight release notes accumulate every time a
+conventional commit lands on `dev`.  The actual release PR on
+`dev → main` will read identically, so there's no surprise at
+release time.
+
 ## Workflows
 
 | File | Trigger | What it does |
