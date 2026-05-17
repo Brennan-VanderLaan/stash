@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.48.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.47.0...v1.48.0) (2026-05-17)
+
+
+### Features
+
+* **feedback:** verification loop — prod owns state, MCP drives every transition ([18b8f52](https://github.com/Brennan-VanderLaan/stash/commit/18b8f52fbb2a4c3869ea92588a777638b97c09a1))
+
 ## [1.47.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.3...v1.47.0) (2026-05-17)
 
 
