@@ -246,6 +246,95 @@ def test_upgrade_503s_when_product_has_no_default_price(
     assert len(create_calls) == 0
 
 
+def test_webhook_endpoint_bypasses_actor_middleware(monkeypatch, tmp_path):
+    """Production regression 2026-05-17: oauth2-proxy was 401'ing
+    Stripe webhook POSTs (separate deploy fix landed in 90eb5ae).
+    After fixing that, stash's own actor middleware then 403'd
+    them because Stripe doesn't send an X-Forwarded-Email header.
+    Both gates need bypass for the webhook delivery to land.
+
+    Pin the stash-side bypass: a POST /webhooks/stripe with NO
+    auth headers must reach the handler (even if the handler then
+    rejects the body for signature verification — that's a 400,
+    not the 403-from-middleware we're testing for here)."""
+    import base64
+    import secrets
+    import sys
+    import importlib
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("STASH_DB", str(tmp_path / "stash.db"))
+    monkeypatch.setenv("STASH_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv(
+        "STASH_KEK", base64.b64encode(secrets.token_bytes(32)).decode(),
+    )
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_fake")
+    monkeypatch.setenv("STRIPE_PRICE_ID_PRO", "price_fake")
+    if "app" in sys.modules:
+        del sys.modules["app"]
+    import app as app_module
+    importlib.reload(app_module)
+
+    # Fresh client with NO X-Forwarded-Email header — same shape
+    # Stripe's POSTs arrive in (and what the actor middleware
+    # would otherwise refuse).
+    with TestClient(app_module.app, headers={}) as anon:
+        r = anon.post(
+            "/webhooks/stripe",
+            content=b"{}",
+            headers={"Stripe-Signature": "t=1,v1=invalid"},
+        )
+    # 400 here means "signature verification failed" — i.e. the
+    # request DID reach the handler.  403 would mean the auth
+    # middleware blocked it (the regression).
+    assert r.status_code == 400, (
+        f"Expected 400 (signature rejected by Stripe SDK), got "
+        f"{r.status_code} — webhook is being blocked before "
+        f"reaching the handler.  Check _AUTH_BYPASS_EXACT for "
+        f"/webhooks/stripe."
+    )
+
+
+def test_usage_success_banner_reconciles_with_actual_plan(client, billing):
+    """Operator regression 2026-05-17: the /usage success banner
+    said "Thanks — you're on Pro!" whenever the URL carried
+    ``?billing=success``, regardless of whether ``tenants.plan``
+    had actually flipped.  When the Stripe webhook was being
+    auth-rejected by oauth2-proxy (separate bug), Stripe charged
+    the card + Stripe Dashboard showed active, but the tenant
+    stayed on 'free' in stash — yet the banner lied that the
+    upgrade succeeded.
+
+    Pin the reconciled behaviour:
+      - billing=success + plan=pro → cheerful Thanks banner
+      - billing=success + plan=free → pending warning + support
+        contact (the webhook hasn't landed yet)"""
+    # Tenant starts on 'free'.
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE tenants SET plan = 'free' WHERE id = ?",
+                     (client.test_tenant_id,))
+        conn.commit()
+
+    page = client.get("/usage?billing=success").text
+    # Don't lie — the tenant isn't actually on Pro yet.
+    assert "you're on Pro" not in page
+    # Tell the user truthfully + give them a way to ask for help.
+    assert "Pro activation pending" in page
+
+    # Now simulate the webhook arriving: tenant flips to 'pro'.
+    with client.app_module.db() as conn:
+        conn.execute("UPDATE tenants SET plan = 'pro' WHERE id = ?",
+                     (client.test_tenant_id,))
+        conn.commit()
+
+    page = client.get("/usage?billing=success").text
+    # Cheerful banner now appropriate.
+    assert "you're on Pro" in page
+    # Stale pending warning is gone.
+    assert "Pro activation pending" not in page
+
+
 def test_upgrade_passes_price_ids_through_unchanged(client, billing):
     """The common case: ``STRIPE_PRICE_ID_PRO=price_*`` passes
     through without an extra Product.retrieve call (the resolver

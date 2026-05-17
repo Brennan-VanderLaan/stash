@@ -341,10 +341,24 @@
    so users don't click into a 503.  Maintainer-only — readonly
    members can't flip the tenant's plan on the maintainer's behalf. #}
 {% if billing_enabled and is_maintainer %}
-{% if billing_status == "success" %}
+{% if billing_status == "success" and tenant.plan == "pro" %}
 <div class="notice notice-success">
   <strong>{{ _("Thanks — you're on Pro!") }}</strong>
   {{ _("Quotas have been raised on this tenant.  Pull-down to refresh if any meters look stale.") }}
+</div>
+{% elif billing_status == "success" %}
+{# Stripe Checkout's success redirect landed but ``tenants.plan``
+   hasn't flipped — the webhook hasn't been processed yet (or
+   didn't reach stash at all).  Don't lie to the user; tell them
+   payment was received and the activation is pending.  This is
+   the symptom the operator hit when oauth2-proxy was auth-
+   rejecting webhook POSTs and tenant.plan stayed at 'free'
+   after a successful Stripe charge. #}
+<div class="notice notice-warning">
+  <strong>{{ _("Payment received — Pro activation pending.") }}</strong>
+  {{ _("Stripe confirmed your purchase, but the upgrade signal hasn't landed on this side yet.  Reload in a minute — Stripe retries the webhook automatically.  If it stays stuck, email") }}
+  <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+  {{ _("with your payment confirmation and we'll fix it manually.") }}
 </div>
 {% elif billing_status == "canceled" %}
 <div class="notice">

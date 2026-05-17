@@ -582,6 +582,18 @@ _AUTH_BYPASS_EXACT = frozenset((
     "/.well-known/oauth-authorization-server",
     "/oauth/token",
     "/oauth/register",
+    # Stripe webhook receiver.  Stripe's delivery POSTs arrive from
+    # Stripe's IPs with no session cookie + no X-Forwarded-Email —
+    # the actor middleware would reject them as anonymous.  The
+    # route itself signature-verifies the body via
+    # ``stripe.Webhook.construct_event`` before trusting anything,
+    # so bypass here is safe.  Without it, every Pro upgrade
+    # silently fails: Stripe charges the card, Stripe Dashboard
+    # shows the subscription active, but ``tenants.plan`` never
+    # flips because the webhook gets 403'd by stash's own auth
+    # gate (separate from the oauth2-proxy SKIP_AUTH_ROUTES bypass
+    # at the deploy layer).  Real production incident 2026-05-17.
+    "/webhooks/stripe",
     # ``/`` renders a public marketing landing for unauthenticated
     # visitors.  The authenticated dashboard moved to ``/home``.
     # See public_landing() + index() in this file.
@@ -5718,6 +5730,10 @@ def _render_usage_page(
             "billing_enabled": billing_enabled,
             "subscription": subscription,
             "billing_status": request.query_params.get("billing", ""),
+            # Used by the "payment received but activation pending"
+            # banner so the user has a place to email if the
+            # webhook stays stuck.
+            "contact_email": _public_contact_email(),
             "pro_price_display": pro_price_display,
             "free_caps": free_caps,
             "pro_caps": pro_caps,
