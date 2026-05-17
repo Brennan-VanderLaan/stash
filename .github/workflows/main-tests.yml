@@ -1,16 +1,17 @@
 name: main-tests
-# Full test suite — runs on PRs that target main, and on every push
-# to main (defence in depth in case someone bypasses the PR gate).
+# Full test suite — runs ONLY on PRs that target main.
+#
 # Includes the Playwright UI suite, which needs Chromium installed.
 # Slower (~5-8 min) than pr-checks.yml; the trade-off is that any
 # code path heading into a production release has been exercised
 # in a real browser at both mobile + desktop viewports.
-
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+#
+# No ``push: main`` trigger by design.  Branch protection on main
+# requires this workflow to pass on the PR, so anything that
+# actually lands has already been tested.  Re-running on the push
+# would just delay release-please.yml from opening the next
+# Release PR — the slow path to a production tag is the one we're
+# trying to keep tight.
 
 permissions:
   contents: read

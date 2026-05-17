@@ -61,10 +61,42 @@ loop after one too many "main merged → prod broke" surprises.
 | File | Trigger | What it does |
 |---|---|---|
 | `pr-checks.yml` | PR to `main` or `dev`, push to `dev` | Fast pytest pass (`-m "not ui"`).  ~30 s.  Required check for any PR. |
-| `main-tests.yml` | PR to `main`, push to `main` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on `dev → main` PRs. |
-| `build.yml` | push to `dev`, tag `v*.*.*` | Fast tests as a gate, then build + push image.  `:dev` + `:dev-sha-X` for dev pushes; `:vX.Y.Z` + `:X.Y` + `:X` for version tags. |
+| `main-tests.yml` | PR to `main` | Full pytest including Playwright UI suite (mobile + desktop viewports).  ~7 min.  Required check on `dev → main` PRs.  No `push: main` trigger — branch protection guarantees the PR gate already ran. |
+| `build.yml` | push to `dev`, tag `v*.*.*` | Build + push image.  Dev pushes are gated by the fast tests as belt-and-suspenders (catches direct-to-dev pushes that skipped the PR).  Tag pushes skip the gate — the dev → main PR already ran the full suite, so re-testing here would just delay the production image. |
 | `release-please.yml` | push to `main` | Opens / updates the Release PR with the assembled changelog.  Merging the Release PR creates the version tag. |
 | `pr-title.yml` | PR open / edit | Validates conventional-commit PR title (gate for release-please assembling clean changelog sections). |
+
+### Asymmetric test gates, on purpose
+
+The fast path to a production image looks like:
+
+```
+   dev → main PR    main-tests runs full suite ──┐
+        │ merge                                  │ gated here
+        ▼                                        │
+        main      (no tests, no build)           │
+        │                                        │
+        ▼                                        │
+   release-please opens Release PR               │
+        │ merge                                  │
+        ▼                                        │
+   release-please tags vX.Y.Z                    │
+        │                                        │
+        ▼                                        │
+   build.yml fires on the tag    (no gate) ◄─────┘
+```
+
+Anything that lands on `main` is already known-good — branch
+protection makes the PR gate non-negotiable.  Re-running tests on
+`push: main` or on the tag push would just spend minutes
+verifying what's already verified, and the *only* effect is
+delaying the production image.  Speed of release is the win;
+correctness is held by the PR gate, not by repetition.
+
+The dev-push build keeps its fast-test gate because direct
+pushes to `dev` are allowed (PR requirement on `dev` is optional
+for solo / small teams) and we don't want a broken commit
+landing on staging just because someone bypassed the PR flow.
 
 ## Branch protection
 

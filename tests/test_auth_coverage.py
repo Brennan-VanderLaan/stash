@@ -217,6 +217,13 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         "/.well-known/oauth-authorization-server",
         "/oauth/token",
         "/oauth/register",
+        # Stripe webhook receiver.  Bypass justified by the route's
+        # own signature verification + the alternative being silently
+        # broken Pro upgrades (Stripe charges the card, plan never
+        # flips because /webhooks/stripe gets 403'd by stash's auth
+        # wall).  Real prod incident 2026-05-17 — see the comment
+        # block at the bypass declaration in app.py for context.
+        "/webhooks/stripe",
         "/",
         "/robots.txt",
         "/__stash_robots_txt",

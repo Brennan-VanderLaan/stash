@@ -34,7 +34,16 @@ from pathlib import Path
 # DDL + index in init_db (onboarding-tour persistence).  Schema
 # migrations are explicitly called out in the ratchet docstring as
 # a legit reason to lift the ceiling.
-APP_CONN_EXECUTE_CEILING = 69  # +1 — POST /signup tenant_members INSERT
+# Bumped 69 → 70 on 2026-05-17 for the case-insensitive room-name
+# match in ``POST /queue/{pending_id}/create-suggested-box`` (the
+# feedback-burndown #50 fix).  The lookup is a single SELECT that
+# resolves a free-text ``suggested_new_box_location`` to an
+# existing room id when one matches by name; the caller then either
+# passes the resolved id into dao_rooms or falls back to the plain
+# text.  Lives in app.py because it's an AI-suggestion concern, not
+# a tenant-CRUD operation — there's no general "rooms.get by case-
+# insensitive name" use case elsewhere to justify a DAO helper.
+APP_CONN_EXECUTE_CEILING = 70  # +1 — room-name resolver in create-suggested-box
 
 
 def test_app_py_conn_execute_ratchet():

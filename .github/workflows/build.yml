@@ -23,10 +23,16 @@ name: build
 # creates the version tag, and that tag firing this workflow is the
 # canonical "production image is ready" signal.
 #
-# Test gate: a build only happens if the relevant test suite passes.
-# Dev pushes run the fast (non-UI) suite; version tags assume the
-# full suite already passed on the main PR that produced them, but
-# we re-run the fast suite here as a sanity check.
+# Test gate (asymmetric, by design):
+#   * Dev pushes        → fast (non-UI) suite runs as a gate.  This
+#                         catches direct dev pushes that bypass the
+#                         PR-checks workflow.
+#   * Version tag pushes → no gate.  The only way to land code on
+#                         main is a PR that ran the full Playwright
+#                         suite (main-tests.yml), so the code under
+#                         the tag is already known-good.  Re-testing
+#                         here would just delay the production
+#                         image.  Speed wins.
 
 on:
   push:
@@ -43,13 +49,20 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ── Gate ──────────────────────────────────────────────────────────
-  # Run the fast in-process suite before any image push.  If this
-  # fails, no image goes out — staging stays on the previous build.
-  # Full pytest (incl. Playwright UI) runs in main-tests.yml on the
-  # PR that promotes dev → main, so we don't need to re-pay for it
-  # here on every dev push.
+  # ── Gate (dev pushes only) ────────────────────────────────────────
+  # Run the fast in-process suite before pushing a :dev image.  Pure
+  # belt-and-suspenders — direct pushes to dev (no PR) skip
+  # pr-checks.yml, so this is the only gate keeping a broken commit
+  # off staging in that case.  If pr-checks already ran on a dev-
+  # base PR, this re-run is redundant but cheap (~30 s).
+  #
+  # Skipped on TAG pushes.  Tags only get created when release-
+  # please's Release PR merges to main, and that merge was already
+  # gated by main-tests.yml (full suite incl. Playwright UI) on the
+  # dev → main PR.  Re-running fast tests at the tag stage would
+  # just delay the production image without catching anything new.
   test:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -66,6 +79,11 @@ jobs:
         run: pytest -m "not ui" --tb=short
 
   # ── Image build ───────────────────────────────────────────────────
+  # On dev pushes: needs the test gate above.
+  # On tag pushes: ``test`` was skipped (per its ``if``), but GHA
+  # treats a skipped dependency as satisfied — the build runs
+  # immediately.  Production image goes out as fast as buildx +
+  # GHCR push can manage.
   build:
     needs: test
     runs-on: ubuntu-latest
