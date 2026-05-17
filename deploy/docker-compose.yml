@@ -124,7 +124,7 @@ services:
       # sees the request).  The skip-auth regex below carries
       # the rewritten path so it forwards to stash without
       # auth; stash serves the actual friendly content.
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/,^/encircle-alternative$
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/$,^/__stash_robots_txt$,^/api/v1/,^/mcp$,^/oauth/token$,^/oauth/register$,^/\.well-known/oauth-,^/healthz$,^/about$,^/about/,^/static/,^/encircle-alternative$,^/webhooks/stripe$
       # API_ROUTES — endpoints that return 401 instead of redirecting
       # to /oauth2/sign_in when the session is missing/expired.  Polling
       # endpoints belong here.  Without this, a stale tab still running
