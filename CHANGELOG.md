@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.46.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.46.0...v1.46.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **billing:** stash actor-middleware was 403'ing Stripe webhook POSTs ([a7661ea](https://github.com/Brennan-VanderLaan/stash/commit/a7661ea7b49c810afffd72bee3afda7a519df16f))
+
 ## [1.46.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.4...v1.46.0) (2026-05-17)
 
 
