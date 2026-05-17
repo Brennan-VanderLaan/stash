@@ -633,39 +633,196 @@
     acceptable handle.
   </p>
   {% if handles %}
-  <ul class="admin-handle-list">
-    {% for h in handles %}
-    <li class="admin-handle-row{% if h.revoked_at %} admin-handle-row-revoked{% endif %}">
-      <div class="admin-handle-meta">
-        {% if h.revoked_at %}
-          <strong class="text-muted"><s>{{ h.handle }}</s></strong>
-          <span class="pill pill-revoked">revoked</span>
-        {% else %}
-          <strong>{{ h.handle }}</strong>
-        {% endif %}
-        <span class="text-sm text-muted">
-          · <code>{{ h.actor_email }}</code>
-          {% if h.created_at %} · created {{ h.created_at[:10] }}{% endif %}
-          {% if h.revoked_at %} · revoked {{ h.revoked_at[:10] }} by {{ h.revoked_by }}{% endif %}
-          {% if h.revoked_reason %} · reason: {{ h.revoked_reason }}{% endif %}
-        </span>
-      </div>
-      {% if not h.revoked_at %}
-      <form method="post" action="/admin/handles/revoke"
-            class="admin-handle-revoke-form">
-        <input type="hidden" name="actor_email" value="{{ h.actor_email }}">
-        <input type="text" name="reason" maxlength="200"
-               placeholder="reason (optional)"
-               autocomplete="off">
-        <button type="submit" class="btn btn-danger btn-sm"
-                onclick="return confirm('Revoke {{ h.handle }}? The user keeps their stars but reverts to Anonymous on the leaderboard until they pick a new acceptable handle.');">
-          Revoke
-        </button>
-      </form>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
+  {# Feedback #65: previous layout had a full revoke form per
+     row (handle name + email + a wide reason input + a Revoke
+     button each) — fine with 3 users, untenable with 30.  New
+     layout: sortable compact table with per-row checkboxes +
+     a single bulk-action toolbar that lights up when ≥1 row
+     is selected.  Sort handlers are CSS-only via the
+     ``data-sort-key`` attribute + the inline sort script
+     below. #}
+  <form method="post" action="/admin/handles/revoke-bulk"
+        class="admin-handles-form" id="admin-handles-form">
+    <div class="admin-handles-toolbar"
+         data-handles-toolbar
+         data-selected="0">
+      <span class="admin-handles-toolbar-count">
+        <span data-selected-count>0</span> selected
+      </span>
+      <input type="text" name="reason" maxlength="200"
+             placeholder="reason (optional, applied to all selected)"
+             autocomplete="off"
+             class="admin-handles-toolbar-reason">
+      <button type="submit" class="btn btn-danger btn-sm"
+              data-handles-revoke
+              disabled
+              onclick="return confirm('Revoke the selected handles? Each user keeps their stars but reverts to Anonymous until they pick a new acceptable handle.');">
+        Revoke selected
+      </button>
+    </div>
+    <div class="admin-handles-table-wrap">
+      <table class="admin-handles-table" data-sortable-table>
+        <thead>
+          <tr>
+            <th class="admin-handles-th-select">
+              <input type="checkbox"
+                     aria-label="Select all"
+                     data-handles-select-all>
+            </th>
+            <th data-sort-key="handle" data-sort-default>
+              <button type="button" class="admin-th-sort">
+                Handle <span class="admin-th-sort-arrow"></span>
+              </button>
+            </th>
+            <th data-sort-key="email">
+              <button type="button" class="admin-th-sort">
+                Email <span class="admin-th-sort-arrow"></span>
+              </button>
+            </th>
+            <th data-sort-key="created">
+              <button type="button" class="admin-th-sort">
+                Created <span class="admin-th-sort-arrow"></span>
+              </button>
+            </th>
+            <th data-sort-key="status">
+              <button type="button" class="admin-th-sort">
+                Status <span class="admin-th-sort-arrow"></span>
+              </button>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in handles %}
+          <tr class="admin-handles-row{% if h.revoked_at %} admin-handles-row-revoked{% endif %}"
+              data-handle="{{ h.handle | lower }}"
+              data-email="{{ h.actor_email | lower }}"
+              data-created="{{ h.created_at or '' }}"
+              data-status="{{ '2-revoked' if h.revoked_at else '1-active' }}">
+            <td class="admin-handles-td-select">
+              {% if not h.revoked_at %}
+              <input type="checkbox" name="actor_email"
+                     value="{{ h.actor_email }}"
+                     aria-label="Select {{ h.handle }}"
+                     data-handles-checkbox>
+              {% endif %}
+            </td>
+            <td class="admin-handles-td-handle">
+              {% if h.revoked_at %}<s>{{ h.handle }}</s>{% else %}{{ h.handle }}{% endif %}
+            </td>
+            <td class="admin-handles-td-email">
+              <code>{{ h.actor_email }}</code>
+            </td>
+            <td class="admin-handles-td-created text-sm text-muted">
+              {{ h.created_at[:10] if h.created_at else '—' }}
+            </td>
+            <td class="admin-handles-td-status">
+              {% if h.revoked_at %}
+              <span class="pill pill-revoked" title="revoked {{ h.revoked_at[:10] }} by {{ h.revoked_by }}{% if h.revoked_reason %} — {{ h.revoked_reason }}{% endif %}">
+                revoked
+              </span>
+              {% else %}
+              <span class="pill pill-active">active</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var form = document.getElementById('admin-handles-form');
+    if (!form) return;
+    var checkboxes = form.querySelectorAll('[data-handles-checkbox]');
+    var selectAll = form.querySelector('[data-handles-select-all]');
+    var toolbar = form.querySelector('[data-handles-toolbar]');
+    var countEl = form.querySelector('[data-selected-count]');
+    var revokeBtn = form.querySelector('[data-handles-revoke]');
+
+    function refreshToolbar() {
+      var n = 0;
+      checkboxes.forEach(function (c) { if (c.checked) n++; });
+      countEl.textContent = n;
+      toolbar.dataset.selected = String(n);
+      revokeBtn.disabled = (n === 0);
+      // Reflect partial-select state on the header checkbox.
+      if (n === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+      } else if (n === checkboxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+      } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+      }
+    }
+
+    selectAll.addEventListener('change', function () {
+      checkboxes.forEach(function (c) { c.checked = selectAll.checked; });
+      refreshToolbar();
+    });
+    checkboxes.forEach(function (c) {
+      c.addEventListener('change', refreshToolbar);
+    });
+    refreshToolbar();
+
+    // ── Sortable columns ────────────────────────────────────────
+    // Click a column header to sort by that ``data-sort-key``.
+    // Click again to flip direction.  State tracked on the
+    // ``<table>`` element so the visible arrow indicator can
+    // follow.  Active rows always rank above revoked rows
+    // (data-status starts with "1-active" vs "2-revoked").
+    var table = form.querySelector('[data-sortable-table]');
+    var tbody = table.querySelector('tbody');
+    var defaultHeader = table.querySelector('th[data-sort-default]');
+    if (defaultHeader) {
+      table.dataset.sortKey = defaultHeader.dataset.sortKey;
+      table.dataset.sortDir = 'asc';
+    }
+    function applySort() {
+      var key = table.dataset.sortKey;
+      var dir = table.dataset.sortDir === 'desc' ? -1 : 1;
+      var rows = Array.prototype.slice.call(
+        tbody.querySelectorAll('tr')
+      );
+      rows.sort(function (a, b) {
+        var av = a.dataset[key] || '';
+        var bv = b.dataset[key] || '';
+        if (av < bv) return -1 * dir;
+        if (av > bv) return  1 * dir;
+        return 0;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+      // Reset arrow indicators.
+      table.querySelectorAll('.admin-th-sort-arrow').forEach(function (a) {
+        a.textContent = '';
+      });
+      var activeHeader = table.querySelector(
+        'th[data-sort-key="' + key + '"] .admin-th-sort-arrow'
+      );
+      if (activeHeader) {
+        activeHeader.textContent = (dir === 1 ? ' ↑' : ' ↓');
+      }
+    }
+    table.querySelectorAll('th[data-sort-key]').forEach(function (th) {
+      th.querySelector('.admin-th-sort').addEventListener('click', function () {
+        var k = th.dataset.sortKey;
+        if (table.dataset.sortKey === k) {
+          table.dataset.sortDir = (
+            table.dataset.sortDir === 'asc' ? 'desc' : 'asc'
+          );
+        } else {
+          table.dataset.sortKey = k;
+          table.dataset.sortDir = 'asc';
+        }
+        applySort();
+      });
+    });
+    applySort();
+  })();
+  </script>
   {% else %}
   <p class="text-muted">No handles set yet.</p>
   {% endif %}

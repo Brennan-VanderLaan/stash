@@ -929,6 +929,184 @@ def test_admin_renders_oauth_clients_and_revoke_works(
         assert ">revoked<" in r3.text or "revoked" in r3.text
 
 
+def test_admin_handles_section_renders_table_with_checkboxes(
+    tmp_path, monkeypatch,
+):
+    """Feedback #65 redesign: the leaderboard-handles section is
+    now a sortable table with per-row checkboxes instead of a
+    list of one-revoke-form-per-row.  Pin both the table
+    structure AND the presence of the bulk toolbar so a future
+    rewrite can't quietly regress to the old shape."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    # Seed several handles so the table has rows.
+    with app_mod.db() as conn:
+        for i, (email, handle, revoked) in enumerate([
+            ("a@example.com", "alice",   False),
+            ("b@example.com", "bob",     False),
+            ("c@example.com", "carol",   True),
+            ("d@example.com", "dave",    False),
+        ]):
+            conn.execute(
+                "INSERT INTO feedback_handles "
+                "(actor_email, handle, handle_lower, created_at, "
+                " revoked_at, revoked_by, revoked_reason) "
+                "VALUES (?, ?, ?, '2026-05-01 00:00:00', "
+                "        ?, ?, ?)",
+                (email, handle, handle.lower(),
+                 "2026-05-10 00:00:00" if revoked else None,
+                 "op@example.com" if revoked else None,
+                 "impersonation" if revoked else None),
+            )
+        conn.commit()
+
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        page = c.get("/admin").text
+
+    # Table structure + bulk toolbar are present.
+    assert "admin-handles-table" in page
+    assert "admin-handles-toolbar" in page
+    assert "Revoke selected" in page
+    # Per-row checkboxes — only on active handles (revoked rows
+    # don't get a checkbox, can't be re-revoked).
+    assert 'data-handles-checkbox' in page
+    # Each active handle's email appears as a checkbox value.
+    for email in ("a@example.com", "b@example.com", "d@example.com"):
+        assert f'value="{email}"' in page
+    # Revoked handle still renders (audit trail) but without a
+    # checkbox.
+    assert "carol" in page
+    # The OLD per-row revoke form should be gone — pin the
+    # absence so a regression that rebuilds the old shape fails.
+    assert "admin-handle-revoke-form" not in page
+
+
+def test_admin_handles_bulk_revoke_processes_each_email(
+    tmp_path, monkeypatch,
+):
+    """POST /admin/handles/revoke-bulk with multiple ``actor_email``
+    form fields revokes each handle in one round-trip.  The
+    redirect target is /admin#handles so the operator lands back
+    on the section they were working in."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with app_mod.db() as conn:
+        for email, handle in [
+            ("x@example.com", "xander"),
+            ("y@example.com", "yara"),
+            ("z@example.com", "zach"),
+        ]:
+            conn.execute(
+                "INSERT INTO feedback_handles "
+                "(actor_email, handle, handle_lower, created_at) "
+                "VALUES (?, ?, ?, '2026-05-01 00:00:00')",
+                (email, handle, handle.lower()),
+            )
+        conn.commit()
+
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.post(
+            "/admin/handles/revoke-bulk",
+            # ``actor_email`` repeated → form.getlist picks them
+            # all up.  This is how the table form submits when
+            # multiple checkboxes are ticked.
+            data={
+                # Multiple values for the same key — httpx
+                # form-encodes as ``actor_email=x&actor_email=z``,
+                # which is exactly what the table form submits.
+                "actor_email": ["x@example.com", "z@example.com"],
+                "reason": "impersonating staff",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "/admin" in r.headers["location"]
+    assert "#handles" in r.headers["location"]
+
+    # x + z revoked; y still active.
+    with app_mod.db() as conn:
+        rows = {
+            r["actor_email"]: r["revoked_at"]
+            for r in conn.execute(
+                "SELECT actor_email, revoked_at, revoked_reason "
+                "FROM feedback_handles"
+            ).fetchall()
+        }
+    assert rows["x@example.com"] is not None
+    assert rows["z@example.com"] is not None
+    assert rows["y@example.com"] is None
+    # Reason field landed on the revoked rows.
+    with app_mod.db() as conn:
+        reasons = {
+            r["actor_email"]: r["revoked_reason"]
+            for r in conn.execute(
+                "SELECT actor_email, revoked_reason FROM feedback_handles "
+                "WHERE revoked_at IS NOT NULL"
+            ).fetchall()
+        }
+    assert reasons["x@example.com"] == "impersonating staff"
+    assert reasons["z@example.com"] == "impersonating staff"
+
+
+def test_admin_handles_bulk_revoke_400s_on_empty_selection(
+    tmp_path, monkeypatch,
+):
+    """Pin the empty-selection guard so a future refactor doesn't
+    accidentally let a no-op POST succeed and audit-log nothing."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "op@example.com"},
+    ) as c:
+        r = c.post(
+            "/admin/handles/revoke-bulk",
+            data={"reason": "nothing"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 400
+
+
+def test_admin_handles_bulk_revoke_404s_for_non_operator(
+    tmp_path, monkeypatch,
+):
+    """Bulk endpoint must enforce operator-only access — same
+    opacity rule as every other /admin/* surface.  Non-operators
+    get a 404, never a 403 (no probing the URL space)."""
+    app_mod = _bootstrap_app(
+        tmp_path, monkeypatch, operator_email="op@example.com",
+    )
+    # A regular tenant maintainer.
+    with app_mod.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, plan) VALUES ('Sam Stash', 'pro')",
+        )
+        tid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, 'sam@example.com', 'maintainer', "
+            "        CURRENT_TIMESTAMP)",
+            (tid,),
+        )
+        conn.commit()
+    with TestClient(
+        app_mod.app, headers={"X-Forwarded-Email": "sam@example.com"},
+    ) as c:
+        r = c.post(
+            "/admin/handles/revoke-bulk",
+            data={"actor_email": "anyone@example.com"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 404
+
+
 def test_admin_renders_vendor_cost_panel(tmp_path, monkeypatch):
     """Smoke: the vendor-cost card is in the rendered page so a
     future template refactor that drops it fails this test."""

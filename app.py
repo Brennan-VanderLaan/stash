@@ -6161,6 +6161,38 @@ def admin_revoke_handle(
     return RedirectResponse("/admin#handles", status_code=303)
 
 
+@app.post("/admin/handles/revoke-bulk")
+async def admin_revoke_handle_bulk(request: Request):
+    """Bulk-revoke handles (#65 redesign).  The /admin handles
+    section is now a sortable table with per-row checkboxes +
+    a single shared reason input; this route revokes everything
+    the operator selected in one POST.  Skips rows that don't
+    have an active handle (already-revoked, or the email lost
+    its row entirely) so a half-stale selection doesn't 500 the
+    whole batch."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    form = await request.form()
+    emails = [e for e in form.getlist("actor_email") if e]
+    reason = (form.get("reason") or "").strip()
+    if not emails:
+        raise HTTPException(400, "Pick at least one handle to revoke.")
+    revoked = 0
+    for email in emails:
+        try:
+            dao_handles.revoke_handle(actor, email, reason=reason)
+            revoked += 1
+        except NotFoundError:
+            # Already revoked between page render and submit, or
+            # the row was deleted.  Don't fail the batch — log +
+            # continue.
+            _LOG_ROUTE.info(
+                "admin.handle.bulk_revoke.skip email=%s "
+                "(no active handle)", email,
+            )
+    return RedirectResponse("/admin#handles", status_code=303)
+
+
 _FEEDBACK_EXPORT_COLUMNS = (
     "id", "status", "tenant_id", "tenant_name", "actor_email",
     "body", "source_url", "user_agent", "viewport_w", "viewport_h",
