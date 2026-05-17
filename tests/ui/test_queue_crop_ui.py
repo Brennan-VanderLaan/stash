@@ -88,12 +88,6 @@ def test_queue_crop_button_is_present_and_clickable(
     pending_id = seeded_pending_item["pending_id"]
     page.goto(f"{live_server['url']}/queue")
 
-    # The crop button lives inside a Customize <details>.  Expand
-    # it so the button is visible (CSS collapses display until the
-    # details opens, regardless of DOM presence).
-    customize = page.locator(f'#card-{pending_id} details').first
-    customize.evaluate("d => { d.open = true; }")
-
     crop_btn = page.locator(f"#crop-btn-{pending_id}")
     crop_btn.wait_for(state="visible", timeout=2000)
     assert crop_btn.is_enabled()
@@ -103,3 +97,84 @@ def test_queue_crop_button_is_present_and_clickable(
     # bottoms out at "occluded by another element" — if the
     # button is "visible" by this definition, it's reachable.
     assert crop_btn.is_visible()
+
+
+def test_cropperjs_loads_under_csp(page, live_server, seeded_pending_item):
+    """Feedback #62 root cause: the app's CSP is
+    ``script-src 'self' 'unsafe-inline'``, which blocks
+    external-CDN scripts.  Cropper.js used to load from
+    cdnjs.cloudflare.com — the script was silently CSP-blocked,
+    every Adjust-crop click threw ``ReferenceError: Cropper is
+    not defined``, and the user saw "nothing happens" with no
+    on-page indicator.  Mobile users felt it first because they
+    can't easily check the browser console.
+
+    Pin the fix: self-hosted Cropper.js at /static/vendor/ must
+    load successfully and expose the global ``Cropper`` constructor.
+    A future "let me put this back on a CDN" pass that re-introduces
+    the same CSP block fails this test."""
+    page.goto(f"{live_server['url']}/queue")
+    # ``Cropper`` is a global function constructor — if the script
+    # loaded, ``typeof Cropper === 'function'``.  CSP-blocked
+    # script would leave the identifier undefined.
+    is_loaded = page.evaluate("typeof Cropper === 'function'")
+    assert is_loaded is True, (
+        "Cropper.js did not load — check that the script tag in "
+        "templates/queue.html points at /static/vendor/ and not "
+        "an external CDN (the app's CSP blocks external script "
+        "sources)."
+    )
+
+
+def test_cropperjs_constructor_runs_against_a_real_image(
+    page, live_server, seeded_pending_item,
+):
+    """Feedback #62 end-to-end: ``new Cropper(img)`` must succeed
+    in the real browser — no ReferenceError (cropper.js not
+    loaded), no TypeError (wrong API shape).
+
+    We don't actually click ``Adjust crop`` here because the
+    fake-pending-photo.jpg fixture isn't a real encrypted upload,
+    so the IMG never loads + cropper.js's ``new Cropper`` may
+    defer or warn waiting for the load event.  Instead, evaluate
+    the constructor against a freshly-injected image with a real
+    data URI so the test asks the focused question: does the
+    library work?
+
+    A 1x1 transparent PNG data URI is enough — cropper.js's
+    init path doesn't care about the content, only that the IMG
+    has naturalWidth/naturalHeight to size against."""
+    page.goto(f"{live_server['url']}/queue")
+    # Inject a tiny real image + try to construct a Cropper.  The
+    # data URI matches CSP's ``img-src 'self' data:`` allow-list.
+    # ``async`` because the image needs to fire its load event
+    # before Cropper's constructor reads naturalWidth.
+    result = page.evaluate(
+        """
+        async () => {
+          const img = document.createElement('img');
+          img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+          document.body.appendChild(img);
+          await new Promise(r => {
+            if (img.complete && img.naturalWidth) return r();
+            img.addEventListener('load', r, { once: true });
+            img.addEventListener('error', r, { once: true });
+          });
+          try {
+            const c = new Cropper(img, { viewMode: 1 });
+            const ok = typeof c === 'object' && c !== null;
+            c.destroy();
+            img.remove();
+            return { ok, error: null };
+          } catch (e) {
+            img.remove();
+            return { ok: false, error: String(e) };
+          }
+        }
+        """
+    )
+    assert result["ok"] is True, (
+        f"Cropper constructor failed: {result['error']!r}.  "
+        f"Feedback #62 regression class — the library didn't load "
+        f"or its API broke."
+    )

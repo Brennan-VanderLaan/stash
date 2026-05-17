@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Re-crop: {{ item.name }} · Stash{% endblock %}
 {% block head_extra %}
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+<link rel="stylesheet" href="/static/vendor/cropper.min.css?v={{ static_version() }}">
+<script src="/static/vendor/cropper.min.js?v={{ static_version() }}"></script>
 {% endblock %}
 {% block header_left %}
 <a href="/boxes/{{ item.box_id }}" class="header-back">← Back</a>

@@ -1,8 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Sort queue · Stash{% endblock %}
 {% block head_extra %}
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
+{# Cropper.js self-hosted under /static/vendor/.  Was on
+   cdnjs.cloudflare.com but the app's CSP (``script-src 'self'
+   'unsafe-inline'`` — see _SECURITY_HEADERS in app.py) blocked
+   external CDN scripts.  Result: ``new Cropper(...)`` threw
+   ReferenceError on every Adjust-crop click; the user saw "nothing
+   happens" with no on-page error.  Mobile users felt it first
+   because they can't easily check the console.  Same self-hosting
+   pattern as fabric + html2canvas. #}
+<link rel="stylesheet" href="/static/vendor/cropper.min.css?v={{ static_version() }}">
+<script src="/static/vendor/cropper.min.js?v={{ static_version() }}"></script>
 {% endblock %}
 {% block content %}
 

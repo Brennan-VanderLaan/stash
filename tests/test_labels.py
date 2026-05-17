@@ -408,6 +408,41 @@ def test_generate_art_endpoint_saves_and_links_image(client, monkeypatch):
             / row["background_art"]).exists()
 
 
+def test_generate_art_surfaces_friendly_message_on_content_block(
+    client, monkeypatch,
+):
+    """Feedback #61: when Nano Banana 2's content filter refuses an
+    art prompt (e.g. "box art don't like dicks"), the user used to
+    see ``Art generation failed: RuntimeError('Nano Banana 2 returned
+    no image data')`` — useless.  The /generate-art route now
+    surfaces VisionBlockedError.user_message verbatim so the user
+    knows which gate hit + how to work around it.
+
+    Pin both: the error text reaches the response body, AND it's
+    the readable user_message (not the raw repr) that lands."""
+    from vision import VisionBlockedError
+    client.post("/boxes", data={"name": "Banned Box"})
+
+    def blocked(name, description="", items=None, item_photos=None):
+        raise VisionBlockedError(
+            "Nano Banana 2 refused to draw this label via "
+            "prohibited-content filter.  Try renaming the box.",
+            debug="finish_reason=PROHIBITED_CONTENT",
+        )
+    monkeypatch.setattr(
+        client.app_module.vision, "generate_label_art", blocked,
+    )
+
+    r = client.post("/boxes/1/generate-art", follow_redirects=False)
+    assert r.status_code == 502
+    body = r.text
+    assert "Nano Banana 2 refused to draw" in body
+    assert "Try renaming the box" in body
+    # The raw exception repr ("VisionBlockedError(...)") should NOT
+    # leak — that's the regression we're pinning.
+    assert "VisionBlockedError" not in body
+
+
 def test_label_svg_embeds_background_art_when_set(client, monkeypatch):
     client.post("/boxes", data={"name": "Crochet Box"})
     monkeypatch.setattr(

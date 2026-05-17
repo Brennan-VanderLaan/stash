@@ -5124,9 +5124,18 @@ def generate_box_art(
         )
         dao_usage.record(tenant_id, "ai", "gemini_art")
     except Exception as e:
-        if _wants_json(request):
-            raise HTTPException(502, f"Art generation failed: {e}")
-        raise HTTPException(502, f"Art generation failed: {e}")
+        # Feedback #61: surface VisionBlockedError's user_message
+        # for content-filter refusals instead of the raw exception
+        # repr.  "Nano Banana 2 refused to draw this label via
+        # prohibited-content filter — try renaming the box..."
+        # beats "Art generation failed: VisionBlockedError(...)".
+        from vision import VisionError as _VisionError
+        msg = (
+            e.user_message
+            if isinstance(e, _VisionError)
+            else f"Art generation failed: {e}"
+        )
+        raise HTTPException(502, msg)
 
     new_name = f"art-{secrets.token_hex(8)}.jpg"
     _write_encrypted(tenant_id, new_name, image_bytes)

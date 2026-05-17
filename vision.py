@@ -341,7 +341,49 @@ def generate_label_art(
 
     image_bytes = _extract_image_bytes(response)
     if image_bytes is None:
-        raise RuntimeError("Nano Banana 2 returned no image data")
+        # Same content-filter handling as detect_items (feedback #61:
+        # Nano Banana 2 refuses item-themed art for various reasons,
+        # e.g. "box art don't like dicks").  Surface a readable
+        # message naming the actual gate hit + actionable next steps
+        # instead of the cryptic "returned no image data".
+        block_label = _classify_block_reason(
+            getattr(response, "prompt_feedback", None)
+        )
+        if block_label:
+            raise VisionBlockedError(
+                f"Nano Banana 2 refused to draw this label via "
+                f"{block_label}.  Try renaming the box, removing "
+                f"items from the description that might trip the "
+                f"filter, or skip AI art and use a plain label.",
+                debug=f"prompt_feedback={response.prompt_feedback!r}",
+            )
+        # Per-candidate finish_reason: same defensive coverage as
+        # the detect path — some SDK versions stamp the block here
+        # instead of on prompt_feedback.
+        candidates = getattr(response, "candidates", None) or []
+        finish_reason = None
+        if candidates:
+            finish_reason = getattr(candidates[0], "finish_reason", None)
+        finish_name = str(
+            getattr(finish_reason, "name", finish_reason)
+        ).upper()
+        if "SAFETY" in finish_name or "PROHIBITED" in finish_name:
+            raise VisionBlockedError(
+                "Nano Banana 2 stopped drawing this label for "
+                "content-safety reasons.  Rename the box, soften "
+                "the description, or skip AI art and use a plain "
+                "label.",
+                debug=f"finish_reason={finish_reason!r}",
+            )
+        # No obvious block — generic "model produced nothing" path.
+        # Keep the wire-level RuntimeError but with a user-readable
+        # ``VisionError`` instead so the route can surface it.
+        raise VisionError(
+            "Nano Banana 2 returned no image — the model gave up "
+            "without an explanation.  Try again, or skip AI art "
+            "and use a plain label.",
+            debug=f"response={response!r}",
+        )
 
     # Downscale + JPEG so the embedded data URI doesn't bloat the label SVG.
     from PIL import Image
