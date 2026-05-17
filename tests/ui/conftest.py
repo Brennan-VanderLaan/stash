@@ -171,21 +171,85 @@ def live_server(tmp_path_factory) -> dict:
 TEST_EMAIL = "ui-test@example.com"
 
 
+# ── Viewport parametrization ─────────────────────────────────────────
+#
+# The UI test suite runs every page-health check across both a real
+# phone-sized viewport AND a typical desktop window.  The two sizes
+# match the actual viewport_w / viewport_h values from real-user
+# feedback rows in production (nashmankas on a 384x721 Android,
+# Brennan on a 1502x1203 desktop).  Bugs that only surface at one
+# size — the floorplan-zoom-wheel-steals-scroll bug, the mobile
+# crop button being CSS-blocked, the admin popup behind tenant
+# cards — have all been "I can't repro this" until somebody tested
+# in the OTHER viewport.  Make it the default.
+
+VIEWPORT_MOBILE = {"viewport": {"width": 384, "height": 721}}
+VIEWPORT_DESKTOP = {"viewport": {"width": 1502, "height": 900}}
+
+ALL_VIEWPORTS = [
+    pytest.param(VIEWPORT_MOBILE, id="mobile"),
+    pytest.param(VIEWPORT_DESKTOP, id="desktop"),
+]
+
+
+@pytest.fixture(params=ALL_VIEWPORTS)
+def viewport(request):
+    """Function-scoped, parametrized over (mobile, desktop).  Tests
+    that depend on this fixture run twice — once for each viewport.
+
+    To run a test at a SINGLE viewport explicitly, depend on
+    ``mobile_viewport`` or ``desktop_viewport`` directly instead."""
+    return request.param
+
+
+@pytest.fixture
+def mobile_viewport():
+    """Fixed mobile viewport — for tests that explicitly want the
+    phone-sized window (e.g. testing a mobile-only affordance)."""
+    return VIEWPORT_MOBILE
+
+
+@pytest.fixture
+def desktop_viewport():
+    """Fixed desktop viewport — for tests that depend on chrome
+    that's hidden on phones (loose-tray sidebar, etc.)."""
+    return VIEWPORT_DESKTOP
+
+
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
-    """Stamp ``X-Forwarded-Email`` on every request from every page so
-    the actor middleware resolves to the seeded tenant member.
-
-    ``pytest-playwright`` calls this fixture once per session to build
-    the kwargs passed to ``browser.new_context``.  We merge our header
-    overrides on top of whatever the plugin gives us so flags like
-    ``--browser firefox`` still flow through."""
+    """Default session context — desktop viewport, signed-in headers.
+    Tests that want to override the viewport per-test should depend
+    on ``viewport_page`` below instead of the bare ``page`` fixture."""
     return {
         **browser_context_args,
+        **VIEWPORT_DESKTOP,
         "extra_http_headers": {
             "X-Forwarded-Email": TEST_EMAIL,
         },
     }
+
+
+@pytest.fixture
+def viewport_page(browser, viewport):
+    """A fresh Playwright ``page`` with the requested viewport
+    applied + the standard signed-in header injection.
+
+    Why function-scoped + a fresh context per call: parametrizing
+    the session-scoped ``browser_context_args`` would make every
+    test in the suite double — including ones that already pass at
+    desktop and don't need the second run.  This fixture is opt-in:
+    tests that want viewport coverage depend on it; the rest keep
+    using ``page`` with the default desktop context."""
+    context = browser.new_context(
+        **viewport,
+        extra_http_headers={"X-Forwarded-Email": TEST_EMAIL},
+    )
+    page = context.new_page()
+    try:
+        yield page
+    finally:
+        context.close()
 
 
 # ── Seed helpers ────────────────────────────────────────────────────
