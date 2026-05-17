@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.50.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.0...v1.50.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ci:** reorder main-sync so prod webhook fires before main ff ([c4bda9a](https://github.com/Brennan-VanderLaan/stash/commit/c4bda9a3beb1b853c37b3440ff89da4c6dd79441))
+
 ## [1.50.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.49.0...v1.50.0) (2026-05-17)
 
 
