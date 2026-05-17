@@ -3233,6 +3233,129 @@ summary.card-summary-soft::-webkit-details-marker { display: none; }
   transform: rotate(180deg);
 }
 .danger-zone-blurb { margin: 0.75rem 0 0.5rem; }
+
+/* === /locations/{id} top action bar (feedback #48) ============
+   Old layout buried the rename/delete forms inside a collapsed
+   <details> at the top + the floor-rename/replace/delete forms in
+   another <details> below the floorplan, only in edit mode.
+   New layout: one prominent "Edit rooms" primary button + one
+   "⚙️ Settings" button that opens a single dialog containing
+   every location + floor edit form.  An edit-mode help banner
+   sits ABOVE the floorplan with the "Done editing" exit visible. */
+.location-action-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.location-action-bar-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.location-action-bar-heading {
+  margin: 0;
+  font-size: 1.4rem;
+  line-height: 1.2;
+}
+.location-action-bar-meta { margin: 0; }
+.location-action-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.location-edit-help {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  background: var(--accent-dim);
+  border-left: 4px solid var(--accent);
+}
+.location-edit-help-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.location-settings-dialog {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  padding: 0;
+  max-width: min(36rem, calc(100vw - 2rem));
+  width: 100%;
+  max-height: calc(100vh - 4rem);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.location-settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+.location-settings-close-form {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 0.5rem 0;
+  background: linear-gradient(to bottom, var(--panel) 75%, transparent);
+  margin: 0;
+}
+.location-settings-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+}
+.location-settings-close:hover { color: var(--text); }
+.location-settings-body {
+  overflow-y: auto;
+  padding: 0.5rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.location-settings-heading {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.location-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+.location-settings-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.location-settings-section-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.location-settings-form { margin: 0; }
+.location-settings-danger {
+  padding-top: 0.7rem;
+  margin-top: 0.3rem;
+  border-top: 1px dashed var(--border);
+}
+
 .location-card-preview {
   width: 64px;
   height: 64px;

@@ -7,31 +7,143 @@
 {% endblock %}
 {% block content %}
 
-<div class="card">
-  <div class="card-header">
-    <span class="card-title">{{ location.name }}</span>
-    <div class="row-gap-tight">
-      {% if current_floor and current_floor.floorplan %}
-      <a href="/locations/{{ location.id }}?floor={{ current_floor.id }}{% if not edit_mode %}&edit=1{% endif %}"
-         class="btn btn-secondary btn-sm">{% if edit_mode %}Done editing{% else %}Edit rooms{% endif %}</a>
+{# Top action bar — feedback #48 + Nondre's "where tf my edit
+   location button".  Previously the page hid "Edit rooms" behind
+   a small btn-sm tucked into the card header AND buried the
+   rename/delete forms inside a collapsed <details> labelled
+   "Rename or delete this location" — and the floor settings only
+   appeared in edit mode BELOW the floorplan.  Three separate
+   surfaces a user had to discover one by one.  Now: one prominent
+   primary action ("Edit rooms") + one settings button that opens
+   a single modal containing every location-level + floor-level
+   control in clearly-labelled sections. #}
+<div class="card location-action-bar">
+  <div class="location-action-bar-title">
+    <h2 class="location-action-bar-heading">{{ location.name }}</h2>
+    <p class="location-action-bar-meta text-sm text-muted">
+      {{ floors | length }} floor{{ '' if floors | length == 1 else 's' }}
+      {% if current_floor %}
+      · {{ rooms | length }} room{{ '' if rooms | length == 1 else 's' }} on {{ current_floor.name }}
       {% endif %}
-    </div>
+    </p>
   </div>
-  <details>
-    <summary class="text-sm text-muted disclosure-soft">Rename or delete this location</summary>
-    <form method="post" action="/locations/{{ location.id }}" class="mt-1">
-      <label>Name<input type="text" name="name" value="{{ location.name }}" required></label>
-      <button type="submit" class="btn btn-secondary btn-block">Rename</button>
-    </form>
-    <form method="post" action="/locations/{{ location.id }}/delete" class="mt-1">
-      <label>
-        Type <code>{{ location.name }}</code> to delete this location and all its floors
-        <input type="text" name="confirm" placeholder="{{ location.name }}" autocomplete="off">
-      </label>
-      <button type="submit" class="btn btn-danger btn-block">Delete location</button>
-    </form>
-  </details>
+  <div class="location-action-bar-buttons">
+    {% if current_floor and current_floor.floorplan %}
+    <a href="/locations/{{ location.id }}?floor={{ current_floor.id }}{% if not edit_mode %}&edit=1{% endif %}"
+       class="btn btn-primary">
+      {% if edit_mode %}✓ Done editing rooms{% else %}✏️ Edit rooms{% endif %}
+    </a>
+    {% endif %}
+    <button type="button" class="btn btn-secondary"
+            data-open-location-settings>
+      ⚙️ Settings
+    </button>
+  </div>
 </div>
+
+{# Settings modal — unified surface for every location + floor
+   edit action.  Lives at the top of the page (not below the
+   floorplan) so it's discoverable on first load; opens on
+   ``data-open-location-settings`` click via the inline script
+   below.  Forms are unchanged from the previous tucked-away
+   versions — same POST targets, same fields — just hoisted out
+   of the buried <details> blocks and into one menu. #}
+<dialog id="location-settings-dialog" class="location-settings-dialog">
+  <form method="dialog" class="location-settings-close-form">
+    <button type="submit" class="location-settings-close" aria-label="Close">×</button>
+  </form>
+  <div class="location-settings-body">
+    <h3 class="location-settings-heading">⚙️ Settings</h3>
+
+    <section class="location-settings-section">
+      <h4 class="location-settings-section-title">This location</h4>
+      <form method="post" action="/locations/{{ location.id }}"
+            class="location-settings-form">
+        <label>
+          <span class="text-sm text-muted">Rename location</span>
+          <input type="text" name="name" value="{{ location.name }}" required>
+        </label>
+        <button type="submit" class="btn btn-secondary btn-block">Save name</button>
+      </form>
+      <form method="post" action="/locations/{{ location.id }}/delete"
+            class="location-settings-form location-settings-danger">
+        <label>
+          <span class="text-sm text-muted">
+            Type <code>{{ location.name }}</code> to delete this location and all its floors
+          </span>
+          <input type="text" name="confirm" placeholder="{{ location.name }}" autocomplete="off">
+        </label>
+        <button type="submit" class="btn btn-danger btn-block">Delete location</button>
+      </form>
+    </section>
+
+    {% if current_floor %}
+    <section class="location-settings-section">
+      <h4 class="location-settings-section-title">
+        Floor: {{ current_floor.name }}
+      </h4>
+      {% if current_floor.floorplan %}
+      <a href="/floors/{{ current_floor.id }}/edit-image"
+         class="btn btn-primary btn-block">
+        🖌 Edit floorplan drawing
+      </a>
+      {% endif %}
+      <form method="post" action="/floors/{{ current_floor.id }}"
+            class="location-settings-form">
+        <label>
+          <span class="text-sm text-muted">Rename floor</span>
+          <input type="text" name="name" value="{{ current_floor.name }}" required>
+        </label>
+        <button type="submit" class="btn btn-secondary btn-block">Save name</button>
+      </form>
+      <form method="post" action="/floors/{{ current_floor.id }}/floorplan"
+            enctype="multipart/form-data"
+            class="location-settings-form">
+        <label>
+          <span class="text-sm text-muted">
+            {% if current_floor.floorplan %}Replace{% else %}Upload{% endif %} floorplan image
+          </span>
+          <input type="file" name="image" accept="image/*" required>
+        </label>
+        <button type="submit" class="btn btn-secondary btn-block">
+          {% if current_floor.floorplan %}Replace{% else %}Upload{% endif %} floorplan
+        </button>
+      </form>
+      <form method="post" action="/floors/{{ current_floor.id }}/delete"
+            class="location-settings-form location-settings-danger"
+            onsubmit="return confirm('Delete the {{ current_floor.name }} floor and all its rooms?');">
+        <button type="submit" class="btn btn-danger btn-block">
+          Delete this floor
+        </button>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+</dialog>
+<script>
+(function () {
+  var dialog = document.getElementById('location-settings-dialog');
+  if (!dialog) return;
+  document.querySelectorAll('[data-open-location-settings]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      try { dialog.showModal(); }
+      catch (e) { dialog.setAttribute('open', ''); }
+    });
+  });
+  dialog.querySelector('.location-settings-close')
+    .addEventListener('click', function (e) {
+      e.preventDefault();
+      try { dialog.close(); } catch (_) { dialog.removeAttribute('open'); }
+    });
+  // Backdrop click → close (consistent with the other modals on
+  // this page).
+  dialog.addEventListener('click', function (e) {
+    if (e.target === dialog) {
+      try { dialog.close(); } catch (_) { dialog.removeAttribute('open'); }
+    }
+  });
+})();
+</script>
 
 {# ── Floor tabs ──────────────────────────────────────────────────── #}
 <div class="card floor-bar">
@@ -90,6 +202,29 @@
   </form>
 </div>
 {% elif current_floor %}
+
+{% if edit_mode %}
+{# Edit-mode help banner — feedback #48: the rules were tucked
+   below the floorplan, so first-time users scrolled past the
+   map without seeing how to draw a room.  Hoisted above the
+   floorplan, with a clear "Done editing" exit on the right so
+   the affordance is obvious. #}
+<div class="card location-edit-help" role="status">
+  <div class="location-edit-help-body">
+    <strong>You're editing rooms.</strong>
+    <span class="text-sm">
+      Drag empty space to draw a new room ·
+      Drag a rectangle to move it ·
+      Grab a corner handle to resize ·
+      Click a rectangle to rename, recolor, or delete.
+    </span>
+  </div>
+  <a href="/locations/{{ location.id }}?floor={{ current_floor.id }}"
+     class="btn btn-primary btn-sm">
+    ✓ Done editing
+  </a>
+</div>
+{% endif %}
 
 <div class="card floorplan-card">
   <div id="floorplan-viewport" class="floorplan-viewport">
@@ -173,37 +308,9 @@
     <button type="button" class="floorplan-control" data-zoom="+1" aria-label="Zoom in">+</button>
     <button type="button" class="floorplan-control" data-zoom-fit aria-label="Fit to screen">⤢</button>
   </div>
-  {% if edit_mode %}
-  <p class="text-sm text-muted mt-1">
-    <strong>Drag empty space</strong> to draw a new room.
-    <strong>Drag a rectangle</strong> to move it, or grab a corner handle to resize.
-    <strong>Click</strong> a rectangle to rename or delete it.
-  </p>
-  <details class="mt-1 floor-actions-disclosure" id="floor-actions">
-    <summary class="floor-actions-summary">
-      <span>⚙️ Rename / replace / delete this floor</span>
-      <span class="floor-actions-chevron" aria-hidden="true">▾</span>
-    </summary>
-    <form method="post" action="/floors/{{ current_floor.id }}" class="mt-1">
-      <label>Floor name<input type="text" name="name" value="{{ current_floor.name }}" required></label>
-      <button type="submit" class="btn btn-secondary btn-block">Rename floor</button>
-    </form>
-    {% if current_floor.floorplan %}
-    <a href="/floors/{{ current_floor.id }}/edit-image"
-       class="btn btn-primary btn-block mt-1">
-      🖌 Edit this floorplan in the browser
-    </a>
-    {% endif %}
-    <form method="post" action="/floors/{{ current_floor.id }}/floorplan" enctype="multipart/form-data" class="mt-1">
-      <label>Replace floorplan image<input type="file" name="image" accept="image/*" required></label>
-      <button type="submit" class="btn btn-secondary btn-block">Replace floorplan</button>
-    </form>
-    <form method="post" action="/floors/{{ current_floor.id }}/delete" class="mt-1"
-          onsubmit="return confirm('Delete the {{ current_floor.name }} floor and all its rooms?');">
-      <button type="submit" class="btn btn-danger btn-block">Delete this floor</button>
-    </form>
-  </details>
-  {% endif %}
+  {# Edit-mode help moved to the banner ABOVE the floorplan;
+     floor rename / replace / delete consolidated into the
+     ⚙️ Settings dialog at the top of the page (feedback #48). #}
 </div>
 
 {# Per-room popover (a single dialog reused) — opens on rect click in edit mode #}
