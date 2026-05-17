@@ -161,6 +161,11 @@ jobs:
       #   :v1.42.0           (exact version)
       #   :1.42              (minor pin)
       #   :1                 (major pin)
+      #   :dev               (re-tagged so staging mirrors the new
+      #                      release — without this, staging's :dev
+      #                      pull would still show the last pending-
+      #                      preview build, even though we just cut
+      #                      v1.42.0)
       #   NO :latest         (intentional — see workflow header)
       #
       # Conditions on each ``type=`` line use the same syntax as
@@ -173,7 +178,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
           tags: |
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v') }}
             type=sha,prefix=dev-sha-,format=short,enable=${{ github.ref == 'refs/heads/dev' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -228,8 +233,14 @@ jobs:
       #   STAGING_REDEPLOY_URL    — full URL incl. /api/v1/admin/redeploy
       #   STAGING_REDEPLOY_TOKEN  — bearer minted on the staging stash
       #                             from an operator email account
+      # Staging gets pinged on BOTH dev pushes AND release tag
+      # pushes.  On dev pushes the new :dev image carries the
+      # pending-preview overlay; on tag pushes it carries the
+      # clean release content (we re-tag the release image as
+      # :dev above).  Either way, staging shows the right thing
+      # within seconds of the push completing.
       - name: Trigger staging redeploy
-        if: github.ref == 'refs/heads/dev'
+        if: github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v')
         continue-on-error: true
         env:
           URL: ${{ secrets.STAGING_REDEPLOY_URL }}
