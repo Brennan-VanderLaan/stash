@@ -88,11 +88,49 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 so git history + tags are present.  The
+      # pending-changelog step below walks ``git log <last-tag>..HEAD``
+      # — a shallow checkout would have neither tags nor enough
+      # commits for the walk to be meaningful.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Read version from release-please manifest
         id: version
         run: echo "version=$(jq -r '."."' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
+
+      # ── Pending-release preview (dev pushes only) ─────────────────
+      # Walks conventional-commit history from the most recent
+      # vX.Y.Z tag to HEAD, predicts the next semver bump, and
+      # writes a markdown block.  Prepends that block to
+      # CHANGELOG.md *inside the build context* so the resulting
+      # :dev image surfaces "if you released right now, this is
+      # what would ship" on /admin/maintenance.
+      #
+      # The predicted version overrides the manifest version for
+      # the VERSION build-arg, so staging displays e.g.
+      # ``1.49.0-dev.b0220ad`` instead of the released ``1.48.0``.
+      #
+      # Tag-triggered builds skip this entire step.  Those ship
+      # the canonical release-please CHANGELOG.md + manifest
+      # version unchanged.
+      - name: Compute pending-release preview
+        if: github.ref == 'refs/heads/dev'
+        id: pending
+        run: |
+          python3 tools/pending_changelog.py > /tmp/pending.json
+          echo "version=$(jq -r .version /tmp/pending.json)" >> "$GITHUB_OUTPUT"
+          jq -r .markdown /tmp/pending.json > /tmp/pending.md
+          # Prepend the pending section to CHANGELOG.md.  The build
+          # context picks up the modified file via the COPY in the
+          # Dockerfile, so the running container reads it on boot
+          # like any other release.
+          cat /tmp/pending.md CHANGELOG.md > /tmp/CHANGELOG.combined
+          mv /tmp/CHANGELOG.combined CHANGELOG.md
+          echo "::group::Pending changelog preview"
+          cat /tmp/pending.md
+          echo "::endgroup::"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -144,8 +182,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Dev pushes pass the predicted "next release" version
+          # (``1.49.0-dev.<sha>``).  Tag pushes fall through to the
+          # release-please manifest version (``1.49.0``).  The
+          # ``steps.pending.outputs.version`` expression evaluates
+          # to empty string when the pending step was skipped
+          # (non-dev refs), so the ``||`` picks the manifest
+          # value as the fallback.
           build-args: |
-            VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.pending.outputs.version || steps.version.outputs.version }}
             GIT_SHA=${{ github.sha }}
           # Layered cache: GHA cache (fast, free, 10 GB LRU) +
           # GHCR registry cache (persistent, no eviction).
