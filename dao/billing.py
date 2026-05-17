@@ -127,7 +127,13 @@ def _resolve_price_id(stripe_module, configured: str) -> str:
             f"account as STRIPE_SECRET_KEY (live vs test mode is "
             f"a common mismatch).",
         ) from exc
-    default_price = product.get("default_price")
+    # Stripe's ``StripeObject`` is dict-like but doesn't expose
+    # ``.get()`` — that attribute access goes through __getattr__
+    # which raises ``AttributeError: get`` because there's no
+    # ``get`` key in the response.  Use ``getattr`` with a default
+    # so a product without ``default_price`` falls through to the
+    # clearer error below instead of crashing the request.
+    default_price = getattr(product, "default_price", None)
     if not default_price:
         raise BillingNotConfiguredError(
             f"STRIPE_PRICE_ID_PRO is set to product '{configured}' "
@@ -138,13 +144,14 @@ def _resolve_price_id(stripe_module, configured: str) -> str:
             f"set one of its prices as the default.",
         )
     # ``default_price`` is normally a string id, but with ``expand``
-    # parameters it can be a nested object.  Handle both shapes
-    # rather than assume.
-    resolved = (
-        default_price
-        if isinstance(default_price, str)
-        else default_price.get("id")
-    )
+    # parameters it can be a nested object (StripeObject or dict).
+    # Handle every shape rather than assume.
+    if isinstance(default_price, str):
+        resolved = default_price
+    else:
+        resolved = getattr(default_price, "id", None)
+        if resolved is None and isinstance(default_price, dict):
+            resolved = default_price.get("id")
     if not resolved or not str(resolved).startswith("price_"):
         raise BillingNotConfiguredError(
             f"Product '{configured}' has a default_price of "

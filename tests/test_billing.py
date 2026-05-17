@@ -83,9 +83,28 @@ def _make_fake_stripe_module():
 
     # Used by the prod_→price_ resolution flow when an operator
     # accidentally pastes a product id in ``STRIPE_PRICE_ID_PRO``.
-    # ``fake.products`` is a dict the test seeds before triggering
-    # checkout.
+    # ``fake.products`` is a dict the test seeds with plain dicts;
+    # the fake ``Product.retrieve`` wraps them in a SimpleNamespace
+    # so the DAO sees the same getattr-style API the real Stripe
+    # SDK exposes (real ``StripeObject`` does NOT support ``.get()``
+    # — that's the bug that re-broke checkout in prod after the
+    # first prod_→price_ fix landed).
     fake.products = {}
+
+    class _FakeStripeObject:
+        """Mirror the bits of ``stripe.StripeObject`` we touch:
+        attribute access via ``getattr`` returns the field, every
+        unknown attribute raises ``AttributeError`` (specifically,
+        ``.get`` does NOT silently return a method — that's the
+        prod regression we're pinning)."""
+        def __init__(self, data):
+            for k, v in data.items():
+                # Nested objects (default_price as an expanded
+                # Price object) also get wrapped so attribute
+                # access keeps working.
+                if isinstance(v, dict) and "id" in v:
+                    v = _FakeStripeObject(v)
+                object.__setattr__(self, k, v)
 
     class Product:
         @staticmethod
@@ -93,7 +112,7 @@ def _make_fake_stripe_module():
             fake.calls.append(("Product.retrieve", product_id))
             if product_id not in fake.products:
                 raise RuntimeError(f"No such product: {product_id}")
-            return fake.products[product_id]
+            return _FakeStripeObject(fake.products[product_id])
     fake.Product = Product
 
     return fake
