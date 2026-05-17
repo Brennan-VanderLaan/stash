@@ -242,6 +242,29 @@ def stars_for_actor(actor_email: str) -> int:
     return row["n"] if row else 0
 
 
+def shipped_for_actor(actor_email: str, *, limit: int = 200) -> list[dict]:
+    """Every shipped (``status='done'``) feedback row the actor has
+    ever submitted, oldest first.  Powers /leaderboard's star-rain
+    on-load animation (feedback #40: "rain the number of stars you
+    have so far... with small text with when it happened").  Oldest-
+    first ordering matches the chronological "you've been doing this
+    since X" reading the animation gives the user."""
+    if not actor_email:
+        return []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, body, resolved_at "
+            "FROM feedback "
+            "WHERE status = 'done' "
+            "  AND actor_email = ? "
+            "  AND resolved_at IS NOT NULL "
+            "ORDER BY resolved_at ASC, id ASC "
+            "LIMIT ?",
+            (actor_email, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_for_actor(actor_email: str, *, limit: int = 50) -> list[dict]:
     """Every feedback row the actor has ever submitted, newest first.
     Used by /usage to surface "here's what you've sent in + where

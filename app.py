@@ -5812,6 +5812,18 @@ def leaderboard_page(request: Request):
         else None
     )
     you_excluded = (actor.email or "").lower() in _LEADERBOARD_IGNORE_EMAILS
+    # Star-rain payload (feedback #40).  One entry per shipped
+    # contribution; the template ships it as JSON to a small inline
+    # spawner that drops each star down the viewport with a hover-
+    # readable date.  Bodies trimmed to keep the JSON blob small —
+    # the user only needs a one-line "what was this" jog.
+    rain_stars = [
+        {
+            "when": row["resolved_at"],
+            "what": (row["body"] or "")[:80],
+        }
+        for row in dao_feedback.shipped_for_actor(actor.email or "")
+    ]
     return templates.TemplateResponse(
         request, "leaderboard.html",
         {
@@ -5826,6 +5838,8 @@ def leaderboard_page(request: Request):
             "you_excluded": you_excluded,
             # Per-tier celebration copy (feedback #36).
             "your_tier": _star_tier(your_stars),
+            # Star-rain payload (feedback #40).
+            "rain_stars": rain_stars,
         },
     )
 

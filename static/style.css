@@ -267,11 +267,17 @@ header h1 a { color: var(--accent); text-decoration: none; }
    tenant's avatar + name sit in the trigger; clicking opens a
    menu listing all memberships with role badges.  Scoped tight
    to the header so it never bleeds into in-page <details>. */
-.tenant-switcher {
+/* === Account menu (top-right) ================================
+   Always-visible dropdown for signed-in users.  Wraps the
+   per-tenant switcher (when applicable) + a Sign-out link.  The
+   inner ``.tenant-switcher-item`` styles below are still in use
+   inside the panel — selectors kept stable for the existing
+   tenant-switcher tests. */
+.account-menu {
   margin-left: auto;
   position: relative;
 }
-.tenant-switcher > summary {
+.account-menu > summary {
   list-style: none;
   cursor: pointer;
   display: inline-flex;
@@ -284,11 +290,11 @@ header h1 a { color: var(--accent); text-decoration: none; }
   font-size: 0.85rem;
   user-select: none;
 }
-.tenant-switcher > summary::-webkit-details-marker { display: none; }
-.tenant-switcher > summary:hover {
+.account-menu > summary::-webkit-details-marker { display: none; }
+.account-menu > summary:hover {
   background: var(--hover-strong);
 }
-.tenant-switcher-avatar {
+.account-menu-avatar {
   width: 1.5rem;
   height: 1.5rem;
   border-radius: 50%;
@@ -300,18 +306,18 @@ header h1 a { color: var(--accent); text-decoration: none; }
   align-items: center;
   justify-content: center;
 }
-.tenant-switcher-name {
+.account-menu-name {
   max-width: 10rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tenant-switcher-chevron { opacity: 0.6; font-size: 0.7rem; }
-.tenant-switcher-menu {
+.account-menu-chevron { opacity: 0.6; font-size: 0.7rem; }
+.account-menu-panel {
   position: absolute;
   right: 0;
   top: calc(100% + 0.3rem);
-  min-width: 14rem;
+  min-width: 15rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 0.4rem;
@@ -321,6 +327,46 @@ header h1 a { color: var(--accent); text-decoration: none; }
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+}
+.account-menu-header {
+  padding: 0.5rem 0.6rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
+}
+.account-menu-header-email {
+  font-size: 0.85rem;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.account-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
+}
+.account-menu-section-label {
+  padding: 0.2rem 0.55rem 0.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+}
+.account-menu-signout {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-radius: 0.3rem;
+}
+.account-menu-signout:hover {
+  background: var(--hover);
+  color: var(--danger, #d97a7a);
 }
 .tenant-switcher-item { margin: 0; }
 .tenant-switcher-item button {
@@ -6368,6 +6414,58 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
   border-left: 3px solid var(--accent);
 }
 .leaderboard-fineprint p { margin: 0; }
+
+/* === Star rain on /leaderboard first load (feedback #40) ======
+   Each shipped contribution drops one star from above the
+   viewport, carrying a small date label.  Cleaned up via
+   ``animationend`` in the inline spawner.  ``pointer-events: none``
+   so the rain never blocks clicks on the real page underneath. */
+#leaderboard-rain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 60;
+}
+.leaderboard-rain-star {
+  position: absolute;
+  top: -3rem;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  transform: translateZ(0) scale(var(--rain-scale, 1));
+  will-change: transform, opacity;
+  animation-name: leaderboard-rain-fall;
+  animation-timing-function: cubic-bezier(0.35, 0.1, 0.55, 1);
+  animation-fill-mode: forwards;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+  user-select: none;
+}
+.leaderboard-rain-glyph {
+  font-size: 2rem;
+  line-height: 1;
+}
+.leaderboard-rain-date {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  white-space: nowrap;
+}
+@keyframes leaderboard-rain-fall {
+  0%   { transform: translateY(0)     scale(var(--rain-scale, 1)); opacity: 0; }
+  10%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateY(110vh) scale(var(--rain-scale, 1)); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Respect the accessibility setting.  Skip the shower entirely
+     rather than running it slowly — the user's intent is "no
+     decorative motion", which this animation definitively is. */
+  .leaderboard-rain-star { display: none; }
+}
 
 /* "Signed in as <email>" stat-row cell — long Gmail-style
    addresses overflow the chip on narrow phones if the cell

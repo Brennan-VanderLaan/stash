@@ -2051,10 +2051,12 @@ See per-phase `[shipped]` / `[partial]` markers below.
       and the operator-approved recovery flow that brings an
       archived tenant back.
 
-15. **[shipped]** **Tenant switcher (top-right).** Persistent
-    avatar/initials menu in the global header: list of tenants the
-    user is a member of, "Shared with you" entry when applicable.
-    Active tenant marked with a ✓.
+15. **[shipped]** **Account menu (top-right) with tenant switcher
+    + sign-out.** Persistent avatar/initials dropdown in the
+    global header.  Always renders for any signed-in user (so the
+    Sign-out link is reachable even on a single-tenant account);
+    the inner Switch-tenant section only renders when the user has
+    >1 membership or any shares (no clutter for the common case).
     * Cookie ``stash_active_tenant`` is the source of truth — read
       in the actor middleware and only honoured when its value
       matches an entry in ``actor.memberships``, so a stale or
@@ -2064,13 +2066,15 @@ See per-phase `[shipped]` / `[partial]` markers below.
       the cookie (HttpOnly, SameSite=Lax, Secure=auto over HTTPS),
       then redirects to a validated ``next`` (open-redirect guard
       rejects ``//`` and off-scheme paths).
-    * CSS-only ``<details>``-based dropdown — works without JS;
-      only renders when the user has >1 membership or any shares,
-      so single-tenant users get no clutter.
-    * Tests cover: dropdown appears for multi-tenant + hides for
-      single-tenant, switch route sets cookie + redirects, 404 on
-      non-member tenant, 400 on non-int, invalid cookie falls back
-      silently, ``next=//evil`` blocked.
+    * CSS-only ``<details>``-based dropdown — works without JS.
+      Account menu panel carries (a) the signed-in email header,
+      (b) the tenant-switcher section gated on multi-membership /
+      shares, (c) a "Sign out" link to ``/oauth2/sign_out?rd=/``
+      (handled by oauth2-proxy; stash never sees the request).
+    * Tests cover: switcher section appears for multi-tenant +
+      hides for single-tenant, switch route sets cookie +
+      redirects, 404 on non-member tenant, 400 on non-int,
+      invalid cookie falls back silently, ``next=//evil`` blocked.
 
 16. **[shipped]** **Logging pass.** Layered `LoggerAdapter`s,
     request-id middleware, structured JSON output.  Backfill

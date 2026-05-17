@@ -8,6 +8,84 @@
    front-and-center because the goal is "make you feel super
    special" — not a sortable table. #}
 
+{# Star-rain on first load (feedback #40).  One falling star per
+   shipped contribution, each labelled with when it shipped + a
+   short snippet of what it was about.  Stars cleanup themselves
+   via ``animationend`` so they don't pile up in the DOM.  No-JS
+   fallback: the rest of the page still renders fully — this is
+   pure celebration on top. #}
+{% if rain_stars %}
+<div id="leaderboard-rain" aria-hidden="true"></div>
+<script id="leaderboard-rain-data" type="application/json">
+  {{ rain_stars | tojson }}
+</script>
+<script>
+(function () {
+  var dataEl = document.getElementById('leaderboard-rain-data');
+  var container = document.getElementById('leaderboard-rain');
+  if (!dataEl || !container) return;
+  var stars;
+  try { stars = JSON.parse(dataEl.textContent || '[]'); }
+  catch (e) { return; }
+  if (!Array.isArray(stars) || stars.length === 0) return;
+
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    // Server stores 'YYYY-MM-DD HH:MM:SS' (UTC, no tz suffix).  We
+    // want a short locale-friendly date for the falling label.
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (!m) return iso;
+    try {
+      var d = new Date(iso.replace(' ', 'T') + 'Z');
+      return d.toLocaleDateString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+      });
+    } catch (e) { return m[1] + '-' + m[2] + '-' + m[3]; }
+  }
+
+  // Spread the spawn across a fixed window (~9 s) regardless of
+  // count.  A 5-star contributor sees a leisurely shower; a
+  // 40-star contributor sees a downpour; nobody waits 30+ seconds
+  // for the last one.  Below 5 stars we slow the gap floor to
+  // 600 ms so a brand-new contributor's single star still reads
+  // as a deliberate moment.
+  var SPAWN_WINDOW_MS = 9000;
+  var gap = Math.max(
+    150,
+    stars.length <= 5 ? 600 : Math.floor(SPAWN_WINDOW_MS / stars.length)
+  );
+
+  stars.forEach(function (star, i) {
+    setTimeout(function () {
+      var node = document.createElement('span');
+      node.className = 'leaderboard-rain-star';
+      // Horizontal slot: random but biased away from the edges so
+      // the small date label has room to breathe at the bottom.
+      var leftPct = 6 + Math.random() * 88;
+      node.style.left = leftPct.toFixed(1) + '%';
+      // Per-star fall duration in the 4.5–7.5 s band — uneven
+      // speeds keep the shower from looking metronomic.
+      var dur = (4.5 + Math.random() * 3).toFixed(2);
+      node.style.animationDuration = dur + 's';
+      // Slight emoji-size variance so the rain has depth.
+      var scale = (0.85 + Math.random() * 0.55).toFixed(2);
+      node.style.setProperty('--rain-scale', scale);
+      node.innerHTML =
+        '<span class="leaderboard-rain-glyph" aria-hidden="true">⭐</span>'
+        + '<small class="leaderboard-rain-date">' + fmtWhen(star.when) + '</small>';
+      if (star.what) {
+        node.title = star.what + ' — ' + fmtWhen(star.when);
+      }
+      container.appendChild(node);
+      node.addEventListener('animationend', function () {
+        node.remove();
+      });
+    }, i * gap);
+  });
+})();
+</script>
+{% endif %}
+
 <section class="leaderboard-hero">
   <h1 class="leaderboard-hero-title">
     <span aria-hidden="true">🌟</span>

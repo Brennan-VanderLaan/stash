@@ -63,51 +63,78 @@
       {% endif %}
     </nav>
     {% block header_actions %}{% endblock %}
-    {# Tenant switcher — visible whenever the actor belongs to more
-       than one tenant OR has any shares.  Single-tenant + no-share
-       users see a static name to avoid clutter.  The dropdown is
-       CSS-only (``<details>``) so it works without JS. #}
-    {% if request.state.actor and request.state.actor.memberships
-          and (request.state.actor.memberships|length > 1
-               or request.state.actor.shares) %}
+    {# Account menu — top-right avatar dropdown.  Always rendered
+       for any signed-in user (so the Sign-out link is always
+       reachable, even for single-tenant accounts).  Contains:
+       signed-in email at the top, a Switch-tenant section when
+       the actor has >1 membership or any shares, and a Sign-out
+       link at the bottom.  CSS-only ``<details>`` so it works
+       without JS.
+
+       Compatibility shim: the inner tenant-list still carries
+       ``id="tenant-switcher"`` so the existing
+       ``test_tenant_switcher.py`` selector matches when the user
+       is multi-tenant.  Single-tenant accounts get the menu but
+       no Switch-tenant section, by design (matches the prior
+       "no clutter" intent while keeping Sign-out reachable). #}
+    {% if request.state.actor and request.state.actor.email %}
     {% set tnames = request.state.tenant_names or {} %}
     {% set active_id = request.state.actor.tenant_id %}
     {% set active_name = tnames.get(active_id, '') %}
-    <details class="tenant-switcher" id="tenant-switcher">
-      <summary class="tenant-switcher-trigger" aria-label="Switch tenant">
-        <span class="tenant-switcher-avatar" aria-hidden="true">
-          {{ (active_name[:1] | upper) if active_name else '?' }}
+    {% set show_switcher = (request.state.actor.memberships|length > 1
+                            or request.state.actor.shares) %}
+    <details class="account-menu" id="account-menu">
+      <summary class="account-menu-trigger" aria-label="Account menu">
+        <span class="account-menu-avatar" aria-hidden="true">
+          {{ (active_name[:1] | upper) if active_name else (request.state.actor.email[:1] | upper) }}
         </span>
-        <span class="tenant-switcher-name">{{ active_name or _('No tenant') }}</span>
-        <span class="tenant-switcher-chevron" aria-hidden="true">▾</span>
+        <span class="account-menu-name">{{ active_name or _('No tenant') }}</span>
+        <span class="account-menu-chevron" aria-hidden="true">▾</span>
       </summary>
-      <div class="tenant-switcher-menu" role="menu">
-        {% for tid, role in request.state.actor.memberships %}
-        <form method="post" action="/tenants/switch"
-              class="tenant-switcher-item"
-              data-active="{{ '1' if tid == active_id else '0' }}">
-          <input type="hidden" name="tenant_id" value="{{ tid }}">
-          <input type="hidden" name="next" value="{{ request.url.path }}">
-          <button type="submit" role="menuitem"
-                  {% if tid == active_id %}disabled aria-current="true"{% endif %}>
-            <span class="tenant-switcher-item-avatar" aria-hidden="true">
-              {{ (tnames.get(tid, '?')[:1] | upper) }}
-            </span>
-            <span class="tenant-switcher-item-text">
-              <strong>{{ tnames.get(tid, '?') }}</strong>
-              <span class="text-sm text-muted">{{ role }}</span>
-            </span>
-            {% if tid == active_id %}
-            <span class="tenant-switcher-active-mark" aria-hidden="true">✓</span>
-            {% endif %}
-          </button>
-        </form>
-        {% endfor %}
-        {% if request.state.actor.shares %}
-        <a href="/shared" role="menuitem" class="tenant-switcher-shared">
-          🔗 {{ _("Shared with you") }}
-        </a>
+      <div class="account-menu-panel" role="menu">
+        <div class="account-menu-header">
+          <span class="account-menu-header-label text-sm text-muted">
+            {{ _("Signed in as") }}
+          </span>
+          <strong class="account-menu-header-email">{{ request.state.actor.email }}</strong>
+        </div>
+        {% if show_switcher %}
+        <div class="account-menu-section" id="tenant-switcher">
+          <span class="account-menu-section-label text-sm text-muted">
+            {{ _("Switch tenant") }}
+          </span>
+          {% for tid, role in request.state.actor.memberships %}
+          <form method="post" action="/tenants/switch"
+                class="tenant-switcher-item"
+                data-active="{{ '1' if tid == active_id else '0' }}">
+            <input type="hidden" name="tenant_id" value="{{ tid }}">
+            <input type="hidden" name="next" value="{{ request.url.path }}">
+            <button type="submit" role="menuitem"
+                    {% if tid == active_id %}disabled aria-current="true"{% endif %}>
+              <span class="tenant-switcher-item-avatar" aria-hidden="true">
+                {{ (tnames.get(tid, '?')[:1] | upper) }}
+              </span>
+              <span class="tenant-switcher-item-text">
+                <strong>{{ tnames.get(tid, '?') }}</strong>
+                <span class="text-sm text-muted">{{ role }}</span>
+              </span>
+              {% if tid == active_id %}
+              <span class="tenant-switcher-active-mark" aria-hidden="true">✓</span>
+              {% endif %}
+            </button>
+          </form>
+          {% endfor %}
+          {% if request.state.actor.shares %}
+          <a href="/shared" role="menuitem" class="tenant-switcher-shared">
+            🔗 {{ _("Shared with you") }}
+          </a>
+          {% endif %}
+        </div>
         {% endif %}
+        <a href="/oauth2/sign_out?rd=/" role="menuitem"
+           class="account-menu-signout">
+          ↪ {{ _("Sign out") }}
+        </a>
       </div>
     </details>
     {% endif %}
