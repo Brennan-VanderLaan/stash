@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.1...v1.45.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **billing:** Stripe StripeObject doesn't support .get() — use getattr ([d38578e](https://github.com/Brennan-VanderLaan/stash/commit/d38578ece7080832f60bd9b7c5ad68e538bab4ca))
+
 ## [1.45.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.45.0...v1.45.1) (2026-05-17)
 
 
