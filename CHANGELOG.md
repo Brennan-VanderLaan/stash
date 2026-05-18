@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.52.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.2...v1.52.0) (2026-05-18)
+
+
+### Features
+
+* **admin:** billing-owner viewer + reassign button on /admin ([384dc95](https://github.com/Brennan-VanderLaan/stash/commit/384dc9531a702fa6120f615d0a8d86d1788fec03))
+* **boxes:** two-step room picker — light, polished, location → room ([96bc9be](https://github.com/Brennan-VanderLaan/stash/commit/96bc9be3cc40f88dc05ad3e6657434872d8816e7))
+* **home:** "Get started" checklist for first-run users ([512b249](https://github.com/Brennan-VanderLaan/stash/commit/512b24958de5469ce5223a991f798e882a7db419))
+* **marketing:** first-party page analytics + consent banner + funnel widget ([5184c87](https://github.com/Brennan-VanderLaan/stash/commit/5184c87857e653eb21daa7311311fc76a3ebe527))
+* **public:** "Get started" CTAs + auth-provider transparency ([f947f1d](https://github.com/Brennan-VanderLaan/stash/commit/f947f1db657c77d6e50bb72915cb638eef5e4428))
+
+
+### Bug Fixes
+
+* **public:** auth-options footnote was rendering as a callout box ([7b721e1](https://github.com/Brennan-VanderLaan/stash/commit/7b721e16a740264724c3e0262ff48af252406a86))
+* **tours:** spotlight never rendered — hidden attribute stuck on element ([7c149a0](https://github.com/Brennan-VanderLaan/stash/commit/7c149a0c60d644e1cfa747a42be91f01690ed8d4))
+
 ## [1.51.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.1...v1.51.2) (2026-05-18)
 
 
