@@ -1673,6 +1673,37 @@ def migrate_db():
         _add_column_if_missing(
             conn, "tenants", "subscription_current_period_end", "TEXT",
         )
+        # Billing owner — the single email that's allowed to see
+        # PII-laden Stripe data (customer_id, subscription_id) and
+        # open the Stripe Customer Portal.  Feedback #72: any
+        # maintainer used to be able to read the customer / sub
+        # identifiers from /usage and click through to the portal,
+        # which exposes invoices, payment methods, billing address.
+        # Now restricted to one email per tenant.
+        #
+        # Stamped on first Stripe-Customer creation in
+        # ``_ensure_stripe_customer`` (whoever clicks Upgrade
+        # becomes the owner).  Backfill below handles pre-existing
+        # Pro tenants: oldest maintainer by joined_at wins.
+        _add_column_if_missing(conn, "tenants", "billing_owner_email", "TEXT")
+        # Backfill: for tenants with an existing Stripe customer but
+        # no billing_owner_email, pick the oldest maintainer.  Safe
+        # heuristic — the bootstrap member is typically the one who
+        # set up the deployment + initiated the first subscription.
+        # An operator can re-assign via /admin if the heuristic
+        # picked the wrong person.
+        conn.execute(
+            "UPDATE tenants "
+            "SET billing_owner_email = ("
+            "    SELECT email FROM tenant_members "
+            "    WHERE tenant_id = tenants.id "
+            "      AND role = 'maintainer' "
+            "    ORDER BY joined_at ASC "
+            "    LIMIT 1"
+            ") "
+            "WHERE stripe_customer_id IS NOT NULL "
+            "  AND billing_owner_email IS NULL",
+        )
         # Audit session start timestamp.  The Tinder-style swipe UI
         # at /boxes/{id}/audit lets a user pause + resume — we know
         # an item has been audited in the current session if its
@@ -5833,7 +5864,7 @@ def _render_usage_page(
     tour_seen = dao_tours.state_for_actor(tour_email)
     billing_enabled = dao_billing.is_configured()
     subscription = (
-        dao_billing.subscription_for_tenant(actor.tenant_id)
+        dao_billing.subscription_for_tenant(actor)
         if billing_enabled else None
     )
     pro_price_display = _pro_price_display()
@@ -6800,9 +6831,12 @@ def usage_upgrade(request: Request):
 
 @app.get("/usage/billing-portal")
 def usage_billing_portal(request: Request):
-    """Redirect to the Stripe Customer Portal so an existing
-    subscriber can manage / cancel without us building a portal
-    UI."""
+    """Redirect to the Stripe Customer Portal so the billing
+    owner can manage / cancel without us building a portal UI.
+
+    Billing-owner-only — see ``dao_billing.create_portal_session``
+    + feedback #72 for the why.  A non-owner maintainer gets 403
+    with a message telling them who to ask."""
     actor: Actor = request.state.actor
     if actor.tenant_id is None:
         raise HTTPException(403, "No active tenant")
@@ -6815,8 +6849,8 @@ def usage_billing_portal(request: Request):
         raise HTTPException(503, str(exc))
     except NotFoundError:
         raise HTTPException(404, "No Stripe customer yet — upgrade first.")
-    except ForbiddenError:
-        raise HTTPException(403)
+    except ForbiddenError as exc:
+        raise HTTPException(403, str(exc))
     return RedirectResponse(url, status_code=303)
 
 

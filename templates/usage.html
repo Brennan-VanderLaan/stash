@@ -380,15 +380,42 @@
     {{ _("Pro subscription") }}
     <span class="data-choice-badge">{{ _("active") }}</span>
   </div>
+  {% if subscription and subscription.is_billing_owner %}
+  {# Billing owner sees the full management UI — portal link
+     opens invoices, payment methods, billing address. #}
   <p class="text-sm text-muted">
     {{ _("You're on the Pro plan.  Manage your subscription, payment method, or invoices via the Stripe customer portal.") }}
-    {% if subscription and subscription.subscription_current_period_end %}
+    {% if subscription.subscription_current_period_end %}
       {{ _("Renews") }} {{ subscription.subscription_current_period_end[:10] }}.
     {% endif %}
   </p>
   <a href="/usage/billing-portal" class="btn btn-secondary btn-block">
     {{ _("Manage subscription") }} →
   </a>
+  {% else %}
+  {# Non-billing-owner maintainers see the plan state but not the
+     PII (no customer_id / subscription_id / portal link).
+     Feedback #72: the Stripe Customer Portal exposes invoices
+     + payment methods that shouldn't be readable by every
+     tenant maintainer. #}
+  <p class="text-sm text-muted">
+    {{ _("This tenant is on the Pro plan.") }}
+    {% if subscription and subscription.subscription_current_period_end %}
+      {{ _("Renews") }} {{ subscription.subscription_current_period_end[:10] }}.
+    {% endif %}
+  </p>
+  {% if subscription and subscription.billing_owner_email %}
+  <p class="text-sm text-muted">
+    {{ _("Billing is managed by") }}
+    <strong>{{ subscription.billing_owner_email }}</strong>.
+    {{ _("Ask them to make changes to the subscription or payment method.") }}
+  </p>
+  {% else %}
+  <p class="text-sm text-muted">
+    {{ _("No billing owner is set for this tenant.  Ask an operator to assign one.") }}
+  </p>
+  {% endif %}
+  {% endif %}
 </div>
 {% else %}
 <div class="card maintenance-card billing-card billing-card-upgrade">

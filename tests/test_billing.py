@@ -516,3 +516,113 @@ def test_audit_log_records_upgrade(client, billing):
         ).fetchall()
     assert len(rows) == 1
     assert rows[0]["target_id"] == client.test_tenant_id
+
+
+# ── Billing-owner PII gate (#72) ───────────────────────────────────
+
+
+def test_first_upgrade_stamps_billing_owner_email(client, billing):
+    """The maintainer who clicks Upgrade becomes the billing owner
+    automatically — feedback #72."""
+    client.post("/usage/upgrade")
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT billing_owner_email FROM tenants WHERE id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["billing_owner_email"] == client.test_email
+
+
+def test_subscription_redacts_pii_for_non_billing_owner(client, billing):
+    """A maintainer who isn't the billing owner sees plan + period
+    end + owner email, but NOT stripe_customer_id /
+    stripe_subscription_id (the PII fields)."""
+    # First, fire the upgrade as test_email so they become owner.
+    client.post("/usage/upgrade")
+    # Flip the tenant to Pro + stamp subscription/customer ids so
+    # subscription_for_tenant returns the full row.
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE tenants SET plan = 'pro', "
+            "    stripe_customer_id = 'cus_xyz', "
+            "    stripe_subscription_id = 'sub_xyz', "
+            "    subscription_status = 'active' "
+            "WHERE id = ?",
+            (client.test_tenant_id,),
+        )
+        conn.commit()
+    # Make a second member who is NOT the billing owner.
+    other_email = "other-maintainer@example.com"
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members (tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (client.test_tenant_id, other_email),
+        )
+        conn.commit()
+    from dao import Actor, billing as dao_billing
+    other_actor = Actor(
+        email=other_email, tenant_id=client.test_tenant_id,
+        role="maintainer", is_operator=False,
+        memberships=((client.test_tenant_id, "maintainer"),),
+    )
+    sub = dao_billing.subscription_for_tenant(other_actor)
+    assert sub["is_billing_owner"] is False
+    assert sub["billing_owner_email"] == client.test_email
+    assert "stripe_customer_id" not in sub
+    assert "stripe_subscription_id" not in sub
+    # Non-PII fields still visible.
+    assert sub["plan"] == "pro"
+    assert sub["subscription_status"] == "active"
+
+
+def test_subscription_full_view_for_billing_owner(client, billing):
+    """The billing owner DOES see the customer + subscription
+    identifiers — they're the one who can act on them in the
+    Stripe portal."""
+    client.post("/usage/upgrade")
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE tenants SET plan = 'pro', "
+            "    stripe_customer_id = 'cus_xyz', "
+            "    stripe_subscription_id = 'sub_xyz' "
+            "WHERE id = ?",
+            (client.test_tenant_id,),
+        )
+        conn.commit()
+    from dao import Actor, billing as dao_billing
+    owner_actor = Actor(
+        email=client.test_email, tenant_id=client.test_tenant_id,
+        role="maintainer", is_operator=False,
+        memberships=((client.test_tenant_id, "maintainer"),),
+    )
+    sub = dao_billing.subscription_for_tenant(owner_actor)
+    assert sub["is_billing_owner"] is True
+    assert sub["stripe_customer_id"] == "cus_xyz"
+    assert sub["stripe_subscription_id"] == "sub_xyz"
+
+
+def test_billing_portal_403s_non_billing_owner(client, billing):
+    """A non-billing-owner maintainer trying to open the Stripe
+    Customer Portal gets 403 — the portal exposes invoices +
+    payment methods that are owner-only."""
+    client.post("/usage/upgrade")
+    # Pretend the owner is someone else.
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE tenants SET billing_owner_email = ? WHERE id = ?",
+            ("someone-else@example.com", client.test_tenant_id),
+        )
+        conn.commit()
+    r = client.get("/usage/billing-portal", follow_redirects=False)
+    assert r.status_code == 403
+    assert "billing owner" in r.text.lower()
+
+
+def test_billing_portal_owner_redirects_to_stripe(client, billing):
+    """The billing owner gets the normal 303 → Stripe portal URL."""
+    client.post("/usage/upgrade")
+    # test_email is the billing owner from the upgrade above.
+    r = client.get("/usage/billing-portal", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("https://billing.stripe.com/")

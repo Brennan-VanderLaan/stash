@@ -27,7 +27,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import obs
-from dao._base import Actor, NotFoundError, db, require_role
+from dao._base import (
+    Actor, ForbiddenError, NotFoundError, db, require_role,
+)
 
 
 _log = obs.get_logger("dao.billing")
@@ -228,10 +230,20 @@ def create_checkout_session(
 def create_portal_session(actor: Actor, *, return_url: str) -> str:
     """Return the Customer Portal URL so the user can manage their
     subscription (cancel, update card, see invoices) without us
-    building any of that UI."""
+    building any of that UI.
+
+    Billing-owner-only (feedback #72).  The portal exposes
+    invoices, payment methods, and billing addresses — PII that
+    shouldn't be visible to every tenant maintainer.  A
+    non-owner maintainer who tries gets ``ForbiddenError`` which
+    the route translates to 403."""
     require_role(actor, "maintainer")
     if actor.tenant_id is None:
         raise NotFoundError("no active tenant")
+    if not is_billing_owner(actor):
+        raise ForbiddenError(
+            "Only the billing owner can open the Stripe Customer Portal.",
+        )
     stripe, _ = _stripe()
     with db() as conn:
         row = conn.execute(
@@ -252,7 +264,11 @@ def create_portal_session(actor: Actor, *, return_url: str) -> str:
 def _ensure_stripe_customer(tenant_id: int, actor_email: str) -> str:
     """Find or create the Stripe Customer mapped to the tenant.
     Stamps the id back onto ``tenants.stripe_customer_id`` so the
-    next upgrade attempt reuses it.
+    next upgrade attempt reuses it.  Also stamps
+    ``billing_owner_email`` (the PII-access gate from feedback
+    #72) on first creation when it's still NULL — the maintainer
+    who clicks Upgrade becomes the billing owner.  Subsequent
+    upgrades don't change ownership.
 
     Stripe's idempotency is per-key, not per-customer — we don't
     pass an idempotency key here because the lookup-before-create
@@ -260,12 +276,25 @@ def _ensure_stripe_customer(tenant_id: int, actor_email: str) -> str:
     stripe, _ = _stripe()
     with db() as conn:
         row = conn.execute(
-            "SELECT name, stripe_customer_id FROM tenants WHERE id = ?",
+            "SELECT name, stripe_customer_id, billing_owner_email "
+            "FROM tenants WHERE id = ?",
             (tenant_id,),
         ).fetchone()
     if row is None:
         raise NotFoundError(f"tenant {tenant_id}")
     if row["stripe_customer_id"]:
+        # Belt-and-suspenders: backfill billing_owner_email if a
+        # legacy row had a customer but no owner (e.g. migration
+        # heuristic couldn't pick one).  Only on this specific
+        # actor's click — they're proving intent to manage billing.
+        if not row["billing_owner_email"] and actor_email:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE tenants SET billing_owner_email = ? "
+                    "WHERE id = ? AND billing_owner_email IS NULL",
+                    (actor_email, tenant_id),
+                )
+                conn.commit()
         return row["stripe_customer_id"]
     customer = stripe.Customer.create(
         email=actor_email,
@@ -274,15 +303,35 @@ def _ensure_stripe_customer(tenant_id: int, actor_email: str) -> str:
     )
     with db() as conn:
         conn.execute(
-            "UPDATE tenants SET stripe_customer_id = ? WHERE id = ?",
-            (customer.id, tenant_id),
+            "UPDATE tenants SET stripe_customer_id = ?, "
+            "                   billing_owner_email = ? "
+            "WHERE id = ?",
+            (customer.id, actor_email, tenant_id),
         )
         conn.commit()
     _log.info(
-        "billing.customer_created tenant_id=%s customer_id=%s",
-        tenant_id, customer.id,
+        "billing.customer_created tenant_id=%s customer_id=%s "
+        "billing_owner=%s",
+        tenant_id, customer.id, actor_email,
     )
     return customer.id
+
+
+def is_billing_owner(actor: Actor) -> bool:
+    """Return True iff the actor's email matches the tenant's
+    billing_owner_email (case-insensitive).  Used to gate PII
+    access on /usage's subscription card and the Stripe Customer
+    Portal redirect."""
+    if not actor.email or actor.tenant_id is None:
+        return False
+    with db() as conn:
+        row = conn.execute(
+            "SELECT billing_owner_email FROM tenants WHERE id = ?",
+            (actor.tenant_id,),
+        ).fetchone()
+    if row is None or not row["billing_owner_email"]:
+        return False
+    return actor.email.lower() == row["billing_owner_email"].lower()
 
 
 # ── Webhook handler ────────────────────────────────────────────────
@@ -518,13 +567,27 @@ def _iso_from_ts(ts: int | None) -> str | None:
 # ── Read paths ─────────────────────────────────────────────────────
 
 
-def subscription_for_tenant(tenant_id: int) -> dict | None:
+def subscription_for_tenant(actor: Actor) -> dict | None:
     """Surface the subscription metadata for the /usage page.
-    Returns None when the tenant has no Stripe linkage at all."""
+    Returns None when the tenant has no Stripe linkage at all.
+
+    PII gate (feedback #72): ``stripe_customer_id`` and
+    ``stripe_subscription_id`` are only included for the
+    billing owner.  Other tenant maintainers see the plan + the
+    healthy/expired status + period end (non-PII) plus the
+    billing owner's email so they know who to ask.
+
+    Returns ``is_billing_owner`` so the template can switch
+    between the full card and the redacted "Subscription managed
+    by …" card without re-querying."""
+    tenant_id = actor.tenant_id
+    if tenant_id is None:
+        return None
     with db() as conn:
         row = conn.execute(
             "SELECT plan, stripe_customer_id, stripe_subscription_id, "
-            "       subscription_status, subscription_current_period_end "
+            "       subscription_status, subscription_current_period_end, "
+            "       billing_owner_email "
             "FROM tenants WHERE id = ?",
             (tenant_id,),
         ).fetchone()
@@ -532,4 +595,20 @@ def subscription_for_tenant(tenant_id: int) -> dict | None:
         return None
     if not row["stripe_customer_id"] and row["plan"] == "free":
         return None
-    return dict(row)
+    owner = row["billing_owner_email"]
+    is_owner = bool(
+        owner and actor.email and actor.email.lower() == owner.lower()
+    )
+    result = {
+        "plan": row["plan"],
+        "subscription_status": row["subscription_status"],
+        "subscription_current_period_end":
+            row["subscription_current_period_end"],
+        "billing_owner_email": owner,
+        "is_billing_owner": is_owner,
+    }
+    if is_owner:
+        # PII fields — only the owner gets to see these.
+        result["stripe_customer_id"] = row["stripe_customer_id"]
+        result["stripe_subscription_id"] = row["stripe_subscription_id"]
+    return result

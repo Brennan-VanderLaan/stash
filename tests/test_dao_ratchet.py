@@ -43,7 +43,14 @@ from pathlib import Path
 # text.  Lives in app.py because it's an AI-suggestion concern, not
 # a tenant-CRUD operation — there's no general "rooms.get by case-
 # insensitive name" use case elsewhere to justify a DAO helper.
-APP_CONN_EXECUTE_CEILING = 70  # +1 — room-name resolver in create-suggested-box
+# Bumped 70 → 71 on 2026-05-18 for the migrate_db backfill of
+# ``tenants.billing_owner_email`` (feedback #72).  Schema
+# migrations are an explicit legitimate reason per the docstring
+# above — this is a one-shot UPDATE that runs at boot to give
+# pre-existing Pro tenants a billing owner (oldest maintainer by
+# joined_at).  Pure migration code, lives in migrate_db, can't
+# meaningfully be DAO-ified.
+APP_CONN_EXECUTE_CEILING = 71  # +1 — billing_owner_email backfill in migrate_db
 
 
 def test_app_py_conn_execute_ratchet():
