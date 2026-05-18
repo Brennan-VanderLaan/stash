@@ -135,10 +135,19 @@
       e.preventDefault();
       try { dialog.close(); } catch (_) { dialog.removeAttribute('open'); }
     });
-  // Backdrop click → close (consistent with the other modals on
-  // this page).
+  // Backdrop click → close.  Coordinate check rather than
+  // ``e.target === dialog`` for the same robustness reason as
+  // the box-preview dialog further down (#69).
   dialog.addEventListener('click', function (e) {
-    if (e.target === dialog) {
+    if (!dialog.open) return;
+    var rect = dialog.getBoundingClientRect();
+    var inside = (
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    );
+    if (!inside) {
       try { dialog.close(); } catch (_) { dialog.removeAttribute('open'); }
     }
   });
@@ -437,8 +446,26 @@
     }
     // Backdrop click → close.  Mirrors the per-mode handler so
     // it works even if the per-mode block doesn't run.
+    //
+    // Uses a COORDINATE check rather than ``e.target === boxDialog``
+    // because event-target equality is fragile on mobile: tap events
+    // sometimes bubble from child elements before they reach the
+    // dialog, and propagation can be interrupted by absolutely-
+    // positioned children, transforms on ancestors, etc.  Comparing
+    // the click point against the dialog's bounding rect catches
+    // every "tap outside the dialog body" gesture regardless of
+    // which DOM node the browser reported as the target.  Feedback
+    // #69 — pop-up wouldn't close on mobile Chrome.
     boxDialog.addEventListener('click', (e) => {
-      if (e.target === boxDialog) {
+      if (!boxDialog.open) return;
+      const rect = boxDialog.getBoundingClientRect();
+      const inside = (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+      if (!inside) {
         try { boxDialog.close(); } catch (_) {
           boxDialog.removeAttribute('open');
         }
@@ -1272,7 +1299,19 @@
   }
 
   dialog.querySelector('[data-close-room]').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  // Coordinate-based backdrop close — see boxDialog handler at the
+  // module top for rationale (feedback #69).
+  dialog.addEventListener('click', (e) => {
+    if (!dialog.open) return;
+    const rect = dialog.getBoundingClientRect();
+    const inside = (
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    );
+    if (!inside) dialog.close();
+  });
 
   dialog.querySelector('[data-room-save]').addEventListener('click', async () => {
     const id = dialog.dataset.roomId;

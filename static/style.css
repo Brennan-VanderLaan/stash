@@ -4403,7 +4403,13 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 /* === Item detail dialog === */
 .item-dialog {
   width: min(560px, 95vw);
-  max-height: 90vh;
+  /* ``dvh`` (dynamic viewport height) follows the *visible* viewport
+     on mobile — when iOS Safari's URL bar is showing, ``vh`` reports
+     the bigger no-chrome viewport, which made the dialog overflow
+     past the URL bar and put the close × under the chrome where it
+     couldn't be tapped.  Feedback #69 (Nash, Android Mobile Chrome):
+     "Pops up with last room, won't let me close pop-up." */
+  max-height: 90dvh;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -4418,11 +4424,17 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 .item-dialog-close-form { margin: 0; }
 .item-dialog-close {
   position: absolute;
-  top: 0.5rem;
+  /* Add safe-area-inset-top so the × doesn't slip under iOS notches
+     or Android system bars.  On desktop ``env(safe-area-inset-top)``
+     resolves to 0, so this is a no-op there. */
+  top: calc(0.5rem + env(safe-area-inset-top, 0px));
   right: 0.5rem;
   z-index: 10;
-  width: 36px;
-  height: 36px;
+  /* 44×44 on mobile per Apple HIG / Android Material — the previous
+     36×36 was just under the recommended hit target and got missed
+     on a finger-tap. */
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4430,11 +4442,19 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 1.3rem;
+  font-size: 1.5rem;
   cursor: pointer;
   font-family: inherit;
 }
 .item-dialog-close:hover { background: rgba(0, 0, 0, 0.8); }
+@media (min-width: 640px) {
+  /* Desktop has precise pointers — give some real estate back. */
+  .item-dialog-close {
+    width: 36px;
+    height: 36px;
+    font-size: 1.3rem;
+  }
+}
 
 /* Search item modal — wider on desktop than the default item-dialog
    cap so the hero photo + actions don't feel cramped. */
@@ -6181,7 +6201,9 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
 #floorplan-box-dialog {
   width: min(1100px, 96vw);
   max-width: 96vw;
-  max-height: calc(94vh - var(--safe-bottom));
+  /* dvh + safe-bottom — see ``.item-dialog`` for the dvh rationale
+     (feedback #69). */
+  max-height: calc(94dvh - var(--safe-bottom));
   /* Drop the browser default <dialog> padding so the inner
      preview can fill the full dialog rect and host its own
      scroll.  Without this, "max-height: inherit" on the preview
