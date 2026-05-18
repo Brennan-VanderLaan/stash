@@ -8172,6 +8172,35 @@ def admin_set_tenant_plan(
     return RedirectResponse("/admin#tenants", status_code=303)
 
 
+@app.post("/admin/tenants/{tenant_id}/billing-owner")
+def admin_set_billing_owner(
+    request: Request,
+    tenant_id: int,
+    new_owner_email: str = Form(...),
+):
+    """Operator-only.  Reassign ``tenants.billing_owner_email`` for
+    the given tenant.  Used to recover when the migration's
+    "oldest maintainer" heuristic picked the wrong person, or
+    when ownership transfers (the original Pro purchaser leaves
+    the team, etc.).
+
+    Refuses an email that isn't currently a member of the tenant
+    — handing the Stripe portal to a stranger is the kind of
+    thing operators should have to do deliberately in SQL, not
+    by typo'ing into a form."""
+    actor: Actor = request.state.actor
+    _require_operator_route(actor)
+    try:
+        dao_billing.assign_billing_owner(actor, tenant_id, new_owner_email)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError as exc:
+        raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return RedirectResponse("/admin#billing-owners", status_code=303)
+
+
 @app.post("/admin/tenants/{tenant_id}/soft-delete")
 def admin_soft_delete_tenant(request: Request, tenant_id: int):
     """Operator-only: mark a tenant soft-deleted (30-day grace).

@@ -696,6 +696,81 @@
   {% endif %}
 </section>
 
+{# ── Billing owners (feedback #72) ───────────────────────────
+   Operator can see who owns each Pro tenant's Stripe billing,
+   spot wrong defaults from the migration backfill (which picks
+   the oldest maintainer by joined_at — not always the actual
+   paying account), and reassign in one click.  Only tenants
+   with a Stripe customer record show up; free tenants don't
+   need a billing owner. #}
+{% set billing_tenants = active_tenants | selectattr("stripe_customer_id") | list %}
+{% if billing_tenants %}
+<section class="admin-section" id="billing-owners">
+  <header class="admin-section-head">
+    <h2>Billing owners ({{ billing_tenants | length }})</h2>
+  </header>
+  <p class="text-sm text-muted">
+    The single email per Pro tenant that's allowed to read
+    Stripe customer + subscription IDs on <code>/usage</code>
+    and open the Stripe Customer Portal.  Without this gate,
+    every maintainer of the tenant could see invoices + payment
+    methods.  Migration default: oldest maintainer by
+    <code>joined_at</code>.  Reassign here if that picked wrong.
+  </p>
+  <div class="admin-tenants-tbl-wrap">
+    <table class="admin-tenants-tbl">
+      <thead>
+        <tr>
+          <th>Tenant</th>
+          <th>Plan</th>
+          <th>Current billing owner</th>
+          <th>Reassign to</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in billing_tenants %}
+        <tr>
+          <td>
+            <strong>{{ t.name }}</strong>
+            <div class="text-sm text-muted">id {{ t.id }}</div>
+          </td>
+          <td>
+            <span class="data-choice-badge">{{ t.plan }}</span>
+          </td>
+          <td>
+            {% if t.billing_owner_email %}
+              <code>{{ t.billing_owner_email }}</code>
+            {% else %}
+              <span class="text-muted">(none — portal locked for all)</span>
+            {% endif %}
+          </td>
+          <td>
+            <form method="post"
+                  action="/admin/tenants/{{ t.id }}/billing-owner"
+                  class="admin-billing-owner-form"
+                  onsubmit="return confirm('Make this email the billing owner for {{ t.name }}?  They will be able to read Stripe IDs and open the Customer Portal; the previous owner loses that access.');">
+              <select name="new_owner_email" required>
+                <option value="">— pick a member —</option>
+                {% for m in t.members %}
+                <option value="{{ m.email }}"
+                        {% if m.email == t.billing_owner_email %}disabled{% endif %}>
+                  {{ m.email }}{% if m.email == t.billing_owner_email %} (current){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-secondary btn-sm">
+                Set owner
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {# ── Public-leaderboard handles ─────────────────────────────── #}
 <section class="admin-section" id="handles">
   <header class="admin-section-head">

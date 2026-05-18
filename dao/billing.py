@@ -317,6 +317,61 @@ def _ensure_stripe_customer(tenant_id: int, actor_email: str) -> str:
     return customer.id
 
 
+def assign_billing_owner(
+    actor: Actor, tenant_id: int, new_owner_email: str,
+) -> dict:
+    """Operator-only.  Set ``tenants.billing_owner_email`` for the
+    given tenant.  Used by the /admin billing-owners viewer to
+    recover from a wrong migration default OR to transfer
+    ownership when the legitimate owner leaves the team.
+
+    Validates that ``new_owner_email`` is currently a tenant
+    member — handing the Stripe portal to a random email would
+    let an operator unilaterally hand over a customer's
+    subscription to anyone.  An operator who genuinely needs to
+    bypass that gate can do it directly in SQL; the route gates
+    against accidents, not malice.
+
+    Returns the updated row shape for the route to render."""
+    from dao._base import require_operator
+    require_operator(actor)
+    new_owner_email = (new_owner_email or "").strip()
+    if not new_owner_email:
+        raise ValueError("billing owner email can't be blank")
+    with db() as conn:
+        tenant = conn.execute(
+            "SELECT id, name FROM tenants WHERE id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if tenant is None:
+            raise NotFoundError(f"tenant {tenant_id}")
+        member = conn.execute(
+            "SELECT 1 FROM tenant_members "
+            "WHERE tenant_id = ? AND email = ?",
+            (tenant_id, new_owner_email),
+        ).fetchone()
+        if member is None:
+            raise ForbiddenError(
+                f"{new_owner_email!r} isn't a member of this tenant — "
+                "invite them first."
+            )
+        conn.execute(
+            "UPDATE tenants SET billing_owner_email = ? WHERE id = ?",
+            (new_owner_email, tenant_id),
+        )
+        conn.commit()
+    _log.info(
+        "billing.owner_reassigned operator=%s tenant_id=%s "
+        "new_owner=%s",
+        actor.email, tenant_id, new_owner_email,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "tenant_name": tenant["name"],
+        "billing_owner_email": new_owner_email,
+    }
+
+
 def is_billing_owner(actor: Actor) -> bool:
     """Return True iff the actor's email matches the tenant's
     billing_owner_email (case-insensitive).  Used to gate PII

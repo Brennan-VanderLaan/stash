@@ -105,6 +105,10 @@ def list_all(actor: Actor) -> list[dict]:
         rows = conn.execute(
             "SELECT t.id, t.name, t.plan, t.created_at, "
             "       t.deleted_at, t.hard_delete_after, "
+            # Billing-owner gate (feedback #72).  Operator sees
+            # stripe_customer_id presence + the assigned billing
+            # owner so the /admin billing card can flag mismatches.
+            "       t.stripe_customer_id, t.billing_owner_email, "
             "       (SELECT COUNT(*) FROM tenant_members "
             "         WHERE tenant_id = t.id) AS member_count, "
             "       (SELECT COUNT(*) FROM tenant_invites "

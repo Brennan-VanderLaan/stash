@@ -626,3 +626,98 @@ def test_billing_portal_owner_redirects_to_stripe(client, billing):
     r = client.get("/usage/billing-portal", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"].startswith("https://billing.stripe.com/")
+
+
+# ── Operator reassignment (admin viewer for #72) ───────────────────
+
+
+def _seed_operator(client, monkeypatch, op_email="op@example.com"):
+    """Make ``op_email`` an operator by re-importing app with the
+    env var set, then stamp them as a maintainer of the test tenant
+    so admin-side calls work."""
+    monkeypatch.setenv("STASH_OPERATOR_EMAILS", op_email)
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (client.test_tenant_id, op_email),
+        )
+        conn.commit()
+    # Force re-resolution of _OPERATOR_EMAILS on next request.
+    import importlib
+    import sys
+    if "app" in sys.modules:
+        importlib.reload(sys.modules["app"])
+    return op_email
+
+
+def test_assign_billing_owner_dao_refuses_non_member(client, billing):
+    """The reassign DAO refuses an email that isn't a member of the
+    tenant — operators shouldn't be able to hand Stripe access to
+    a random stranger via the form."""
+    client.post("/usage/upgrade")
+    from dao import Actor, billing as dao_billing
+    op = Actor(
+        email="op@example.com", tenant_id=None,
+        role="maintainer", is_operator=True, memberships=(),
+    )
+    with pytest.raises(dao_billing.ForbiddenError) as exc:
+        dao_billing.assign_billing_owner(
+            op, client.test_tenant_id, "stranger@nowhere.example",
+        )
+    assert "isn't a member" in str(exc.value)
+
+
+def test_assign_billing_owner_dao_happy_path(client, billing):
+    """Operator assigns ownership to an existing member; row
+    reflects the new email."""
+    client.post("/usage/upgrade")
+    new_owner = "other@example.com"
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO tenant_members "
+            "(tenant_id, email, role, joined_at) "
+            "VALUES (?, ?, 'maintainer', CURRENT_TIMESTAMP)",
+            (client.test_tenant_id, new_owner),
+        )
+        conn.commit()
+    from dao import Actor, billing as dao_billing
+    op = Actor(
+        email="op@example.com", tenant_id=None,
+        role="maintainer", is_operator=True, memberships=(),
+    )
+    result = dao_billing.assign_billing_owner(
+        op, client.test_tenant_id, new_owner,
+    )
+    assert result["billing_owner_email"] == new_owner
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT billing_owner_email FROM tenants WHERE id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["billing_owner_email"] == new_owner
+
+
+def test_admin_billing_owners_card_shows_current_owner(
+    client, billing, monkeypatch,
+):
+    """The /admin "Billing owners" card lists each Pro tenant and
+    their current owner.  Sanity check: an operator visit
+    rendering the page after an upgrade should show the table
+    with the current owner's email."""
+    client.post("/usage/upgrade")
+    _seed_operator(client, monkeypatch)
+    with client.app_module.db() as conn:
+        # Make sure billing-owner is set (it was during upgrade).
+        row = conn.execute(
+            "SELECT billing_owner_email FROM tenants WHERE id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert row["billing_owner_email"]  # sanity
+    r = client.get(
+        "/admin", headers={"X-Forwarded-Email": "op@example.com"},
+    )
+    assert r.status_code == 200
+    assert "Billing owners" in r.text
+    assert row["billing_owner_email"] in r.text
