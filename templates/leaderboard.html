@@ -29,6 +29,26 @@
   catch (e) { return; }
   if (!Array.isArray(stars) || stars.length === 0) return;
 
+  // Move the rain container out of <main> onto <body>.  Feedback
+  // #73 round 3: stars were getting clipped "just under the help
+  // text at the bottom" because <main> has ``animation:
+  // app-fade-in`` whose keyframes use ``transform: translateY``
+  // with ``animation-fill-mode: both``.  The transform PERSISTS
+  // after the animation (translateY(0) is non-none), which makes
+  // <main> a containing block for ``position: fixed``
+  // descendants.  The rain's ``inset: 0`` then resolves against
+  // <main>'s box (capped by max-width + the actual rendered
+  // content height) instead of the viewport — so on tall monitors
+  // the stars run out of room well before exiting the screen.
+  //
+  // Moving the container to ``document.body`` (a sibling of
+  // <main>, not a child) puts it back in the viewport's
+  // containing block and the ``130vh`` translation in the
+  // keyframe carries every star fully off-screen.
+  if (container.parentNode !== document.body) {
+    document.body.appendChild(container);
+  }
+
   function fmtWhen(iso) {
     if (!iso) return '';
     // Server stores 'YYYY-MM-DD HH:MM:SS' (UTC, no tz suffix).  We

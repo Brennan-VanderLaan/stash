@@ -143,6 +143,38 @@ def test_leaderboard_page_renders_for_authed_user(client):
     assert "contrib" in r.text
 
 
+def test_rain_container_reparented_to_body(client):
+    """Regression for feedback #73 round 3 (stars cut off).
+
+    The star-rain container must be moved out of ``<main>`` onto
+    ``<body>`` before stars spawn, because ``<main>`` has a
+    persisting ``transform`` (animation-fill-mode: both with
+    transform-bearing keyframes) which makes it the containing
+    block for ``position: fixed`` descendants — capping the rain
+    to <main>'s rendered height and clipping stars on tall
+    monitors.
+
+    Pin the JS line.  A future rewrite of the spawner shouldn't
+    silently drop the reparenting step and reintroduce the bug."""
+    # Need at least one shipped contribution OWNED BY the viewer
+    # so the rain_stars payload (which is per-viewer) is non-empty
+    # and the rain script + container actually render.  The DAO
+    # also requires ``resolved_at IS NOT NULL`` — stamp it.
+    fb_id = _seed_feedback(client, body="cool fix", status="done",
+                           actor_email=client.test_email)
+    with client.app_module.db() as conn:
+        conn.execute(
+            "UPDATE feedback SET resolved_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (fb_id,),
+        )
+        conn.commit()
+    r = client.get("/leaderboard")
+    assert r.status_code == 200
+    # The script reparents to document.body before spawning.
+    assert "document.body.appendChild(container)" in r.text
+
+
 def test_star_tier_table_has_distinct_titles_per_threshold(client):
     """The per-viewer celebration copy on /leaderboard fans out
     over 20+ tiers (feedback #36).  Pin a sampling at known
