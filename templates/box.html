@@ -56,21 +56,92 @@
     <input type="hidden" name="if_match" value="{{ box.version }}">
     <label>Name<input type="text" name="name" value="{{ box.name }}" required></label>
     {% if rooms %}
-    <label>Room
-      <select name="room_id">
-        <option value="">— none —</option>
-        {% for r in rooms %}
-          {% if loop.first or loop.previtem.location_id != r.location_id %}
-            {% if not loop.first %}</optgroup>{% endif %}
-            <optgroup label="{{ r.location_name }}">
+    {# Two-step room picker (feedback #71).  Was a flat <select>
+       with optgroups — fine for a few rooms, clunky for many.
+       Now: pick the location, then the room.  When the tenant
+       has only one location, the location step auto-skips and
+       the chip grid shows rooms directly.  Hidden input carries
+       the value into the existing form Save flow; no separate
+       endpoint to maintain. #}
+    {% set _unique_loc_ids = rooms | map(attribute='location_id') | unique | list %}
+    {% set _single_location = _unique_loc_ids | length == 1 %}
+    <div class="form-field-label">Room</div>
+    <div class="room-picker" data-room-picker data-single-location="{{ '1' if _single_location else '0' }}">
+      <button type="button" class="room-picker-current" data-room-picker-open
+              aria-haspopup="true" aria-expanded="false">
+        {% set current_room = (rooms | selectattr('id', 'equalto', box.room_id) | first) if box.room_id else None %}
+        {% if current_room %}
+          <span class="room-picker-current-chip"
+                style="--room-color: {{ current_room.color or '#4ade80' }};">
+            📍 {{ current_room.name }}
+          </span>
+          <span class="text-sm text-muted">
+            {{ current_room.location_name }}{% if current_room.needs_floor_disambiguation and current_room.floor_name %} · {{ current_room.floor_name }}{% endif %}
+          </span>
+        {% else %}
+          <span class="text-muted">— no room —</span>
+        {% endif %}
+        <span class="room-picker-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div class="room-picker-panel" hidden data-room-picker-panel>
+        {% if not _single_location %}
+        <div class="room-picker-step" data-room-picker-step="locations">
+          <div class="room-picker-step-label">Pick a location</div>
+          <div class="room-picker-chips">
+            {% for loc_id in _unique_loc_ids %}
+              {% set loc_first = (rooms | selectattr('location_id', 'equalto', loc_id) | first) %}
+              <button type="button" class="room-picker-chip"
+                      data-room-picker-location-pick="{{ loc_id }}">
+                {{ loc_first.location_name }}
+              </button>
+            {% endfor %}
+            <button type="button"
+                    class="room-picker-chip room-picker-chip-clear"
+                    data-room-picker-clear>
+              — no room —
+            </button>
+          </div>
+        </div>
+        {% endif %}
+        <div class="room-picker-step" {% if not _single_location %}hidden{% endif %}
+             data-room-picker-step="rooms">
+          {% if not _single_location %}
+          <button type="button" class="room-picker-back"
+                  data-room-picker-back>← Back</button>
           {% endif %}
-          <option value="{{ r.id }}" {% if r.id == box.room_id %}selected{% endif %}>
-            {{ r.name }}{% if r.needs_floor_disambiguation and r.floor_name %} ({{ r.floor_name }}){% endif %}
-          </option>
-          {% if loop.last %}</optgroup>{% endif %}
-        {% endfor %}
-      </select>
-    </label>
+          <div class="room-picker-step-label"
+               data-room-picker-location-name>
+            {% if _single_location %}Pick a room{% endif %}
+          </div>
+          <div class="room-picker-chips" data-room-picker-rooms-list>
+            {# Pre-rendered for single-location case so the panel
+               works even before JS runs.  Multi-location uses JS
+               to populate this once the user picks a location. #}
+            {% if _single_location %}
+            {% for r in rooms %}
+              <button type="button" class="room-picker-chip room-picker-chip-room
+                      {% if r.id == box.room_id %}room-picker-chip-current{% endif %}"
+                      data-room-picker-room-pick="{{ r.id }}"
+                      style="--room-color: {{ r.color or '#4ade80' }};">
+                {{ r.name }}{% if r.needs_floor_disambiguation and r.floor_name %}
+                <small class="text-muted"> · {{ r.floor_name }}</small>{% endif %}
+              </button>
+            {% endfor %}
+            <button type="button"
+                    class="room-picker-chip room-picker-chip-clear"
+                    data-room-picker-clear>
+              — no room —
+            </button>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <input type="hidden" name="room_id" value="{{ box.room_id or '' }}"
+             data-room-picker-input>
+      <script type="application/json" data-room-picker-data>
+        {{ rooms | tojson }}
+      </script>
+    </div>
     {% endif %}
     <label>Location {% if rooms %}<span class="help-text">(free text — used only when no room is picked)</span>{% endif %}
       <input type="text" name="location" value="{{ box.location or '' }}" list="known-locations">
@@ -105,6 +176,135 @@
     input.value = s.dataset.colorValue;
     swatches.forEach(b => b.classList.toggle('active', b === s));
   }));
+})();
+</script>
+<script>
+// Two-step room picker (feedback #71).  See the markup above for
+// the data shape.  Lives inline because it's tightly coupled to
+// the surrounding form's hidden input — promoting it to a static
+// file would need a more general data-attribute contract that
+// isn't worth the abstraction until a second page wants it.
+(function () {
+  const picker = document.querySelector('[data-room-picker]');
+  if (!picker) return;
+  const openBtn = picker.querySelector('[data-room-picker-open]');
+  const panel = picker.querySelector('[data-room-picker-panel]');
+  const hiddenInput = picker.querySelector('[data-room-picker-input]');
+  const dataEl = picker.querySelector('[data-room-picker-data]');
+  const stepLocs = picker.querySelector('[data-room-picker-step="locations"]');
+  const stepRooms = picker.querySelector('[data-room-picker-step="rooms"]');
+  const stepLabel = picker.querySelector('[data-room-picker-location-name]');
+  const roomsList = picker.querySelector('[data-room-picker-rooms-list]');
+  const isSingleLocation = picker.dataset.singleLocation === '1';
+  let allRooms = [];
+  try { allRooms = JSON.parse(dataEl.textContent || '[]'); }
+  catch (e) { allRooms = []; }
+
+  function open() {
+    panel.hidden = false;
+    openBtn.setAttribute('aria-expanded', 'true');
+  }
+  function close() {
+    panel.hidden = true;
+    openBtn.setAttribute('aria-expanded', 'false');
+    // Reset to step 1 for next open (only multi-location).
+    if (!isSingleLocation && stepLocs && stepRooms) {
+      stepLocs.hidden = false;
+      stepRooms.hidden = true;
+    }
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+  function showRoomsFor(locationId) {
+    const rooms = allRooms.filter(
+      r => String(r.location_id) === String(locationId)
+    );
+    const locName = rooms[0] ? rooms[0].location_name : '';
+    if (stepLabel) stepLabel.textContent = locName;
+    const current = hiddenInput.value;
+    roomsList.innerHTML = rooms.map(r => {
+      const isCurrent = String(r.id) === String(current);
+      const disamb = r.needs_floor_disambiguation && r.floor_name
+        ? ` <small class="text-muted"> · ${escapeHtml(r.floor_name)}</small>`
+        : '';
+      const color = r.color || '#4ade80';
+      return (
+        `<button type="button" class="room-picker-chip room-picker-chip-room`
+        + (isCurrent ? ' room-picker-chip-current' : '') + `"`
+        + ` data-room-picker-room-pick="${r.id}"`
+        + ` style="--room-color: ${escapeHtml(color)};">`
+        + escapeHtml(r.name) + disamb
+        + `</button>`
+      );
+    }).join('') + (
+      `<button type="button"`
+      + ` class="room-picker-chip room-picker-chip-clear"`
+      + ` data-room-picker-clear>— no room —</button>`
+    );
+    if (stepLocs) stepLocs.hidden = true;
+    stepRooms.hidden = false;
+  }
+  function pickRoom(roomId) {
+    hiddenInput.value = roomId || '';
+    const picked = allRooms.find(r => String(r.id) === String(roomId));
+    if (picked) {
+      const color = picked.color || '#4ade80';
+      const locName = picked.location_name || '';
+      const disamb = picked.needs_floor_disambiguation && picked.floor_name
+        ? ` · ${picked.floor_name}` : '';
+      openBtn.innerHTML =
+        `<span class="room-picker-current-chip"`
+        + ` style="--room-color: ${color};">📍 `
+        + escapeHtml(picked.name)
+        + `</span><span class="text-sm text-muted">`
+        + escapeHtml(locName) + escapeHtml(disamb)
+        + `</span><span class="room-picker-chevron" aria-hidden="true">▾</span>`;
+    } else {
+      // Cleared selection.
+      openBtn.innerHTML =
+        `<span class="text-muted">— no room —</span>`
+        + `<span class="room-picker-chevron" aria-hidden="true">▾</span>`;
+    }
+    close();
+  }
+
+  openBtn.addEventListener('click', () => {
+    panel.hidden ? open() : close();
+  });
+  picker.addEventListener('click', (e) => {
+    const locBtn = e.target.closest('[data-room-picker-location-pick]');
+    if (locBtn) {
+      showRoomsFor(locBtn.dataset.roomPickerLocationPick);
+      return;
+    }
+    const back = e.target.closest('[data-room-picker-back]');
+    if (back) {
+      if (stepLocs) stepLocs.hidden = false;
+      stepRooms.hidden = true;
+      return;
+    }
+    const roomBtn = e.target.closest('[data-room-picker-room-pick]');
+    if (roomBtn) {
+      pickRoom(roomBtn.dataset.roomPickerRoomPick);
+      return;
+    }
+    const clearBtn = e.target.closest('[data-room-picker-clear]');
+    if (clearBtn) {
+      pickRoom('');
+      return;
+    }
+  });
+  // Click outside the picker closes the panel — feels lighter
+  // than requiring a click on the chevron or a back button.
+  document.addEventListener('click', (e) => {
+    if (!picker.contains(e.target) && !panel.hidden) close();
+  });
+  // ESC closes too.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) close();
+  });
 })();
 </script>
 

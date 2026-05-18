@@ -507,6 +507,138 @@ header h1 a { color: var(--accent); text-decoration: none; }
   to { transform: rotate(360deg); }
 }
 
+/* === Two-step room picker (feedback #71) ====================
+   On /boxes/{id}'s edit form.  Click the current-room chip to
+   open a dropdown panel; pick a location, then a room.  If
+   there's only one location, the location step is skipped and
+   the panel shows rooms directly.  Hidden input carries the
+   selected room_id into the surrounding form's Save action.
+*/
+.form-field-label {
+  display: block;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0.3rem;
+  color: var(--text-muted);
+}
+.room-picker {
+  position: relative;
+  margin-bottom: 0.6rem;
+}
+.room-picker-current {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.room-picker-current:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.room-picker-current[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.room-picker-current-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--room-color, #4ade80) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--room-color, #4ade80) 50%, var(--border));
+  color: var(--text);
+  font-weight: 600;
+}
+.room-picker-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+.room-picker-current[aria-expanded="true"] .room-picker-chevron {
+  transform: rotate(180deg);
+}
+.room-picker-panel {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.7rem 0.75rem;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.room-picker-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.room-picker-step-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.room-picker-back {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+.room-picker-back:hover { text-decoration: underline; }
+.room-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.room-picker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.08s, background 0.12s;
+}
+.room-picker-chip:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.room-picker-chip:active { transform: translateY(0); }
+.room-picker-chip-room {
+  border-left: 4px solid var(--room-color, var(--accent));
+}
+.room-picker-chip-current {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.room-picker-chip-clear {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* === Loose-tray sidebar (Nondre's first-user thread) ==========
    Right-edge floating tray of items currently parked in a
    ``is_loose=1`` box ("in a room but no specific box yet").

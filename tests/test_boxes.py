@@ -23,6 +23,48 @@ def test_edit_box_updates_fields(client):
     assert "fragile" in detail
 
 
+def test_box_edit_renders_two_step_room_picker(client):
+    """Feedback #71: the flat <select> for the room field on
+    /boxes/{id}'s edit form became a two-step picker — pick the
+    location, then the room.  When there's only one location, the
+    location step is skipped.  Pin the picker markup so a refactor
+    doesn't silently fall back to the old <select>."""
+    # Seed: one location, one floor, two rooms.
+    from dao import Actor, locations as dao_locations, floors as dao_floors
+    actor = Actor(
+        email=client.test_email, tenant_id=client.test_tenant_id,
+        role="maintainer", is_operator=False,
+        memberships=((client.test_tenant_id, "maintainer"),),
+    )
+    loc_id = dao_locations.create(actor, "Home")
+    floor_id = dao_floors.create(actor, loc_id, "Ground floor")
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO rooms (tenant_id, location_id, floor_id, name) "
+            "VALUES (?, ?, ?, ?)",
+            (client.test_tenant_id, loc_id, floor_id, "Kitchen"),
+        )
+        conn.execute(
+            "INSERT INTO rooms (tenant_id, location_id, floor_id, name) "
+            "VALUES (?, ?, ?, ?)",
+            (client.test_tenant_id, loc_id, floor_id, "Living room"),
+        )
+        conn.commit()
+    client.post("/boxes", data={"name": "B1"})
+    page = client.get("/boxes/1").text
+    # Picker container + hidden input.
+    assert 'data-room-picker' in page
+    assert 'data-room-picker-input' in page
+    # Single-location → location step is hidden, room chips show
+    # directly.  We rendered ``data-single-location="1"``.
+    assert 'data-single-location="1"' in page
+    # Both rooms render as chips.
+    assert "Kitchen" in page
+    assert "Living room" in page
+    # The old <select name="room_id"> is GONE.
+    assert '<select name="room_id">' not in page
+
+
 def test_edit_box_requires_name(client):
     client.post("/boxes", data={"name": "Box A"})
     r = client.post("/boxes/1/edit", data={"name": "  "})
