@@ -152,3 +152,78 @@ def test_set_handle_route_happy_path(client):
     # Confirm DAO state.
     from dao import handles as dao_handles
     assert dao_handles.active_handle(client.test_email) == "valid_pick"
+
+
+# ── Real-time availability probe (#67) ─────────────────────────────
+
+
+def test_check_availability_dao_returns_ok_for_unused(client):
+    """Unused handle → available=True."""
+    from dao import Actor, handles as dao_handles
+    a = Actor(email=client.test_email, tenant_id=client.test_tenant_id,
+              role="maintainer", is_operator=False, memberships=())
+    r = dao_handles.check_availability(a, "fresh_name")
+    assert r == {"available": True, "reason": ""}
+
+
+def test_check_availability_dao_flags_taken(client):
+    """Handle taken by another email → available=False with reason."""
+    from dao import Actor, handles as dao_handles
+    other = Actor(email="someone-else@example.com",
+                  tenant_id=client.test_tenant_id,
+                  role="maintainer", is_operator=False, memberships=())
+    dao_handles.set_handle(other, "first_in")
+    me = Actor(email=client.test_email, tenant_id=client.test_tenant_id,
+               role="maintainer", is_operator=False, memberships=())
+    r = dao_handles.check_availability(me, "first_in")
+    assert r["available"] is False
+    assert "taken" in r["reason"].lower()
+
+
+def test_check_availability_dao_lets_owner_reclaim(client):
+    """Re-typing your own current handle counts as available (the
+    POST upsert is idempotent — don't warn the user about
+    themselves)."""
+    from dao import Actor, handles as dao_handles
+    a = Actor(email=client.test_email, tenant_id=client.test_tenant_id,
+              role="maintainer", is_operator=False, memberships=())
+    dao_handles.set_handle(a, "my_handle")
+    r = dao_handles.check_availability(a, "my_handle")
+    assert r["available"] is True
+
+
+def test_check_availability_dao_validates_shape(client):
+    """Invalid shape (whitespace, too short, etc.) comes back as
+    available=False with the validator's reason — same surface
+    as a uniqueness conflict so the JS can show one inline
+    message either way."""
+    from dao import Actor, handles as dao_handles
+    a = Actor(email=client.test_email, tenant_id=client.test_tenant_id,
+              role="maintainer", is_operator=False, memberships=())
+    r = dao_handles.check_availability(a, "x")
+    assert r["available"] is False
+    assert "2 characters" in r["reason"]
+
+
+def test_check_availability_route_returns_json(client):
+    """GET /usage/handle/check?handle=… returns the same shape
+    the DAO does."""
+    r = client.get("/usage/handle/check?handle=brand_new")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True
+    assert body["reason"] == ""
+
+
+def test_check_availability_route_flags_taken_for_other(client):
+    """End-to-end: someone else has it, we get available=False."""
+    from dao import Actor, handles as dao_handles
+    other = Actor(email="other@example.com",
+                  tenant_id=client.test_tenant_id,
+                  role="maintainer", is_operator=False, memberships=())
+    dao_handles.set_handle(other, "owned_already")
+    r = client.get("/usage/handle/check?handle=owned_already")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False
+    assert "taken" in body["reason"].lower()

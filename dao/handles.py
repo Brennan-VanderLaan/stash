@@ -89,6 +89,42 @@ def active_handle(actor_email: str) -> Optional[str]:
     return None
 
 
+def check_availability(actor: Actor, handle: str) -> dict:
+    """Return ``{"available": bool, "reason": str}`` for a
+    candidate handle.  Read-only — no DB writes.  Used by the
+    /usage/handle/check probe for client-side input feedback
+    (feedback #67).
+
+    Reclaiming the caller's own handle counts as "available"
+    (idempotent upsert), even if the row already exists.
+    Validation failures (length, character set) come back as
+    ``available: False`` with the validator's reason."""
+    if not actor.email:
+        return {"available": False, "reason": "Sign in first."}
+    handle = (handle or "").strip()
+    if not handle:
+        return {"available": False, "reason": ""}
+    try:
+        _validate(handle)
+    except HandleError as exc:
+        return {"available": False, "reason": exc.reason}
+    lower = handle.lower()
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT actor_email FROM feedback_handles "
+            "WHERE handle_lower = ? "
+            "  AND revoked_at IS NULL "
+            "  AND actor_email != ?",
+            (lower, actor.email),
+        ).fetchone()
+    if existing is not None:
+        return {
+            "available": False,
+            "reason": f"{handle!r} is already taken — pick something else.",
+        }
+    return {"available": True, "reason": ""}
+
+
 def set_handle(actor: Actor, handle: str) -> dict:
     """Set or update the actor's own handle.  Upsert keyed by
     email.  Re-setting after a revocation clears the revoke

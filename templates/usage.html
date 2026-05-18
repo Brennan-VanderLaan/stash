@@ -114,6 +114,9 @@
       {{ _("2-24 chars, alphanumeric + hyphen / underscore.  Your email stays private.  Operators can revoke offensive handles.") }}
     </p>
   </details>
+  {# Real-time availability check for #67 — script wires onto the
+     form above and the matching form on /leaderboard. #}
+  <script src="/static/handle-availability.js" defer></script>
 
   {# ── Submissions: 2 visible inline, rest behind a disclosure ── #}
   {% if your_feedback %}

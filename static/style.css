@@ -7266,25 +7266,45 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
 .leaderboard-handle-prompt p { margin: 0 0 0.7rem; }
 .leaderboard-handle-form {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: flex-end;
 }
 .leaderboard-handle-form label {
-  flex: 0 1 18rem;
+  flex: 0 0 18rem;
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   min-width: 8rem;
+  max-width: 100%;
 }
 .leaderboard-handle-form input[type="text"] {
-  /* Same width override as ``.contrib-handle-form`` — the global
-     ``width: 100%`` on inputs would otherwise push the Claim
-     button onto its own row. */
-  width: auto;
-  max-width: 100%;
+  /* Explicit sizing — was rendering as the global ``width: 100%``
+     and stretching to fill the parent label, which combined with
+     the label's own width left the input ``way off on the right``
+     of the prompt card (feedback #66). */
+  width: 100%;
+  height: 44px;
+  box-sizing: border-box;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 0.95rem;
+}
+.leaderboard-handle-form .btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+.leaderboard-handle-form .handle-availability {
+  flex: 1 1 100%;
+  font-size: 0.82rem;
+  min-height: 1.2em;
+  color: var(--text-muted);
+}
+.leaderboard-handle-form .handle-availability[data-state="taken"] {
+  color: var(--danger, #d97a7a);
+}
+.leaderboard-handle-form .handle-availability[data-state="ok"] {
+  color: var(--success, #5ec47a);
 }
 .leaderboard-handle-current {
   margin: 1rem 0 0;
@@ -7337,24 +7357,50 @@ details[open] > .disclosure::before { transform: rotate(90deg); }
 .contrib-handle-disclosure summary::marker { content: ''; }
 .contrib-handle-form {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.5rem;
   align-items: center;
 }
 .contrib-handle-form input[type="text"] {
-  /* Override the global ``input[type="text"] { width: 100% }``
-     rule that ships from the form-control reset — without this
-     the input stretched to fill the flex row and pushed the
-     Submit button onto its own line, which made the whole
-     disclosure read as "multiple paragraphs of vertical space"
-     (feedback #31).  Cap the width to something reasonable so
-     the input + button sit on one line on a desktop column. */
-  flex: 0 1 18rem;
-  width: auto;
+  /* Explicit width + height so nothing in the cascade can stretch
+     the input.  The previous ``flex: 0 1 18rem; width: auto``
+     combination was getting overridden somewhere — the input
+     rendered as a textarea-tall block taking the full card width
+     and forcing the button onto its own row (feedback #66 — "the
+     input box is massive on the usage page").
+     ``width`` + ``flex: 0 0 auto`` together pin the size against
+     any flex-grow / cross-axis-stretch that may be inherited from
+     parent containers. */
+  flex: 0 0 18rem;
+  width: 18rem;
   max-width: 100%;
   min-width: 8rem;
+  height: 44px;
+  box-sizing: border-box;
   font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+}
+.contrib-handle-form .btn {
+  flex: 0 0 auto;
+  /* Match the input height so the row reads as one tidy line. */
+  min-height: 44px;
+}
+/* Availability hint (#67) — sits next to the input on the same
+   row; on mobile it wraps under.  Single-line, badge-ish. */
+.contrib-handle-form .handle-availability {
+  flex: 1 1 100%;
+  font-size: 0.82rem;
+  min-height: 1.2em;
+  margin-top: -0.25rem;
+  color: var(--text-muted);
+}
+.contrib-handle-form .handle-availability[data-state="taken"] {
+  color: var(--danger, #d97a7a);
+}
+.contrib-handle-form .handle-availability[data-state="ok"] {
+  color: var(--success, #5ec47a);
 }
 .contrib-history-disclosure {
   margin-top: 0.25rem;

@@ -6215,6 +6215,31 @@ def leaderboard_page(request: Request):
     )
 
 
+@app.get("/usage/handle/check")
+def check_handle_availability(
+    request: Request,
+    handle: str = "",
+):
+    """Lightweight uniqueness probe for the leaderboard-handle
+    form to call on input change.  Returns
+    ``{"available": True/False, "reason": "..."}``.  No commits
+    happen; this is a read-only DAO lookup.
+
+    Feedback #67: the server already returns a "taken" error on
+    POST, but the user only sees it after submitting + getting
+    redirected back with the error in the query string.  Real-
+    time feedback on input change is nicer — they don't pick a
+    handle, hit Update, see "taken," start over.
+
+    The endpoint is bearer/session-auth (via the global
+    actor-resolver middleware) so unauth callers can't trawl the
+    handles table.  An authenticated caller can only learn
+    whether a *specific* handle is taken — same surface as the
+    POST gives implicitly."""
+    actor: Actor = request.state.actor
+    return dao_handles.check_availability(actor, handle)
+
+
 @app.post("/usage/handle")
 def set_handle_route(
     request: Request,
