@@ -9,8 +9,27 @@
   {% endif %}
 
   <div class="item-detail-body">
-    <h2 class="item-detail-name">{{ it.name }}</h2>
-    {% if it.notes %}<p class="item-detail-notes">{{ it.notes }}</p>{% endif %}
+    {# Inline rename/notes edit (feedback #78).  Used to be a
+       static <h2>+<p>; mobile users opened the dialog expecting
+       to fix an AI-misnamed item and found no input.  The form
+       posts to /items/{id}/edit which 303s back into the box —
+       the browser scrolls to #item-{id}, keeping the user in
+       flow. #}
+    <form method="post" action="/items/{{ it.id }}/edit"
+          class="item-detail-edit">
+      <label class="item-detail-name-label">
+        <span class="section-label">Name</span>
+        <input type="text" name="name" value="{{ it.name }}"
+               class="item-detail-name-input" required
+               autocomplete="off">
+      </label>
+      <label class="item-detail-notes-label">
+        <span class="section-label">Notes</span>
+        <textarea name="notes" rows="2"
+                  class="item-detail-notes-input">{{ it.notes or "" }}</textarea>
+      </label>
+      <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+    </form>
 
     {# Tags — existing as removable chips, then an add input #}
     <div class="item-detail-section">

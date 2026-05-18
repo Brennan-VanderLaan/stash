@@ -134,6 +134,54 @@ def test_location_field_removed_from_box_edit_form(client):
     assert 'id="known-locations"' not in page
 
 
+def test_edit_item_updates_name_and_notes(client):
+    """Feedback #78: the item-detail dialog rendered the name as
+    static text — there was no way to rename a misclassified
+    item.  POST /items/{id}/edit accepts ``name`` + ``notes``,
+    updates the row, and 303s back to the box page with the
+    item anchor so the dialog re-opens in flow."""
+    client.post("/boxes", data={"name": "Kitchen"})
+    _make_item(client, 1, "wodden spatla")
+
+    r = client.post(
+        "/items/1/edit",
+        data={"name": "wooden spatula", "notes": "use for nonstick"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/boxes/1#item-1"
+
+    page = client.get("/boxes/1").text
+    assert "wooden spatula" in page
+    assert "use for nonstick" in page
+    assert "wodden spatla" not in page
+
+
+def test_edit_item_rejects_empty_name(client):
+    """An empty name would orphan the item visually — surface 400."""
+    client.post("/boxes", data={"name": "Kitchen"})
+    _make_item(client, 1, "spatula")
+    r = client.post("/items/1/edit", data={"name": "  ", "notes": ""})
+    assert r.status_code == 400
+
+
+def test_edit_item_404_for_missing(client):
+    r = client.post("/items/999/edit", data={"name": "ghost"})
+    assert r.status_code == 404
+
+
+def test_item_dialog_renders_inline_rename_form(client):
+    """The dialog body must carry the edit form — both the name
+    input (so the user can fix AI misclassifications) and the
+    Save button.  Pins feedback #78 against template regressions."""
+    client.post("/boxes", data={"name": "Kitchen"})
+    _make_item(client, 1, "spatula")
+    page = client.get("/boxes/1").text
+    assert 'action="/items/1/edit"' in page
+    assert 'name="name"' in page
+    assert 'name="notes"' in page
+
+
 def test_move_single_item_between_boxes(client):
     client.post("/boxes", data={"name": "Source"})
     client.post("/boxes", data={"name": "Dest"})

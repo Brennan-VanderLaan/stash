@@ -3547,6 +3547,35 @@ def move_item(request: Request, item_id: int, box_id: int = Form(...)):
     return RedirectResponse(f"/boxes/{box_id}#item-{item_id}", status_code=303)
 
 
+@app.post("/items/{item_id}/edit")
+def edit_item(
+    request: Request,
+    item_id: int,
+    name: str = Form(...),
+    notes: str = Form(""),
+):
+    """Feedback #78: the item-detail dialog rendered the name as
+    static text — there was no way to rename or fix the notes
+    once the AI had filed an item under a wrong name.  This route
+    backs the inline name/notes form on _item_detail.html."""
+    if not name.strip():
+        raise HTTPException(400, "Name required")
+    actor: Actor = request.state.actor
+    try:
+        item = dao_items.get_by_id(actor, item_id)
+    except NotFoundError:
+        raise HTTPException(404)
+    try:
+        dao_items.update(actor, item_id, name=name, notes=notes)
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    return RedirectResponse(
+        f"/boxes/{item['box_id']}#item-{item_id}", status_code=303,
+    )
+
+
 @app.post("/boxes/{box_id}/move-items")
 async def bulk_move_items(request: Request, box_id: int):
     """Bulk-move all submitted item ids out of `box_id` and into the

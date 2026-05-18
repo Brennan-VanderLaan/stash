@@ -4832,6 +4832,28 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent);
   color: var(--muted);
   font-size: 0.9rem;
 }
+/* Feedback #78: inline rename/notes form replacing the old
+   static <h2>+<p>.  Mobile users were tapping into the dialog
+   expecting to fix an AI-misnamed item and finding no input. */
+.item-detail-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+.item-detail-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.item-detail-name-input {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.item-detail-edit button[type="submit"] {
+  align-self: flex-start;
+}
 .item-detail-section {
   display: flex;
   flex-direction: column;
