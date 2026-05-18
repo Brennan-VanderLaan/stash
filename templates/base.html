@@ -738,7 +738,15 @@
      the feedback widget. #}
   {% if request.state.actor and request.state.actor.tenant_id and request.state.actor.email and not request.state.actor.email.startswith('api_token:') %}
   <div id="tour-overlay" class="tour-overlay" hidden aria-hidden="true">
-    <div class="tour-spotlight" id="tour-spotlight" hidden></div>
+    {# Spotlight has NO ``hidden`` attribute — it's a child of the
+       overlay (which IS hidden when no tour is active) and its
+       outer box-shadow is what dims the rest of the page during a
+       tour.  Earlier passes left ``hidden`` here defensively, but
+       nothing in the spawner JS ever cleared it, so the spotlight
+       + dim layer never rendered and tooltips floated over an
+       unmodified page (feedback #75 — "tours don't highlight
+       anything"). #}
+    <div class="tour-spotlight" id="tour-spotlight"></div>
     <div class="tour-tooltip" id="tour-tooltip" role="dialog" aria-modal="true">
       <header class="tour-tooltip-head">
         <span class="tour-tooltip-step" data-tour-step-count></span>

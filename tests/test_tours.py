@@ -131,15 +131,43 @@ def test_tour_get_404_for_unknown_feature(client):
 def test_usage_renders_tour_catalogue(client):
     page = client.get("/usage").text
     assert "Onboarding tours" in page
-    # Replay buttons navigate to the tour's home page with a
-    # ``?tour=<feature>`` query param; the overlay JS auto-plays
-    # on that page.  Earlier passes had a JS-only data-tour-replay
-    # trigger that fired the tour in-place on /usage, where every
-    # target selector missed because the elements were on other
-    # pages — feedback #7.
+    # Replay buttons navigate to the tour's resolved replay_url
+    # with ``?tour=<feature>`` query param; the overlay JS auto-
+    # plays on that page.  Earlier passes had a JS-only
+    # data-tour-replay trigger that fired the tour in-place on
+    # /usage, where every target selector missed because the
+    # elements were on other pages — feedback #7.
+    #
+    # /home + /labels work without per-tenant resolution.  The
+    # /boxes/ and /locations/ tours need a real id (feedback #74);
+    # in this test no boxes/locations exist for the tenant yet so
+    # those Replay buttons render as a disabled `<button>` with
+    # the "create one first" tooltip rather than a dead link.
     assert 'href="/home?tour=welcome"' in page
-    assert 'href="/boxes/?tour=box_detail"' in page
     assert 'href="/labels?tour=labels"' in page
+
+
+def test_tour_spotlight_not_hidden_in_template(client):
+    """Regression for feedback #75 — "tours don't highlight anything."
+    The spotlight element used to render with ``hidden`` on it and
+    nothing in the JS removed the attribute, so the highlight ring
+    + page-dim shadow never showed at all.  Tooltips floated over
+    an unmodified page with no visual anchor."""
+    page = client.get("/home").text
+    # The spotlight element must NOT have ``hidden`` on it — the
+    # overlay's own ``hidden`` is enough to keep the spotlight
+    # off when no tour is running, and ``display: none`` on the
+    # overlay cascades to the child.
+    import re
+    m = re.search(
+        r'<div class="tour-spotlight" id="tour-spotlight"([^>]*)>',
+        page,
+    )
+    assert m, "tour-spotlight element missing"
+    assert "hidden" not in m.group(1), (
+        "tour-spotlight has ``hidden`` attribute — the highlight "
+        "won't render even when the tour is active.  Remove it."
+    )
 
 
 def test_tour_overlay_renders_for_authed_user(client):
