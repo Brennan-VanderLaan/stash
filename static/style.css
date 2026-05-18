@@ -2577,24 +2577,17 @@ body.about-public {
 .landing-cta-note {
   margin: 0;
 }
-/* Auth-options blurb that follows the price/free-tier line on
-   /landing + /about/pricing.  Reads as a small lock-icon hint
-   rather than competing with the primary CTA. */
-.landing-cta-auth {
-  margin: 0.6rem 0 0;
-  padding: 0.45rem 0.8rem;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  display: inline-block;
-}
+/* Auth-options footnote.  Plain muted small text — earlier
+   passes had a coloured callout box that competed visually with
+   the primary CTA and looked like a second clickable element
+   wedged next to the button.  This is a footnote, not a CTA.
+   Same shape on landing + pricing. */
+.landing-cta-auth,
 .about-lede-auth {
-  margin: 0.7rem 0 0;
-  padding: 0.45rem 0.8rem;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  display: inline-block;
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
 }
 /* Plan-card CTAs on /about/pricing.  Sit right under the price
    so a visitor's eye lands on the button before scanning the
