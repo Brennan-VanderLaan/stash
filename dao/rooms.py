@@ -146,6 +146,78 @@ def update(
         conn.commit()
 
 
+def find_by_name(actor: Actor, name: str) -> int | None:
+    """Return the id of an existing room with the given name
+    (case-insensitive) in the actor's tenant, or None.
+
+    Used by the AI-suggest flow to resolve a free-text room name
+    coming back from Claude into an existing room id without
+    creating duplicates."""
+    if actor.tenant_id is None or not name.strip():
+        return None
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM rooms "
+            "WHERE tenant_id = ? AND LOWER(name) = LOWER(?) "
+            "LIMIT 1",
+            (actor.tenant_id, name.strip()),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def attach_to_floor(
+    actor: Actor, room_id: int, floor_id: int,
+    *, x: float = 0.05, y: float = 0.05,
+    w: float = 0.2, h: float = 0.2,
+) -> int:
+    """Returns the location_id the room now belongs to (so the
+    route can redirect back to the right location without
+    re-querying)."""
+    """Move an unassigned room (or one on a different floor) onto a
+    specific floor.  Used by /rooms/{id}/move-to-floor — fixes the
+    feedback #76 case where the AI-suggest flow creates a box
+    pointed at a free-text "location" that doesn't match any real
+    room, leaving the operator with a dangling reference no UI can
+    resolve.
+
+    Defaults give the room a small visible rectangle near the
+    top-left of the floorplan; the operator drags it into shape
+    later via the in-page editor.  Caller can override coords if
+    they have a better position in mind."""
+    require_role(actor, "maintainer")
+    if actor.tenant_id is None:
+        raise NotFoundError(f"room {room_id}")
+    with db() as conn:
+        floor = conn.execute(
+            "SELECT location_id FROM floors "
+            "WHERE id = ? AND tenant_id = ?",
+            (floor_id, actor.tenant_id),
+        ).fetchone()
+        if floor is None:
+            raise NotFoundError(f"floor {floor_id}")
+        cur = conn.execute(
+            "UPDATE rooms "
+            "SET floor_id = ?, location_id = ?, "
+            "    x = ?, y = ?, w = ?, h = ? "
+            "WHERE id = ? AND tenant_id = ?",
+            (floor_id, floor["location_id"], x, y, w, h,
+             room_id, actor.tenant_id),
+        )
+        if cur.rowcount == 0:
+            raise NotFoundError(f"room {room_id}")
+        obs.write_audit(
+            conn, tenant_id=actor.tenant_id, actor_email=actor.email,
+            action="room.attach_to_floor",
+            target_kind="room", target_id=room_id,
+            metadata={
+                "floor_id": floor_id,
+                "location_id": floor["location_id"],
+            },
+        )
+        conn.commit()
+    return int(floor["location_id"])
+
+
 def delete(actor: Actor, room_id: int) -> dict:
     require_role(actor, "maintainer")
     if actor.tenant_id is None:

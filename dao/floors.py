@@ -23,6 +23,28 @@ def list_for_location(actor: Actor, location_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def solo_floor_id_for_tenant(actor: Actor) -> tuple[int, int] | None:
+    """If the actor's tenant has EXACTLY ONE floor (across all
+    locations), return ``(floor_id, location_id)``.  Otherwise
+    return ``None``.
+
+    Used by the AI-suggest-create-box flow (feedback #76) to
+    decide whether to auto-materialise a new room: with one
+    floor the target is unambiguous; with zero or many we fall
+    back to free-text on the box rather than guess."""
+    if actor.tenant_id is None:
+        return None
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, location_id FROM floors "
+            "WHERE tenant_id = ? LIMIT 2",
+            (actor.tenant_id,),
+        ).fetchall()
+    if len(rows) != 1:
+        return None
+    return int(rows[0]["id"]), int(rows[0]["location_id"])
+
+
 def get_by_id(actor: Actor, floor_id: int) -> dict:
     if actor.tenant_id is None:
         raise NotFoundError(f"floor {floor_id}")

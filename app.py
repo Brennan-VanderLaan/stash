@@ -4645,6 +4645,43 @@ def queue_match(request: Request, pending_id: int):
     return RedirectResponse("/queue", status_code=303)
 
 
+def _maybe_autocreate_room_for_suggestion(
+    actor: Actor, room_name: str,
+) -> int | None:
+    """When the AI suggests a brand-new room name during a
+    create-suggested-box flow, try to materialise it as a real
+    room rather than dropping the name as denormalised free-text
+    on ``boxes.location``.
+
+    Heuristic: only auto-create when the tenant has EXACTLY ONE
+    floor (across all locations).  In that case the floor is the
+    only plausible target — auto-create there with a small
+    default rectangle in the top-left, and the operator can drag
+    it into shape later via the floorplan editor.
+
+    Multiple floors → return None so the caller falls back to the
+    free-text path; we don't try to guess which floor the AI
+    meant.
+
+    Zero floors → also None; nothing to attach to."""
+    if actor.tenant_id is None:
+        return None
+    floor = dao_floors.solo_floor_id_for_tenant(actor)
+    if floor is None:
+        return None
+    floor_id, location_id = floor
+    with db() as conn:
+        color = _next_room_color(conn, location_id)
+    try:
+        return dao_rooms.create(
+            actor, floor_id, room_name,
+            x=0.05, y=0.05, w=0.2, h=0.2,
+            color=color,
+        )
+    except (NotFoundError, ForbiddenError):
+        return None
+
+
 @app.post("/queue/{pending_id}/create-suggested-box")
 def queue_create_suggested_box(request: Request, pending_id: int):
     """Feedback #50: "AI suggestions for new boxes should link to a
@@ -4679,21 +4716,34 @@ def queue_create_suggested_box(request: Request, pending_id: int):
             "This pending item has no AI-suggested new box to create.",
         )
     location_text = (row.get("suggested_new_box_location") or "").strip()
-    # Try to resolve the suggested location to a room in this
-    # tenant.  Match is case-insensitive (the AI's casing may not
-    # match the user's exactly).  Falls through to plain-text
-    # location on the box row when no room matches.
+    # Resolve the suggested location to a real room.  Three paths,
+    # in order:
+    #
+    #   1. Existing room by case-insensitive name → use its id.
+    #   2. No match AND the tenant has exactly one floor → create a
+    #      new room on that floor with default-size coords.  Fixes
+    #      feedback #76: previously the suggested location fell
+    #      through as plain-text on ``boxes.location`` and the new
+    #      room never got created, leaving the operator with an
+    #      AI-suggested name they had to manually re-create.
+    #   3. Multiple floors / no floors → fall through, keep the
+    #      free-text on the box.  We don't auto-guess a floor when
+    #      the tenant has more than one.
     room_id: int | None = None
     if location_text:
-        with db() as conn:
-            r = conn.execute(
-                "SELECT id FROM rooms "
-                "WHERE tenant_id = ? AND LOWER(name) = LOWER(?) "
-                "LIMIT 1",
-                (actor.tenant_id, location_text),
-            ).fetchone()
-        if r is not None:
-            room_id = int(r["id"])
+        room_id = dao_rooms.find_by_name(actor, location_text)
+        if room_id is None:
+            # No existing room — try the auto-create-on-single-floor
+            # path.
+            new_room_id = _maybe_autocreate_room_for_suggestion(
+                actor, location_text,
+            )
+            if new_room_id is not None:
+                room_id = new_room_id
+                # Box gets the room link; the free-text location
+                # field becomes redundant.  Clear it so the box
+                # detail page reads cleanly.
+                location_text = ""
     try:
         new_box_id = dao_boxes.create(
             actor, name, location_text, "", room_id=room_id,
@@ -5867,6 +5917,33 @@ def delete_floor(request: Request, floor_id: int):
         with db() as conn:
             _delete_upload_if_orphan(conn, actor.tenant_id, result["floorplan"])
     return RedirectResponse(f"/locations/{result['location_id']}", status_code=303)
+
+
+@app.post("/rooms/{room_id}/attach-to-floor")
+def attach_room_to_floor(
+    request: Request,
+    room_id: int,
+    floor_id: int = Form(...),
+):
+    """Move an unassigned room (or one on a different floor) onto
+    a specific floor.  Feedback #76: legacy / AI-suggest-derived
+    orphan rooms had no path to becoming visible on a floorplan
+    without dropping into SQL.  This route plugs that gap."""
+    actor: Actor = request.state.actor
+    try:
+        location_id = dao_rooms.attach_to_floor(
+            actor, room_id, floor_id,
+        )
+    except NotFoundError:
+        raise HTTPException(404)
+    except ForbiddenError:
+        raise HTTPException(403)
+    # Redirect back to the location detail in edit mode so the
+    # moved room is immediately draggable to its real position.
+    return RedirectResponse(
+        f"/locations/{location_id}?floor={floor_id}&edit=1",
+        status_code=303,
+    )
 
 
 @app.post("/floors/{floor_id}/rooms")

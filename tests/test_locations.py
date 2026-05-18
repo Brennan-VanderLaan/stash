@@ -899,3 +899,191 @@ def test_edit_mode_renders_resize_handles(client):
     # Four corners → four handles per room
     for handle in ("handle-nw", "handle-ne", "handle-sw", "handle-se"):
         assert handle in page, f"missing {handle} in edit mode"
+
+
+# ── Unassigned room rescue (feedback #76) ──────────────────────────
+
+
+def test_attach_to_floor_dao_links_orphan_room(client):
+    """A room with location_id set but floor_id NULL (orphan
+    from the legacy free-text migration, or future AI-suggest
+    edge case) becomes visible on the floorplan via
+    dao_rooms.attach_to_floor."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    # Hand-create an orphan room: location_id set, floor_id NULL.
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, name, tenant_id) "
+            "VALUES (?, 'Orphan', ?)",
+            (loc_id, client.test_tenant_id),
+        )
+        room_id = cur.lastrowid
+        conn.commit()
+    from dao import Actor, rooms as dao_rooms
+    actor = Actor(
+        email=client.test_email, tenant_id=client.test_tenant_id,
+        role="maintainer", is_operator=False,
+        memberships=((client.test_tenant_id, "maintainer"),),
+    )
+    returned_loc = dao_rooms.attach_to_floor(actor, room_id, floor_id)
+    assert returned_loc == loc_id
+    with client.app_module.db() as conn:
+        row = conn.execute(
+            "SELECT floor_id, w, h FROM rooms WHERE id = ?",
+            (room_id,),
+        ).fetchone()
+    assert row["floor_id"] == floor_id
+    # Default coords give the room a visible rectangle, not 0×0.
+    assert row["w"] > 0 and row["h"] > 0
+
+
+def test_attach_to_floor_route_redirects_to_edit_mode(client):
+    """POST /rooms/{id}/attach-to-floor 303s back to the location
+    page in edit mode so the operator can drag the just-moved
+    room into shape."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO rooms (location_id, name, tenant_id) "
+            "VALUES (?, 'Orphan', ?)",
+            (loc_id, client.test_tenant_id),
+        )
+        room_id = cur.lastrowid
+        conn.commit()
+    r = client.post(
+        f"/rooms/{room_id}/attach-to-floor",
+        data={"floor_id": str(floor_id)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert f"/locations/{loc_id}" in r.headers["location"]
+    assert "edit=1" in r.headers["location"]
+
+
+def test_unassigned_rooms_section_renders_move_form(client):
+    """The /locations/{id} page surfaces orphans + per-row
+    move-to-floor form so the operator can rescue them without
+    SQL."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO rooms (location_id, name, tenant_id) "
+            "VALUES (?, 'Orphan', ?)",
+            (loc_id, client.test_tenant_id),
+        )
+        conn.commit()
+    page = client.get(f"/locations/{loc_id}").text
+    assert "Unassigned rooms" in page
+    assert "Orphan" in page
+    # The action POSTs to the new attach-to-floor endpoint.
+    assert "/attach-to-floor" in page
+    # Single-floor case → button shows "Move to {floor_name} →".
+    assert "Move to Main" in page
+
+
+# ── Auto-create suggested room (feedback #76) ──────────────────────
+
+
+def test_create_suggested_box_auto_creates_room_when_single_floor(
+    client,
+):
+    """When the AI suggests a brand-new box with a brand-new
+    room location AND the tenant has exactly one floor, the
+    create-suggested-box flow now materialises the room on that
+    floor instead of dropping the AI's location text as
+    free-text on boxes.location.
+
+    Result: the box ends up linked to a real room, which is
+    visible on the floorplan as a default-sized rectangle in
+    the top-left.  Operator drags it into shape later."""
+    loc_id, floor_id = _setup_location_with_floor(client)
+    # Seed a pending item that the AI flagged as ``match='new'``
+    # with a brand-new room name ("Garage").
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO pending_items "
+            "(name, photo, "
+            " suggested_new_box_name, suggested_new_box_location, "
+            " tenant_id) "
+            "VALUES ('wrench', 'fake.jpg', "
+            "        'Tools', 'Garage', ?)",
+            (client.test_tenant_id,),
+        )
+        pending_id = cur.lastrowid
+        conn.commit()
+    r = client.post(
+        f"/queue/{pending_id}/create-suggested-box",
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    # A new room called "Garage" was auto-created on the single
+    # floor.
+    with client.app_module.db() as conn:
+        room = conn.execute(
+            "SELECT id, floor_id, location_id, w, h FROM rooms "
+            "WHERE LOWER(name) = 'garage' AND tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+        # The new box points at it.
+        box = conn.execute(
+            "SELECT room_id, location FROM boxes "
+            "WHERE LOWER(name) = 'tools' AND tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    assert room is not None
+    assert room["floor_id"] == floor_id
+    assert room["location_id"] == loc_id
+    assert room["w"] > 0 and room["h"] > 0
+    assert box is not None
+    assert box["room_id"] == room["id"]
+    # Box's location text is cleared once the room link is set.
+    assert (box["location"] or "") == ""
+
+
+def test_create_suggested_box_falls_back_to_freetext_with_multi_floor(
+    client,
+):
+    """If the tenant has more than one floor, the AI-suggested
+    new room is ambiguous (which floor?).  Fall back to the
+    legacy free-text behaviour: location text on boxes.location,
+    no auto-created room."""
+    loc_id, floor_id_1 = _setup_location_with_floor(client)
+    # Add a second floor to make the auto-create heuristic
+    # decline.
+    r = client.post(
+        f"/locations/{loc_id}/floors", data={"name": "Basement"},
+    )
+    assert r.status_code in (200, 303)
+    with client.app_module.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO pending_items "
+            "(name, photo, "
+            " suggested_new_box_name, suggested_new_box_location, "
+            " tenant_id) "
+            "VALUES ('hammer', 'fake.jpg', "
+            "        'Tools', 'Workshop', ?)",
+            (client.test_tenant_id,),
+        )
+        pending_id = cur.lastrowid
+        conn.commit()
+    client.post(
+        f"/queue/{pending_id}/create-suggested-box",
+        follow_redirects=False,
+    )
+    with client.app_module.db() as conn:
+        room = conn.execute(
+            "SELECT id FROM rooms "
+            "WHERE LOWER(name) = 'workshop' AND tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+        box = conn.execute(
+            "SELECT room_id, location FROM boxes "
+            "WHERE LOWER(name) = 'tools' AND tenant_id = ?",
+            (client.test_tenant_id,),
+        ).fetchone()
+    # No auto-created room.
+    assert room is None
+    # Free-text on the box.
+    assert box is not None
+    assert box["room_id"] is None
+    assert (box["location"] or "").lower() == "workshop"

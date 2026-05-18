@@ -384,18 +384,46 @@
 <div class="card">
   <div class="card-title">Unassigned rooms ({{ unassigned_rooms | length }})</div>
   <p class="text-sm text-muted mb-2">
-    These rooms aren't on any floor yet — they were carried over from your old free-text locations.
-    They still hold their assigned boxes; once you have a floor, you can drag them into shape.
+    These rooms aren't on any floor yet.  Pick a floor and a default-
+    sized rectangle drops in the top-left; switch to edit mode
+    and drag it into shape.
   </p>
   <ul class="box-list">
     {% for r in unassigned_rooms %}
-    <li>
+    <li class="unassigned-room-row">
       <a href="/rooms/{{ r.id }}/boxes" class="box-card">
         <div>
           <div class="box-name room-chip" style="--room-color: {{ r.color or '#4ade80' }};">{{ r.name }}</div>
           <div class="box-meta">{{ r.box_count }} box{{ '' if r.box_count == 1 else 'es' }}</div>
         </div>
       </a>
+      {% if floors %}
+      {# Feedback #76: orphan rooms (location_id set, floor_id NULL)
+         had no UI to land them on a floorplan.  Now each row gets
+         a "Move to" picker so the operator can rescue them without
+         dropping into SQL. #}
+      <form method="post"
+            action="/rooms/{{ r.id }}/attach-to-floor"
+            class="unassigned-room-attach-form">
+        {% if floors | length == 1 %}
+        {# Only one floor — skip the picker, just show a button. #}
+        <input type="hidden" name="floor_id" value="{{ floors[0].id }}">
+        <button type="submit" class="btn btn-secondary btn-sm">
+          Move to {{ floors[0].name }} →
+        </button>
+        {% else %}
+        <select name="floor_id" required>
+          <option value="">— pick a floor —</option>
+          {% for f in floors %}
+          <option value="{{ f.id }}">{{ f.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-secondary btn-sm">
+          Move →
+        </button>
+        {% endif %}
+      </form>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
