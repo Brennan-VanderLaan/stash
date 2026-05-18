@@ -12,9 +12,6 @@
 {% endblock %}
 {% block content %}
 
-<datalist id="known-locations">
-  {% for loc in locations %}<option value="{{ loc }}">{% endfor %}
-</datalist>
 <datalist id="tag-suggestions">
   {% for t in all_tags %}<option value="{{ t }}">{% endfor %}
 </datalist>
@@ -39,8 +36,6 @@
           </a>
           {% if box.location_name %}<span class="text-muted">in {{ box.location_name }}</span>{% endif %}
         </div>
-      {% elif box.location %}
-        <div class="text-sm text-muted">{{ box.location }}</div>
       {% endif %}
       {% if box.last_audited_at %}<div class="text-sm text-muted mt-1">Last audited {{ box.last_audited_at }}</div>{% endif %}
     </div>
@@ -143,9 +138,6 @@
       </script>
     </div>
     {% endif %}
-    <label>Location {% if rooms %}<span class="help-text">(free text — used only when no room is picked)</span>{% endif %}
-      <input type="text" name="location" value="{{ box.location or '' }}" list="known-locations">
-    </label>
     <label>Notes<textarea name="notes" rows="2">{{ box.notes or '' }}</textarea></label>
     <div>
       <span class="text-sm text-muted">Color

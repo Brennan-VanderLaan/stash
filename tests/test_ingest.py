@@ -689,14 +689,18 @@ def test_create_suggested_box_endpoint_makes_box_and_repoints_pending(client):
     assert r.status_code == 303
     assert r.headers["location"] == "/queue"
 
-    # New box exists.
+    # New box exists.  Feedback #78 retired the free-text
+    # ``boxes.location`` field — with no floors/rooms set up in
+    # this test, the box is created room-less and the operator
+    # picks a room later via the chip picker.
     with client.app_module.db() as conn:
         box_row = conn.execute(
-            "SELECT id, name, location FROM boxes WHERE name = 'Ski gear'"
+            "SELECT id, name, location, room_id FROM boxes WHERE name = 'Ski gear'"
         ).fetchone()
     assert box_row is not None
     assert box_row["name"] == "Ski gear"
-    assert box_row["location"] == "Garage"
+    assert (box_row["location"] or "") == ""
+    assert box_row["room_id"] is None
 
     # Pending now points at the new box; the "create it first"
     # banner shouldn't render anymore.

@@ -12,8 +12,11 @@
   {% if box.notes %}
     <p>{{ box.notes }}</p>
   {% endif %}
-  {% if box.location %}
-    <p class="text-muted text-sm">{{ _("Located:") }} {{ box.location }}</p>
+  {% if box.room_name %}
+    <p class="text-muted text-sm">
+      {{ _("Located:") }} {{ box.room_name }}
+      {% if box.location_name %} · {{ box.location_name }}{% endif %}
+    </p>
   {% endif %}
   <p class="text-sm">
     <a href="/shared">← {{ _("Back to shared") }}</a>

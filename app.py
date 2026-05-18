@@ -3356,30 +3356,20 @@ def _conflict_http(entity: str, entity_id: int) -> HTTPException:
 def create_box(
     request: Request,
     name: str = Form(...),
-    location: str = Form(""),
     notes: str = Form(""),
     room_id: str = Form(""),
     next: str = Form(""),
 ):
     actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
-    # If a room is picked, denormalize its name into boxes.location so the
-    # plain text shows up everywhere that doesn't JOIN to rooms.  Allow
-    # legacy tenant_id-NULL rooms to match too — pre-multi-tenancy
-    # databases may still have those rows around.
-    if rid is not None:
-        with db() as conn:
-            row = conn.execute(
-                "SELECT name FROM rooms WHERE id = ? "
-                "  AND (tenant_id = ? OR tenant_id IS NULL)",
-                (rid, actor.tenant_id),
-            ).fetchone()
-        if row:
-            location = row["name"]
-        else:
-            rid = None
+    # Feedback #78: the free-text ``boxes.location`` field is gone.
+    # The room picker is the only way to say where a box lives.
+    # If a room is picked, the join chain (boxes → rooms → floors →
+    # locations) carries the location info everywhere the UI needs
+    # it.  ``location`` always writes as ``""`` for new boxes; the
+    # column stays in the schema so historical rows aren't dropped.
     try:
-        dao_boxes.create(actor, name, location, notes, room_id=rid)
+        dao_boxes.create(actor, name, "", notes, room_id=rid)
     except ForbiddenError:
         raise HTTPException(403)
     # Feedback #51: the room-boxes page needs an "Add box" button
@@ -3458,21 +3448,20 @@ def move_box_to_room(
     and as a generic API. Empty room_id clears the assignment."""
     actor: Actor = request.state.actor
     rid = _coerce_room_id(room_id)
-    location_text = ""
     if rid is not None:
         # Validate the room belongs to this tenant before passing through.
         try:
-            location_text = dao_rooms.get_with_location(actor, rid)["name"]
+            dao_rooms.get_with_location(actor, rid)
         except NotFoundError:
             raise HTTPException(400, "Unknown room")
     try:
-        # set_room handles the box-tenancy check; we update location text
-        # alongside it via the broader update() call so the legacy
-        # free-text location stays in sync with the room reassignment.
+        # ``location`` always writes as "" — feedback #78 retired the
+        # free-text field, the room link is now the single source of
+        # truth for where the box lives.
         box = dao_boxes.get_by_id(actor, box_id)
         dao_boxes.update(
             actor, box_id,
-            name=box["name"], location=location_text,
+            name=box["name"], location="",
             notes=box.get("notes") or "", room_id=rid,
             color=box.get("color"),
         )
@@ -3490,7 +3479,6 @@ def edit_box(
     request: Request,
     box_id: int,
     name: str = Form(...),
-    location: str = Form(""),
     notes: str = Form(""),
     room_id: str = Form(""),
     color: str = Form(""),
@@ -3508,16 +3496,21 @@ def edit_box(
         color_val = color.strip()
     else:
         color_val = None  # silently reject off-palette
+    # Validate the room belongs to this tenant.  If not, drop the
+    # link (no error — the form may legitimately be clearing it).
     if rid is not None:
         try:
-            location = dao_rooms.get_with_location(actor, rid)["name"]
+            dao_rooms.get_with_location(actor, rid)
         except NotFoundError:
             rid = None
     expected_version = _coerce_if_match(if_match)
     try:
+        # ``location`` always writes as "" — feedback #78 retired the
+        # free-text field; the room picker is the only source of
+        # truth for where a box lives.
         dao_boxes.update(
             actor, box_id,
-            name=name, location=location, notes=notes,
+            name=name, location="", notes=notes,
             room_id=rid, color=color_val,
             if_match=expected_version,
         )
@@ -4701,9 +4694,10 @@ def queue_create_suggested_box(request: Request, pending_id: int):
 
     Room resolution: if ``suggested_new_box_location`` matches a
     room name in the tenant, the new box gets that ``room_id``.
-    Otherwise the location is denormalised onto ``boxes.location``
-    as plain text — same shape as the create-box-without-a-room
-    path on /home."""
+    Otherwise (and the tenant has exactly one floor) we
+    auto-create a room with the AI's suggested name on that
+    floor.  If neither hits, the box is created room-less and
+    the operator picks a room later via the chip picker."""
     actor: Actor = request.state.actor
     try:
         row = dao_pending.get_by_id(actor, pending_id)
@@ -4716,37 +4710,31 @@ def queue_create_suggested_box(request: Request, pending_id: int):
             "This pending item has no AI-suggested new box to create.",
         )
     location_text = (row.get("suggested_new_box_location") or "").strip()
-    # Resolve the suggested location to a real room.  Three paths,
-    # in order:
+    # Resolve the suggested location to a real room.  Two paths:
     #
     #   1. Existing room by case-insensitive name → use its id.
     #   2. No match AND the tenant has exactly one floor → create a
-    #      new room on that floor with default-size coords.  Fixes
-    #      feedback #76: previously the suggested location fell
-    #      through as plain-text on ``boxes.location`` and the new
-    #      room never got created, leaving the operator with an
-    #      AI-suggested name they had to manually re-create.
-    #   3. Multiple floors / no floors → fall through, keep the
-    #      free-text on the box.  We don't auto-guess a floor when
-    #      the tenant has more than one.
+    #      new room on that floor with default-size coords
+    #      (feedback #76).
+    #
+    # If neither hits (multi-floor case with a new room name), the
+    # box is created room-less.  Feedback #78 retired the free-text
+    # ``boxes.location`` fallback so the AI's suggestion isn't
+    # preserved as denormalised text — the operator can pick a
+    # room from the chip picker on /boxes/{id} when they're ready.
     room_id: int | None = None
     if location_text:
         room_id = dao_rooms.find_by_name(actor, location_text)
         if room_id is None:
-            # No existing room — try the auto-create-on-single-floor
-            # path.
             new_room_id = _maybe_autocreate_room_for_suggestion(
                 actor, location_text,
             )
             if new_room_id is not None:
                 room_id = new_room_id
-                # Box gets the room link; the free-text location
-                # field becomes redundant.  Clear it so the box
-                # detail page reads cleanly.
-                location_text = ""
     try:
+        # location="" — feedback #78 retired the free-text field.
         new_box_id = dao_boxes.create(
-            actor, name, location_text, "", room_id=room_id,
+            actor, name, "", "", room_id=room_id,
         )
     except ForbiddenError:
         raise HTTPException(403)

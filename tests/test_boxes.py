@@ -10,16 +10,19 @@ def _make_item(client, box_id, name="thing", tags=""):
 
 
 def test_edit_box_updates_fields(client):
-    client.post("/boxes", data={"name": "Old name", "location": "Garage"})
+    """The edit form persists name + notes.  Free-text ``location``
+    is gone since feedback #78 (room picker is the only source of
+    truth for where a box lives), so the form no longer has that
+    field — POSTing a ``location`` value is silently ignored."""
+    client.post("/boxes", data={"name": "Old name"})
     r = client.post(
         "/boxes/1/edit",
-        data={"name": "Kitchen #1", "location": "Garage shelf B", "notes": "fragile"},
+        data={"name": "Kitchen #1", "notes": "fragile"},
         follow_redirects=False,
     )
     assert r.status_code == 303
     detail = client.get("/boxes/1").text
     assert "Kitchen #1" in detail
-    assert "Garage shelf B" in detail
     assert "fragile" in detail
 
 
@@ -118,15 +121,17 @@ def test_edit_box_without_if_match_is_last_write_wins(client):
     assert "Second" in client.get("/boxes/1").text
 
 
-def test_location_autocomplete_lists_distinct_locations(client):
-    client.post("/boxes", data={"name": "A", "location": "Garage"})
-    client.post("/boxes", data={"name": "B", "location": "Attic"})
-    client.post("/boxes", data={"name": "C", "location": "Garage"})  # dup
+def test_location_field_removed_from_box_edit_form(client):
+    """Feedback #78 retired the free-text ``location`` input on the
+    box edit form.  The room picker is now the only way to set
+    where a box lives — no datalist + no free-text input.  Pin
+    both the absence of the input AND the absence of the
+    known-locations datalist so a future refactor doesn't bring
+    them back."""
+    client.post("/boxes", data={"name": "A"})
     page = client.get("/boxes/1").text
-    # datalist should have both unique locations
-    assert "<datalist" in page
-    assert 'value="Garage"' in page
-    assert 'value="Attic"' in page
+    assert 'name="location"' not in page
+    assert 'id="known-locations"' not in page
 
 
 def test_move_single_item_between_boxes(client):

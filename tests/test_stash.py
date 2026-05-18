@@ -62,9 +62,13 @@ def test_index_get_started_shows_step_2_after_photo(client):
 
 
 def test_create_box_appears_on_index(client):
+    """Box creation via the POST /boxes endpoint persists name +
+    notes; the box appears on /home with its name and item count.
+    The free-text ``location`` field is gone (feedback #78) — the
+    room picker is the only way to set a box's room/location."""
     r = client.post(
         "/boxes",
-        data={"name": "Kitchen #1", "location": "Garage B", "notes": "fragile"},
+        data={"name": "Kitchen #1", "notes": "fragile"},
         follow_redirects=False,
     )
     assert r.status_code == 303
@@ -72,7 +76,6 @@ def test_create_box_appears_on_index(client):
 
     r = client.get("/home")
     assert "Kitchen #1" in r.text
-    assert "Garage B" in r.text
     assert "0 items" in r.text
 
 
@@ -105,23 +108,24 @@ def test_index_groups_boxes_by_room_and_location(client):
     client.post("/boxes", data={"name": "Knives", "room_id": str(kitchen_id)})
     client.post("/boxes", data={"name": "Plates", "room_id": str(kitchen_id)})
     client.post("/boxes", data={"name": "Bike tools", "room_id": str(garage_id)})
-    client.post("/boxes", data={"name": "Old paint", "location": "Shed"})
+    # Feedback #78 retired the free-text ``location`` field — boxes
+    # without a room render in the "Unassigned" bucket regardless
+    # of any legacy ``location`` text.
     client.post("/boxes", data={"name": "Mystery box"})
 
     page = client.get("/home").text
 
     # Each bucket type renders at least once.  Two-box rooms show "2
-    # boxes", single-box rooms "1 box", and the unassigned bucket has
-    # the "Unassigned" header.
+    # boxes", single-box rooms "1 box", and the unassigned bucket
+    # has the "Unassigned" header.
     assert "2 boxes" in page  # Kitchen has two
-    assert "1 box" in page    # Garage / Shed / Unassigned each have one
+    assert "1 box" in page    # Garage / Unassigned each have one
     assert "Kitchen" in page
     assert "Garage" in page
-    assert "Shed" in page
     assert "Unassigned" in page
 
-    # All five box names render.
-    for name in ("Knives", "Plates", "Bike tools", "Old paint", "Mystery box"):
+    # All four box names render.
+    for name in ("Knives", "Plates", "Bike tools", "Mystery box"):
         assert name in page, f"{name} missing from grouped index"
 
 

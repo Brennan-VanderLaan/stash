@@ -661,25 +661,30 @@ def test_rooms_on_different_floors_share_same_location_color_pool(client):
 
 # ── Box ↔ room integration ──────────────────────────────────────────
 
-def test_box_create_with_room_id_denormalizes_location(client):
+def test_box_create_with_room_id_links_room_only(client):
+    """Feedback #78: free-text ``boxes.location`` is retired.  When
+    a room is picked, the room link is the sole source of truth —
+    boxes.location stays empty."""
     loc_id, floor_id = _setup_location_with_floor(client)
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
     client.post("/boxes", data={"name": "Tools", "room_id": "1"})
     with client.app_module.db() as conn:
         row = conn.execute("SELECT room_id, location FROM boxes WHERE name = 'Tools'").fetchone()
     assert row["room_id"] == 1
-    assert row["location"] == "Garage"
+    assert (row["location"] or "") == ""
 
 
 def test_box_edit_can_unassign_room(client):
+    """Clearing room_id leaves the box with no room link and an
+    empty location (#78 — no fallback free-text)."""
     loc_id, floor_id = _setup_location_with_floor(client)
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
     client.post("/boxes", data={"name": "Tools", "room_id": "1"})
-    client.post("/boxes/1/edit", data={"name": "Tools", "room_id": "", "location": "shed"})
+    client.post("/boxes/1/edit", data={"name": "Tools", "room_id": ""})
     with client.app_module.db() as conn:
         row = conn.execute("SELECT room_id, location FROM boxes WHERE id = 1").fetchone()
     assert row["room_id"] is None
-    assert row["location"] == "shed"
+    assert (row["location"] or "") == ""
 
 
 def test_box_detail_links_to_floorplan_with_room_anchor(client):
@@ -713,8 +718,10 @@ def test_location_detail_renders_room_overlays(client):
 
 def test_move_box_to_room_endpoint_reassigns(client):
     """Floorplan drag-and-drop hits POST /boxes/{id}/move-to-room. Empty
-    room_id clears the assignment; valid room_id reassigns + denormalizes
-    boxes.location to the room name."""
+    room_id clears the assignment; valid room_id reassigns the box.
+    Feedback #78 retired the free-text ``boxes.location`` field — the
+    room link is now the sole source of truth, so we only assert on
+    room_id."""
     loc_id, floor_id = _setup_location_with_floor(client)
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Garage", "x": 0, "y": 0, "w": 0.3, "h": 0.3})
     client.post(f"/floors/{floor_id}/rooms", data={"name": "Kitchen", "x": 0.4, "y": 0, "w": 0.3, "h": 0.3})
@@ -730,7 +737,6 @@ def test_move_box_to_room_endpoint_reassigns(client):
     with client.app_module.db() as conn:
         row = conn.execute("SELECT room_id, location FROM boxes WHERE id = 1").fetchone()
     assert row["room_id"] == 2
-    assert row["location"] == "Kitchen"
 
     # Empty clears it
     r = client.post(
@@ -1040,13 +1046,12 @@ def test_create_suggested_box_auto_creates_room_when_single_floor(
     assert (box["location"] or "") == ""
 
 
-def test_create_suggested_box_falls_back_to_freetext_with_multi_floor(
-    client,
-):
+def test_create_suggested_box_no_room_when_multi_floor(client):
     """If the tenant has more than one floor, the AI-suggested
-    new room is ambiguous (which floor?).  Fall back to the
-    legacy free-text behaviour: location text on boxes.location,
-    no auto-created room."""
+    new room is ambiguous (which floor?) so we skip the auto-create.
+    Feedback #78 retired the free-text ``boxes.location`` fallback —
+    the box is created without a room link and the user can use the
+    room picker to assign it later."""
     loc_id, floor_id_1 = _setup_location_with_floor(client)
     # Add a second floor to make the auto-create heuristic
     # decline.
@@ -1083,7 +1088,7 @@ def test_create_suggested_box_falls_back_to_freetext_with_multi_floor(
         ).fetchone()
     # No auto-created room.
     assert room is None
-    # Free-text on the box.
+    # Box exists but has no room and no free-text location.
     assert box is not None
     assert box["room_id"] is None
-    assert (box["location"] or "").lower() == "workshop"
+    assert (box["location"] or "") == ""
