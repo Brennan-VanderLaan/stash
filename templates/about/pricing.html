@@ -6,6 +6,11 @@
     One paid tier.  Pay monthly via Stripe, cancel anytime — no
     contract, no surprise upgrades.
   </p>
+  <p class="about-lede-auth text-sm text-muted">
+    <span aria-hidden="true">🔐</span>
+    Sign-in uses Google today; GitHub, Apple, and passwordless
+    email are next — your account migrates when new providers land.
+  </p>
 </section>
 
 {% set free_ai = free_caps.monthly_ai_calls %}
@@ -17,6 +22,14 @@
   <article class="about-plan">
     <h2>Free</h2>
     <p class="about-plan-price">$0 / month</p>
+    {# Primary CTA on each plan card — lets a visitor reading the
+       pricing page click straight through to sign-in instead of
+       backtracking to the landing page.  Both buttons land at
+       /home; oauth2-proxy redirects through Google sign-in for
+       anonymous visitors. #}
+    <a href="/home" class="btn btn-primary btn-block about-plan-cta">
+      Get started — free →
+    </a>
     {% if free_tier_capacity %}
     <p class="about-plan-capacity text-sm">
       {% if free_tier_capacity.is_full %}
@@ -73,6 +86,12 @@
   <article class="about-plan about-plan-pro">
     <h2>Pro</h2>
     <p class="about-plan-price">{{ pro_price_display }} / month</p>
+    {# Pro CTA: same destination as Free (sign-in flow); once
+       inside, the user upgrades from /usage.  Calling out the
+       two-step path keeps the button honest. #}
+    <a href="/home" class="btn btn-primary btn-block about-plan-cta">
+      Get started — upgrade from /usage →
+    </a>
     <ul>
       <li>
         <strong>{{ (pro_ai // free_ai) }}× the AI assistance.</strong>

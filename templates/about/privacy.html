@@ -26,7 +26,8 @@
   <ul>
     <li>
       <strong>Identity:</strong> the email from your OAuth provider
-      (Google by default), tenant membership, role.
+      (Google today; GitHub, Apple, and passwordless email are on
+      the roadmap), tenant membership, role.
     </li>
     <li>
       <strong>Inventory content:</strong> box / item names, notes,
@@ -117,7 +118,9 @@
   <h2>Cookies</h2>
   <p>
     We use a single cookie set by our OAuth identity proxy
-    (Google sign-in session) and an optional <code>active_tenant</code>
+    (currently a Google sign-in session; will become a generic
+    OAuth-provider cookie as we add GitHub, Apple, and
+    passwordless email) plus an optional <code>active_tenant</code>
     cookie for multi-tenant users.  No third-party advertising or
     analytics cookies.  We do not sell or share data with
     advertisers, period.

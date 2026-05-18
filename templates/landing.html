@@ -47,7 +47,7 @@
   </p>
   <div class="landing-cta-row">
     <a href="/home" class="landing-cta-primary">
-      Open your stash →
+      Get started — free →
     </a>
     <a href="/about" class="landing-cta-secondary">
       How it works
@@ -56,6 +56,12 @@
   <p class="landing-cta-note text-sm text-muted">
     Free plan available · Pro is {{ pro_price_display }}/mo ·
     <a href="/about/pricing">See pricing</a>
+  </p>
+  <p class="landing-cta-auth text-sm text-muted">
+    <span aria-hidden="true">🔐</span>
+    Sign-in uses Google today.
+    <strong>GitHub, Apple, and passwordless email are next</strong> —
+    your account migrates seamlessly when new providers land.
   </p>
   {% if free_tier_capacity %}
   <p class="landing-cta-note text-sm text-muted">
@@ -158,12 +164,18 @@
 <section class="landing-final-cta">
   <h2>Ready to stop losing things?</h2>
   <p>
-    Sign in with Google.  You start on the free plan; upgrade
-    later from <code>/usage</code> if you want the bigger
-    quotas.
+    Get started in under a minute.  You'll land on the free
+    plan; upgrade later from <code>/usage</code> if you want
+    the bigger quotas.
   </p>
   <a href="/home" class="landing-cta-primary">
-    Open your stash →
+    Get started →
   </a>
+  <p class="landing-cta-auth text-sm text-muted">
+    <span aria-hidden="true">🔐</span>
+    Sign-in uses Google today.  GitHub, Apple, and passwordless
+    email are on the immediate roadmap — your account migrates
+    when they land.
+  </p>
 </section>
 {% endblock %}

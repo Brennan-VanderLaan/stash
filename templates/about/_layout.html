@@ -68,14 +68,16 @@
       <span class="about-nav-toggle-icon-open" aria-hidden="true">☰</span>
       <span class="about-nav-toggle-icon-close" aria-hidden="true">✕</span>
     </label>
-    {# Right-edge action.  Default is "Sign in" for anonymous
-       visitors on the public /about/* pages, but pages that
-       render for a *signed-in* visitor with no tenant access
-       (signup.html) override this block to a Sign-out link.
-       Stays in the top row at all viewport sizes — primary CTA
-       on mobile shouldn't hide behind a menu. #}
+    {# Right-edge action.  "Get started" reads better than "Sign in"
+       for first-time visitors who don't have an account yet (and
+       still works for returning users who get auto-signed-in via
+       the auth proxy on click-through).  Pages rendering for a
+       signed-in user with no tenant access (signup.html) override
+       this block to a Sign-out link.  Stays in the top row at
+       all viewport sizes so the primary CTA doesn't hide behind
+       a mobile menu. #}
     {% block header_action %}
-    <a href="/home" class="about-signin">Sign in →</a>
+    <a href="/home" class="about-signin">Get started →</a>
     {% endblock %}
     {# Nav comes last in source order so the mobile drawer (set
        to ``flex-basis: 100%`` via CSS) wraps to a new row beneath

@@ -311,3 +311,60 @@ def test_about_pages_hide_feedback_widget(tmp_path, monkeypatch):
     with TestClient(app_mod.app) as c:
         page = c.get("/about").text
     assert 'id="feedback-launcher"' not in page
+
+
+def test_landing_cta_reads_get_started_not_open_your_stash(
+    tmp_path, monkeypatch,
+):
+    """Landing page CTA was "Open your stash →" — confusing for
+    first-time visitors who do not have a stash yet.  Now reads
+    "Get started — free →" (hero) and "Get started →" (final CTA)."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        page = c.get("/").text
+    assert "Get started" in page
+    # Old copy must be gone.
+    assert "Open your stash" not in page
+
+
+def test_landing_announces_provider_expansion(tmp_path, monkeypatch):
+    """Landing + pricing pages tell visitors that Google is the
+    current sign-in path AND that more providers are coming.
+    Lets a prospect choose to sign up now without feeling locked
+    into Google forever."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        landing = c.get("/").text
+        pricing = c.get("/about/pricing").text
+    for page in (landing, pricing):
+        assert "Google" in page
+        # Mentions the roadmap providers — at least one is called
+        # out so the visitor knows expansion is real.
+        roadmap = ("GitHub" in page or "Apple" in page
+                   or "passwordless email" in page)
+        assert roadmap, "auth-expansion roadmap not mentioned"
+
+
+def test_pricing_plan_cards_have_get_started_ctas(tmp_path, monkeypatch):
+    """Each plan card on /about/pricing carries an explicit CTA so
+    a visitor reading pricing can click through to sign-in without
+    backtracking to the landing page."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about/pricing").text
+    # Free card CTA.
+    assert "Get started — free" in page
+    # Pro card CTA (calls out the upgrade-from-/usage path).
+    assert "upgrade from /usage" in page
+
+
+def test_about_header_cta_says_get_started(tmp_path, monkeypatch):
+    """The top-right link on every /about/* page renames from
+    "Sign in" to "Get started" — matches the rest of the public
+    surface and reads better for first-time visitors."""
+    app_mod = _bootstrap_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as c:
+        page = c.get("/about").text
+    assert "Get started →</a>" in page
+    assert "Sign in →</a>" not in page
+
