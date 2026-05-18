@@ -28,6 +28,7 @@ from dao import ingest_jobs as dao_ingest_jobs
 from dao import invites as dao_invites
 from dao import items as dao_items
 from dao import locations as dao_locations
+from dao import marketing as dao_marketing
 from dao import oauth as dao_oauth
 from dao import onboarding as dao_onboarding
 from dao import pending_items as dao_pending
@@ -621,6 +622,11 @@ _AUTH_BYPASS_EXACT = frozenset((
     # so visitors land here without an oauth2-proxy redirect to
     # Google sign-in.
     "/encircle-alternative",
+    # First-party marketing analytics ingest.  Anonymous public-page
+    # visitors POST pageview / leave events here from the inline
+    # tracker script (no third-party data shipping).  See
+    # dao/marketing.py + the GET /admin marketing widget.
+    "/marketing/track",
 ))
 
 # Prefix-based bypass: RFC 9728 protected-resource metadata can
@@ -1704,6 +1710,53 @@ def migrate_db():
             ") "
             "WHERE stripe_customer_id IS NOT NULL "
             "  AND billing_owner_email IS NULL",
+        )
+        # Marketing analytics for the public landing surface.  First-
+        # party, no third-party shipping.  ``marketing_sessions``
+        # holds one row per anonymous visitor (keyed by a stash-owned
+        # cookie) with the landing path + referrer; ``marketing_events``
+        # is the per-pageview + per-leave stream that powers
+        # time-on-page and the funnel breakdown.
+        #
+        # When a session later converts (the user makes it through
+        # /signup and creates a tenant), ``converted_at`` +
+        # ``converted_tenant_id`` get stamped so the operator can
+        # see end-to-end conversion rates per landing page.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS marketing_sessions ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  session_id TEXT UNIQUE NOT NULL,"
+            "  first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+            "  last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+            "  landing_path TEXT,"
+            "  referrer TEXT,"
+            "  user_agent TEXT,"
+            "  viewport_w INTEGER,"
+            "  viewport_h INTEGER,"
+            "  pageviews INTEGER DEFAULT 0,"
+            "  total_duration_ms INTEGER DEFAULT 0,"
+            "  reached_signup_at TEXT,"
+            "  converted_at TEXT,"
+            "  converted_tenant_id INTEGER"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS marketing_events ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  session_id TEXT NOT NULL,"
+            "  event_type TEXT NOT NULL,"
+            "  path TEXT,"
+            "  duration_ms INTEGER,"
+            "  created_at TEXT DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_marketing_events_session "
+            "ON marketing_events(session_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_marketing_sessions_first_seen "
+            "ON marketing_sessions(first_seen_at)"
         )
         # Audit session start timestamp.  The Tinder-style swipe UI
         # at /boxes/{id}/audit lets a user pause + resume — we know
@@ -2876,6 +2929,89 @@ def robots_txt():
     )
 
 
+_MARKETING_COOKIE = "stash_mkt"
+_MARKETING_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+
+
+def _read_marketing_session_id(request: Request) -> str:
+    """Read the first-party marketing session cookie if present.
+    The tracker script keeps this in sync with localStorage so
+    both server-side (POST /signup conversion) and client-side
+    (track events) read the same id."""
+    return request.cookies.get(_MARKETING_COOKIE, "") or ""
+
+
+@app.post("/marketing/track")
+async def marketing_track(request: Request):
+    """Ingest pageview / leave events from the inline tracker
+    script on public pages.  No auth; the auth-bypass list lets
+    anonymous visitors POST here.
+
+    Body is JSON.  Two event shapes:
+
+    * ``{"event": "pageview", "session_id": ..., "path": ...,
+        "referrer": ..., "viewport_w": ..., "viewport_h": ...}``
+    * ``{"event": "leave", "session_id": ..., "path": ...,
+        "duration_ms": ...}``
+
+    Returns 204 unconditionally — sendBeacon doesn't read the
+    response body and we don't want a flaky network to surface
+    as a console error on the marketing page.  Bad payloads
+    are silently dropped (operator's interest is real visitors,
+    not parser fuzzing)."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=204)
+    if not isinstance(payload, dict):
+        return Response(status_code=204)
+    event = payload.get("event")
+    session_id = (payload.get("session_id") or "").strip()
+    path = (payload.get("path") or "").strip()
+    if not session_id or not path:
+        return Response(status_code=204)
+    # Defense in depth — DAO also filters via is_tracked_path.
+    if not dao_marketing.is_tracked_path(path):
+        return Response(status_code=204)
+    try:
+        if event == "pageview":
+            dao_marketing.record_pageview(
+                session_id,
+                path=path,
+                referrer=(payload.get("referrer") or "")[:512],
+                user_agent=(request.headers.get("user-agent") or "")[:512],
+                viewport_w=_safe_int(payload.get("viewport_w")),
+                viewport_h=_safe_int(payload.get("viewport_h")),
+            )
+        elif event == "leave":
+            dao_marketing.record_leave(
+                session_id,
+                path=path,
+                duration_ms=_safe_int(payload.get("duration_ms")) or 0,
+            )
+    except Exception as exc:
+        # Marketing analytics shouldn't 500 the request that's just
+        # trying to record a pageview — log and swallow.
+        _log_route_warn("marketing.track_failed", error=str(exc))
+    return Response(status_code=204)
+
+
+def _safe_int(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_route_warn(event: str, **kv) -> None:
+    """Tiny wrapper so the marketing-track failure path doesn't
+    have to know the obs module shape.  ``obs.get_logger`` is
+    already imported at module top."""
+    obs.get_logger("marketing").warning(
+        event + " " + " ".join(f"{k}={v}" for k, v in kv.items())
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def public_landing(request: Request):
     """Public marketing landing — what an unauthenticated visitor
@@ -2925,6 +3061,22 @@ def signup_page(request: Request, name_error: str = ""):
         # through; bounce them home.
         return RedirectResponse("/home", status_code=303)
     capacity = dao_quotas.free_tier_capacity()
+    # Server-side signup-reached stamp (defense in depth — the
+    # tracker JS POSTs the same thing as a pageview, but a
+    # JS-disabled visitor still gets attributed to the funnel
+    # bucket on this render).
+    mkt_session = _read_marketing_session_id(request)
+    if mkt_session:
+        try:
+            dao_marketing.record_pageview(
+                mkt_session, path="/signup",
+                referrer=request.headers.get("referer", "")[:512],
+                user_agent=request.headers.get("user-agent", "")[:512],
+            )
+        except Exception as exc:
+            _log_route_warn(
+                "marketing.signup_stamp_failed", error=str(exc),
+            )
     return templates.TemplateResponse(
         request, "signup.html",
         {
@@ -3031,6 +3183,24 @@ def signup_submit(
             metadata={"tenant_name": name, "ip": client_ip},
         )
         conn.commit()
+    # Marketing conversion link.  The tracker cookie was set on
+    # first landing-page view (or first time the visitor hit any
+    # tracked public path) — if it's still present, stamp the
+    # marketing session with the just-created tenant id so the
+    # /admin funnel widget can show "landed → reached signup →
+    # converted" rates honestly.  Cookie absent = no conversion
+    # link (e.g. user disabled JS or arrived via deep link to
+    # /signup), which is fine — the tenant still gets created
+    # without analytics attribution.
+    mkt_session = _read_marketing_session_id(request)
+    if mkt_session:
+        try:
+            dao_marketing.record_conversion(mkt_session, tenant_id)
+        except Exception as exc:
+            _log_route_warn(
+                "marketing.conversion_failed", error=str(exc),
+                tenant_id=tenant_id,
+            )
     return RedirectResponse("/home", status_code=303)
 
 
@@ -7993,6 +8163,12 @@ def admin_dashboard(
     oauth_clients = dao_oauth.list_clients(actor)
     feedback_queue = dao_feedback.list_for_operator(limit=50)
     feedback_counts = dao_feedback.queue_counts()
+    # Marketing analytics — 30-day window for the funnel + the most
+    # recent 15 sessions.  All operator-only (each query inside
+    # the DAO calls require_operator).
+    marketing_funnel = dao_marketing.funnel_breakdown(actor, days=30)
+    marketing_recent = dao_marketing.recent_sessions(actor, limit=15)
+    marketing_per_page = dao_marketing.per_page_stats(actor, days=30)
     try:
         dao_backups._b2_config()
         b2_configured = True
@@ -8010,6 +8186,9 @@ def admin_dashboard(
             "oauth_clients": oauth_clients,
             "feedback_queue": feedback_queue,
             "feedback_counts": feedback_counts,
+            "marketing_funnel": marketing_funnel,
+            "marketing_recent": marketing_recent,
+            "marketing_per_page": marketing_per_page,
             # When set, the kanban renders a per-card "open on
             # staging" link that rewrites the source URL's host
             # to point at this value.  See verification-loop

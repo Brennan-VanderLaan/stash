@@ -507,6 +507,126 @@ header h1 a { color: var(--accent); text-decoration: none; }
   to { transform: rotate(360deg); }
 }
 
+/* === Marketing funnel widget (admin /admin#marketing) =======
+   Shows the 30-day funnel as a row of stat cards (one per
+   step), followed by a per-page interest table and a recent-
+   sessions list.  Data is first-party, consent-gated; see
+   dao/marketing.py + static/marketing-track.js.
+*/
+.admin-funnel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.7rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.admin-funnel-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem 0.85rem;
+}
+.admin-funnel-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+.admin-funnel-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+.admin-funnel-sub {
+  margin-top: 0.2rem;
+}
+.admin-funnel-cell-good {
+  border-left: 4px solid var(--success, #5ec47a);
+}
+.admin-funnel-cell-warn {
+  border-left: 4px solid var(--warning, #d99c4d);
+}
+.admin-funnel-cell-attention {
+  background: color-mix(in srgb, var(--warning, #d99c4d) 10%, var(--surface));
+}
+.admin-funnel-tag {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.admin-funnel-tag-good {
+  background: color-mix(in srgb, var(--success, #5ec47a) 18%, var(--surface));
+  border-color: var(--success, #5ec47a);
+  color: var(--text);
+}
+.admin-funnel-tag-warn {
+  background: color-mix(in srgb, var(--warning, #d99c4d) 18%, var(--surface));
+  border-color: var(--warning, #d99c4d);
+  color: var(--text);
+}
+.admin-subsection-title {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+/* === Consent banner =========================================
+   Anchored to the bottom of the viewport on first visit to a
+   public-marketing page.  ``position: fixed`` so it sits on top
+   of page content; slide-up + fade-in transition handled by the
+   ``consent-banner-visible`` class the JS adds after one rAF.
+   Removed from the DOM entirely after the user clicks Accept
+   or Decline.
+*/
+.consent-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1rem + var(--safe-bottom, 0px));
+  transform: translate(-50%, calc(100% + 1rem));
+  z-index: 9001;
+  width: min(560px, calc(100vw - 1.5rem));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease-out;
+}
+.consent-banner.consent-banner-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+.consent-banner-body {
+  padding: 0.85rem 1rem 0.95rem;
+}
+.consent-banner-title {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+  color: var(--accent);
+}
+.consent-banner-copy {
+  margin: 0 0 0.65rem;
+  font-size: 0.88rem;
+  color: var(--text);
+  line-height: 1.45;
+}
+.consent-banner-copy a {
+  color: var(--accent);
+}
+.consent-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
 /* === First-run "Get started" card ===========================
    Three-step checklist on /home for new tenants — see
    dao/onboarding.py for the state derivation.  Each step has a

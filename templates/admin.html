@@ -771,6 +771,150 @@
 </section>
 {% endif %}
 
+{# ── Marketing analytics (first-party page tracking) ────────
+   Shows the funnel + recent sessions over a 30-day window.
+   Driven by the consent-gated tracker on the public-marketing
+   surfaces (landing, /about/*, /encircle-alternative, /signup).
+   No third-party shipping; consent disclosed on /about/privacy. #}
+{% if marketing_funnel %}
+<section class="admin-section" id="marketing">
+  <header class="admin-section-head">
+    <h2>Marketing funnel (last {{ marketing_funnel.days }} days)</h2>
+  </header>
+  <p class="text-sm text-muted">
+    First-party page-view tracking on the public marketing
+    surface.  Each step is a strict subset of the one above —
+    landed → visited pricing → reached the signup tenant-name
+    step → actually created a tenant.  The "Bailed at signup"
+    column is the one to watch when running an ad campaign:
+    that's the number of people who got <em>all the way</em>
+    to the tenant-name field and then closed the tab.
+  </p>
+  <div class="admin-funnel-grid">
+    <div class="admin-funnel-cell">
+      <div class="admin-funnel-label">Landed</div>
+      <div class="admin-funnel-value">{{ marketing_funnel.landed }}</div>
+      <div class="admin-funnel-sub text-sm text-muted">
+        unique sessions
+      </div>
+    </div>
+    <div class="admin-funnel-cell">
+      <div class="admin-funnel-label">Visited pricing</div>
+      <div class="admin-funnel-value">{{ marketing_funnel.visited_pricing }}</div>
+      <div class="admin-funnel-sub text-sm text-muted">
+        {% if marketing_funnel.landed %}
+          {{ ((marketing_funnel.visited_pricing / marketing_funnel.landed) * 100) | round(1) }}% of landed
+        {% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="admin-funnel-cell">
+      <div class="admin-funnel-label">Reached /signup</div>
+      <div class="admin-funnel-value">{{ marketing_funnel.reached_signup }}</div>
+      <div class="admin-funnel-sub text-sm text-muted">
+        {% if marketing_funnel.landed %}
+          {{ ((marketing_funnel.reached_signup / marketing_funnel.landed) * 100) | round(1) }}% of landed
+        {% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="admin-funnel-cell admin-funnel-cell-warn
+                {% if marketing_funnel.signup_dropoff %}admin-funnel-cell-attention{% endif %}">
+      <div class="admin-funnel-label">Bailed at signup</div>
+      <div class="admin-funnel-value">{{ marketing_funnel.signup_dropoff }}</div>
+      <div class="admin-funnel-sub text-sm text-muted">
+        reached tenant-name, didn't submit
+      </div>
+    </div>
+    <div class="admin-funnel-cell admin-funnel-cell-good">
+      <div class="admin-funnel-label">Converted</div>
+      <div class="admin-funnel-value">{{ marketing_funnel.converted }}</div>
+      <div class="admin-funnel-sub text-sm text-muted">
+        {% if marketing_funnel.landed %}
+          {{ ((marketing_funnel.converted / marketing_funnel.landed) * 100) | round(1) }}% of landed
+        {% else %}—{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if marketing_per_page %}
+  <h3 class="admin-subsection-title">Page interest</h3>
+  <div class="admin-tenants-tbl-wrap">
+    <table class="admin-tenants-tbl">
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th>Views</th>
+          <th>Distinct visitors</th>
+          <th>Avg dwell time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in marketing_per_page %}
+        <tr>
+          <td><code>{{ p.path }}</code></td>
+          <td>{{ p.views }}</td>
+          <td>{{ p.distinct_visitors }}</td>
+          <td>
+            {% if p.avg_duration_ms %}
+              {{ (p.avg_duration_ms / 1000) | round(1) }}s
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if marketing_recent %}
+  <h3 class="admin-subsection-title">Recent sessions ({{ marketing_recent | length }})</h3>
+  <div class="admin-tenants-tbl-wrap">
+    <table class="admin-tenants-tbl">
+      <thead>
+        <tr>
+          <th>First seen</th>
+          <th>Landed on</th>
+          <th>Pages</th>
+          <th>Total time</th>
+          <th>Outcome</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in marketing_recent %}
+        <tr>
+          <td class="text-sm">{{ s.first_seen_at }}</td>
+          <td><code>{{ s.landing_path }}</code></td>
+          <td>{{ s.distinct_paths }}</td>
+          <td>
+            {% if s.total_duration_ms %}
+              {{ (s.total_duration_ms / 1000) | round | int }}s
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if s.converted_at %}
+              <span class="admin-funnel-tag admin-funnel-tag-good">
+                ✓ converted
+              </span>
+            {% elif s.reached_signup_at %}
+              <span class="admin-funnel-tag admin-funnel-tag-warn">
+                bailed at signup
+              </span>
+            {% elif s.distinct_paths == 1 %}
+              <span class="admin-funnel-tag">single-page bounce</span>
+            {% else %}
+              <span class="admin-funnel-tag">browsed</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
 {# ── Public-leaderboard handles ─────────────────────────────── #}
 <section class="admin-section" id="handles">
   <header class="admin-section-head">

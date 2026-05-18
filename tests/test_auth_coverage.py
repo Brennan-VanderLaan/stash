@@ -235,6 +235,13 @@ def test_auth_bypass_paths_pinned(tmp_path, monkeypatch):
         # /encircle-alternative route + the test_encircle_alternative
         # module for the full discovery-only-via-ads contract.
         "/encircle-alternative",
+        # First-party marketing-analytics ingest.  Anonymous public-
+        # page visitors POST pageview / leave events here from the
+        # inline tracker script (consent-gated client-side).  No
+        # tenant data; the route validates payload shape + path
+        # before writing, dropping anything off the public surface
+        # silently.  See dao/marketing.py.
+        "/marketing/track",
     ))
     # /about/ added: Stripe + similar KYC partners require the
     # business name, refund policy, sub-processor list, etc. to be

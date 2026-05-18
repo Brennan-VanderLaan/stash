@@ -105,5 +105,10 @@
       <a href="/about/refunds">Refunds</a>
     </nav>
   </footer>
+  {# First-party page-analytics tracker + consent banner.  Lives
+     on every public surface that extends this layout
+     (/about/* + landing.html which reuses this shell).  See
+     static/marketing-track.js for the consent + cookie logic. #}
+  <script src="/static/marketing-track.js" defer></script>
 </body>
 </html>

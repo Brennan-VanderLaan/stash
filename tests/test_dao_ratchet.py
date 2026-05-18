@@ -50,7 +50,12 @@ from pathlib import Path
 # pre-existing Pro tenants a billing owner (oldest maintainer by
 # joined_at).  Pure migration code, lives in migrate_db, can't
 # meaningfully be DAO-ified.
-APP_CONN_EXECUTE_CEILING = 71  # +1 — billing_owner_email backfill in migrate_db
+# Bumped 71 → 75 on 2026-05-18 for the marketing-analytics
+# schema migrations: 2 CREATE TABLE + 2 CREATE INDEX statements
+# in migrate_db that set up ``marketing_sessions`` +
+# ``marketing_events``.  All four are pure schema; the runtime
+# event-write surface lives in dao/marketing.py.
+APP_CONN_EXECUTE_CEILING = 75  # +4 — marketing tables + indexes
 
 
 def test_app_py_conn_execute_ratchet():
