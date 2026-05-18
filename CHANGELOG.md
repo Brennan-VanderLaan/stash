@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.53.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.52.0...v1.53.0) (2026-05-18)
+
+
+### Features
+
+* **marketing:** no-cookie analytics via hashed bucket id, drop consent banner ([7d904c8](https://github.com/Brennan-VanderLaan/stash/commit/7d904c805ba2169b53d719624d36cf32b6a7375c))
+
+
+### Bug Fixes
+
+* **boxes:** retire free-text location field — room picker only ([7979163](https://github.com/Brennan-VanderLaan/stash/commit/79791634f2137d58e565c2c8cdca364549afefc5))
+* **rooms:** rescue orphan rooms + auto-link AI-suggested new rooms ([864040d](https://github.com/Brennan-VanderLaan/stash/commit/864040d5b82355dc88c2fc79e6cdb92e434e0fa3))
+
 ## [1.52.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.2...v1.52.0) (2026-05-18)
 
 
