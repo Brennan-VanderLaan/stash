@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.51.2](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.1...v1.51.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **billing:** gate Stripe PII access to a single billing owner per tenant ([64e2922](https://github.com/Brennan-VanderLaan/stash/commit/64e29221222fa129899f0a464202ed57b402a379))
+* **leaderboard:** stars cut off — rain container trapped inside &lt;main&gt; ([b0da6ac](https://github.com/Brennan-VanderLaan/stash/commit/b0da6ac1b9a100a94d7897cb2ef7b021091b14a2))
+* **tours:** Replay buttons for box/floor tours dead-linked to /boxes/ ([eac1553](https://github.com/Brennan-VanderLaan/stash/commit/eac15530b450e6bb38684d003aad2a6997d36d61))
+
 ## [1.51.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.0...v1.51.1) (2026-05-18)
 
 
