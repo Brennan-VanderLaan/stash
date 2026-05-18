@@ -57,6 +57,23 @@ def list_with_counts(actor: Actor) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def first_id(actor: Actor) -> int | None:
+    """Lowest box id in the actor's tenant, or ``None`` if there
+    aren't any.  Used by the /usage tour catalogue to build a
+    "Replay" deep link to a real ``/boxes/<id>`` page (feedback
+    #74) — the catalogue's bare ``/boxes/`` page entry has no
+    GET route on its own."""
+    if actor.tenant_id is None:
+        return None
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM boxes WHERE tenant_id = ? "
+            "ORDER BY id ASC LIMIT 1",
+            (actor.tenant_id,),
+        ).fetchone()
+    return row["id"] if row else None
+
+
 def get_by_id(actor: Actor, box_id: int) -> dict:
     """A single box scoped to the actor's tenant.  404s if the row
     doesn't exist OR belongs to a different tenant — never leaks the

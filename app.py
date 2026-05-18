@@ -5861,6 +5861,43 @@ def _render_usage_page(
     months = dao_usage.monthly_summary(actor.tenant_id, months_back=12)
     tour_email = _tour_actor_email(actor)
     tour_catalogue = dao_tours.catalogue()
+    # Resolve tour pages to real deep-links for the Replay buttons.
+    # Some tour pages in the catalogue (e.g. ``/boxes/``,
+    # ``/locations/``) are bare-prefix landings with no actual GET
+    # route — they're meant for "auto-fire on /boxes/<id> or
+    # /locations/<id>".  Without resolution, clicking Replay 404s.
+    # Feedback #74: "The working with a box tour takes me to a
+    # broken url (/boxes became /home)."
+    #
+    # Replace each parameterised page with a concrete URL pointing
+    # at the actor's first box / first location.  Tours with no
+    # available target get ``replay_disabled_reason`` set so the
+    # template can render a greyed-out hint instead of a dead link.
+    first_box_id = dao_boxes.first_id(actor)
+    first_location_id = dao_locations.first_id(actor)
+    for t in tour_catalogue:
+        if t["page"] == "/boxes/":
+            if first_box_id:
+                t["replay_url"] = f"/boxes/{first_box_id}?tour={t['feature']}"
+            else:
+                t["replay_disabled_reason"] = (
+                    "Create a box first — the tour targets live on the "
+                    "box detail page."
+                )
+        elif t["page"] == "/locations/":
+            if first_location_id:
+                t["replay_url"] = (
+                    f"/locations/{first_location_id}?tour={t['feature']}"
+                )
+            else:
+                t["replay_disabled_reason"] = (
+                    "Set up a location first — the tour targets live on "
+                    "the location floorplan page."
+                )
+        else:
+            # Concrete page like /home or /labels — works as-is.
+            sep = "&" if "?" in t["page"] else "?"
+            t["replay_url"] = f"{t['page']}{sep}tour={t['feature']}"
     tour_seen = dao_tours.state_for_actor(tour_email)
     billing_enabled = dao_billing.is_configured()
     subscription = (

@@ -49,6 +49,22 @@ def list_with_room_counts(actor: Actor) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def first_id(actor: Actor) -> int | None:
+    """Lowest location id in the actor's tenant, or ``None`` if
+    there aren't any.  Used by the /usage tour catalogue to
+    build a "Replay" deep link to a real ``/locations/<id>``
+    page (feedback #74)."""
+    if actor.tenant_id is None:
+        return None
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM locations WHERE tenant_id = ? "
+            "ORDER BY id ASC LIMIT 1",
+            (actor.tenant_id,),
+        ).fetchone()
+    return row["id"] if row else None
+
+
 def get_by_id(actor: Actor, location_id: int) -> dict:
     if actor.tenant_id is None:
         raise NotFoundError(f"location {location_id}")

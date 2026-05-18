@@ -279,15 +279,24 @@
           {% endif %}
         </span>
       </div>
-      {# Replay links to the tour's home page with ``?tour=<feature>``;
-         the overlay JS on that page reads the query param and auto-
-         plays.  Old behaviour was a JS-only trigger that fired the
-         tour in-place on /usage — every target selector missed
-         because the elements live on other pages. #}
-      <a class="btn btn-secondary btn-sm"
-         href="{{ t.page }}{% if '?' in t.page %}&{% else %}?{% endif %}tour={{ t.feature }}">
+      {# Replay links to a CONCRETE deep link the route handler
+         resolves at render time (``t.replay_url``); the overlay JS
+         on that page reads the ``?tour=<feature>`` query param and
+         auto-plays.  Bare-prefix pages like ``/boxes/`` /
+         ``/locations/`` got resolved to a real ``/boxes/<id>`` /
+         ``/locations/<id>`` so Replay doesn't 404 (feedback #74).
+         When the tenant has no boxes / locations yet,
+         ``replay_disabled_reason`` carries the explanation. #}
+      {% if t.replay_url %}
+      <a class="btn btn-secondary btn-sm" href="{{ t.replay_url }}">
         {{ _("Replay") }}
       </a>
+      {% else %}
+      <button type="button" class="btn btn-secondary btn-sm" disabled
+              title="{{ t.replay_disabled_reason }}">
+        {{ _("Replay") }}
+      </button>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
