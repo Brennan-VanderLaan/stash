@@ -17,11 +17,13 @@ from __future__ import annotations
 import json
 
 
-def _track(client, payload):
-    """POST a marketing event.  Returns the raw response."""
+def _track_leave(client, *, path, duration_ms):
+    """POST a leave beacon.  Returns the raw response.  No
+    session id — the server derives the anonymous bucket id
+    from the request envelope (IP+UA+KEK+time window)."""
     return client.post(
         "/marketing/track",
-        content=json.dumps(payload),
+        content=json.dumps({"path": path, "duration_ms": duration_ms}),
         headers={"Content-Type": "application/json"},
     )
 
@@ -136,98 +138,148 @@ def test_record_conversion_links_tenant_to_session(client):
 # ── POST /marketing/track endpoint ─────────────────────────────────
 
 
-def test_track_endpoint_records_pageview(client):
-    r = _track(client, {
-        "event": "pageview",
-        "session_id": "ep-1",
-        "path": "/",
-        "referrer": "https://news.example",
-        "viewport_w": 1200, "viewport_h": 800,
-    })
+def test_get_landing_records_pageview_server_side(client):
+    """GET / fires a server-side pageview into marketing_sessions
+    under the anonymous bucket id — no JS / no client involvement
+    required.  Demonstrates the bucket id is computed in the
+    route handler and persisted via the DAO."""
+    r = client.get("/")
+    assert r.status_code == 200
+    with client.app_module.db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM marketing_sessions "
+            "WHERE session_id LIKE 'anon-%' AND landing_path = '/'",
+        ).fetchone()["n"]
+    assert n >= 1
+
+
+def test_track_endpoint_records_leave_beacon(client):
+    """The /marketing/track endpoint accepts a leave beacon with
+    just ``{path, duration_ms}`` and uses the server-derived
+    bucket id to link it to the pageview."""
+    # First, register a pageview (so the session row exists).
+    client.get("/")
+    r = _track_leave(client, path="/", duration_ms=4200)
     assert r.status_code == 204
     with client.app_module.db() as conn:
-        sess = conn.execute(
-            "SELECT * FROM marketing_sessions WHERE session_id = ?",
-            ("ep-1",),
-        ).fetchone()
-    assert sess is not None
-    assert sess["landing_path"] == "/"
+        events = conn.execute(
+            "SELECT event_type, duration_ms FROM marketing_events "
+            "WHERE event_type = 'leave' AND path = '/'",
+        ).fetchall()
+    assert any(e["duration_ms"] == 4200 for e in events)
 
 
 def test_track_endpoint_drops_garbage_payloads(client):
-    """Bad JSON, missing fields, unknown events — all silently 204
-    so a flaky client doesn't surface as a console error on the
-    marketing page."""
-    r = _track(client, {})
+    """Bad JSON, missing fields — all silently 204 so a flaky
+    client doesn't surface as a console error on the marketing
+    page."""
+    r = client.post(
+        "/marketing/track",
+        content="not json at all",
+        headers={"Content-Type": "application/json"},
+    )
     assert r.status_code == 204
-    r = _track(client, {"event": "pageview"})  # missing session_id + path
+    r = client.post(
+        "/marketing/track",
+        content=json.dumps({}),  # missing path
+        headers={"Content-Type": "application/json"},
+    )
     assert r.status_code == 204
-    r = _track(client, {
-        "event": "bogus", "session_id": "x", "path": "/",
-    })
+    r = client.post(
+        "/marketing/track",
+        content=json.dumps({"path": "/random-untracked"}),
+        headers={"Content-Type": "application/json"},
+    )
     assert r.status_code == 204
     with client.app_module.db() as conn:
         n = conn.execute(
-            "SELECT COUNT(*) AS n FROM marketing_events",
+            "SELECT COUNT(*) AS n FROM marketing_events "
+            "WHERE event_type = 'leave' AND path = '/random-untracked'",
         ).fetchone()["n"]
     assert n == 0
 
 
 def test_track_endpoint_bypasses_auth(client):
-    """The bypass list lets anonymous visitors POST to /marketing/track
-    without going through Google sign-in.  Hit the endpoint with no
-    auth context (TestClient default) and expect 204, not 401/403."""
-    r = client.post(
-        "/marketing/track",
-        content=json.dumps({
-            "event": "pageview", "session_id": "anon-1", "path": "/",
-        }),
-        headers={"Content-Type": "application/json"},
-    )
+    """The bypass list lets anonymous visitors POST to
+    /marketing/track without going through Google sign-in."""
+    r = _track_leave(client, path="/", duration_ms=1000)
     assert r.status_code == 204
+
+
+def test_marketing_bucket_stable_within_window(client):
+    """Two requests from the same client (same IP+UA) within the
+    same 30-min window should produce the same bucket id.
+    Without this, cross-page funnel attribution wouldn't work."""
+    from app import _marketing_bucket_id
+    from starlette.requests import Request as StarletteRequest
+
+    class FakeClient:
+        host = "203.0.113.7"
+
+    def make_request():
+        scope = {
+            "type": "http",
+            "headers": [
+                (b"user-agent", b"test-ua/1.0"),
+                (b"x-forwarded-for", b"203.0.113.7"),
+            ],
+            "client": ("203.0.113.7", 12345),
+        }
+        return StarletteRequest(scope)
+
+    a = _marketing_bucket_id(make_request())
+    b = _marketing_bucket_id(make_request())
+    assert a == b
+    assert a.startswith("anon-")
 
 
 # ── Signup → conversion link ───────────────────────────────────────
 
 
 def test_signup_success_stamps_marketing_conversion(client):
-    """When the user submits the tenant-name form on /signup and a
-    stash_mkt cookie is present, the marketing session gets
-    converted_at + converted_tenant_id stamped."""
-    # Pre-create the marketing session as if the visitor had
-    # landed on / and clicked through to /signup.
-    from dao import marketing as dao_marketing
-    dao_marketing.record_pageview("signup-sess", path="/")
-    dao_marketing.record_pageview("signup-sess", path="/signup")
-    # Use a fresh email that doesn't yet have a tenant.  The
-    # test client fixture already has a tenant for client.test_email
-    # — for this test we want the actor to be tenantless so the
-    # signup path is allowed.  Easiest: signup with a different
-    # email via X-Forwarded-Email header.
+    """When a visitor walks the funnel — landed on /, hit /signup,
+    submitted the tenant-name form — the marketing session gets
+    converted_at + converted_tenant_id stamped under the
+    anonymous bucket id.  No cookies in play; the bucket is
+    re-derived on each request from the same IP+UA+window."""
+    # Use a fresh email + IP so the bucket is unambiguously this
+    # visitor.  The TestClient sends consistent client info on
+    # all requests so the bucket stays stable across these calls.
+    hdrs = {
+        "X-Forwarded-Email": "newbie@example.com",
+        "User-Agent": "stash-test-walker/1.0",
+    }
+    # Landing.
+    client.get("/", headers=hdrs)
+    # Reach /signup (this stamps reached_signup_at on the bucket).
+    client.get("/signup", headers=hdrs)
+    # Submit the form.
     r = client.post(
         "/signup",
         data={"tenant_name": "Brand New Tenant"},
-        headers={
-            "X-Forwarded-Email": "newbie@example.com",
-            "Cookie": "stash_mkt=signup-sess",
-        },
+        headers=hdrs,
         follow_redirects=False,
     )
     assert r.status_code == 303
+    # The session that has reached_signup_at AND converted_at is
+    # this walk-through visitor's bucket.
     with client.app_module.db() as conn:
-        sess = conn.execute(
-            "SELECT converted_at, converted_tenant_id "
-            "FROM marketing_sessions WHERE session_id = ?",
-            ("signup-sess",),
-        ).fetchone()
-    assert sess["converted_at"] is not None
-    assert sess["converted_tenant_id"] is not None
+        rows = conn.execute(
+            "SELECT converted_at, converted_tenant_id, "
+            "       reached_signup_at "
+            "FROM marketing_sessions "
+            "WHERE converted_at IS NOT NULL",
+        ).fetchall()
+    assert len(rows) >= 1
+    converted = rows[-1]
+    assert converted["reached_signup_at"] is not None
+    assert converted["converted_tenant_id"] is not None
 
 
-def test_signup_without_marketing_cookie_still_succeeds(client):
-    """A visitor who declined the analytics cookie should still be
-    able to sign up — the conversion stamp is best-effort, not a
-    gate."""
+def test_signup_works_with_js_disabled(client):
+    """A JS-disabled visitor still gets attributed to the funnel —
+    the pageview side is server-side, no beacon required.  Only
+    the dwell-time leave event needs JS."""
     r = client.post(
         "/signup",
         data={"tenant_name": "Cookieless"},

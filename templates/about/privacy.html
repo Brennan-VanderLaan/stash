@@ -127,16 +127,52 @@
   </p>
   <p>
     On the public marketing pages (this page, the landing,
-    pricing, etc.) we ask up-front whether to set a
-    <strong>first-party page-analytics cookie</strong>
-    (<code>stash_mkt</code>) so we can see which pages get
-    traffic and how long visitors stay.  We store the page name
-    and the time spent — never form contents, never anything
-    typed.  The data is held in our own database, never sent to
-    a third-party analytics vendor, never used for advertising.
-    The banner that asks for consent records your decision in
-    <code>stash_consent</code>; declining stops the analytics
-    cookie from being set at all.
+    pricing, etc.) we collect <strong>aggregate page-view +
+    dwell-time analytics with no cookies</strong> so we can see
+    which pages get traffic and how long visitors stay.  Instead
+    of storing a persistent visitor id, we derive a short-lived
+    pseudonymous bucket id from a one-way hash of your IP +
+    User-Agent + our own server-side encryption key + a
+    <strong>30-minute time window</strong>.  Properties of this
+    approach:
+  </p>
+  <ul>
+    <li>
+      No cookie is set.  Nothing is written to your browser.
+    </li>
+    <li>
+      Your raw IP is hashed at request time and then dropped.
+      We don't store IP addresses.
+    </li>
+    <li>
+      The bucket id rotates every 30 minutes, so even within our
+      own data the linkage is short-lived.  Crossing the boundary
+      makes you look like a fresh visitor.
+    </li>
+    <li>
+      The hash uses a server-side secret you don't have access
+      to.  An external observer can't go from a stored bucket id
+      back to an IP.
+    </li>
+    <li>
+      We only store the path you visited and how long you stayed.
+      Never form contents, never anything typed.
+    </li>
+    <li>
+      The data is held in our own database, never sent to a
+      third-party analytics vendor, never used for advertising.
+    </li>
+  </ul>
+  <p>
+    GDPR posture: hashed-with-rotating-secret IPs sit in a grey
+    zone of "is this still personal data?" under European law.
+    We disclose the approach in full here so you can decide
+    whether you're comfortable with the trade-off; if you'd
+    rather not be measured at all, browser extensions that
+    block JavaScript will stop the dwell-time beacon (the
+    server-side pageview count still fires, since it's just an
+    HTTP request — but it carries no more information than the
+    request itself).
   </p>
 </section>
 

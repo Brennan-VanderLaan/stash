@@ -575,58 +575,6 @@ header h1 a { color: var(--accent); text-decoration: none; }
   color: var(--accent);
 }
 
-/* === Consent banner =========================================
-   Anchored to the bottom of the viewport on first visit to a
-   public-marketing page.  ``position: fixed`` so it sits on top
-   of page content; slide-up + fade-in transition handled by the
-   ``consent-banner-visible`` class the JS adds after one rAF.
-   Removed from the DOM entirely after the user clicks Accept
-   or Decline.
-*/
-.consent-banner {
-  position: fixed;
-  left: 50%;
-  bottom: calc(1rem + var(--safe-bottom, 0px));
-  transform: translate(-50%, calc(100% + 1rem));
-  z-index: 9001;
-  width: min(560px, calc(100vw - 1.5rem));
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  opacity: 0;
-  transition:
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms ease-out;
-}
-.consent-banner.consent-banner-visible {
-  transform: translate(-50%, 0);
-  opacity: 1;
-}
-.consent-banner-body {
-  padding: 0.85rem 1rem 0.95rem;
-}
-.consent-banner-title {
-  margin: 0 0 0.3rem;
-  font-size: 1rem;
-  color: var(--accent);
-}
-.consent-banner-copy {
-  margin: 0 0 0.65rem;
-  font-size: 0.88rem;
-  color: var(--text);
-  line-height: 1.45;
-}
-.consent-banner-copy a {
-  color: var(--accent);
-}
-.consent-banner-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-
 /* === First-run "Get started" card ===========================
    Three-step checklist on /home for new tenants — see
    dao/onboarding.py for the state derivation.  Each step has a

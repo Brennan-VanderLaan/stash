@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import sqlite3
 import base64
 import secrets
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Request, UploadFile, File, Form, HTTPException
@@ -2929,69 +2931,110 @@ def robots_txt():
     )
 
 
-_MARKETING_COOKIE = "stash_mkt"
-_MARKETING_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+_MARKETING_BUCKET_WINDOW_S = 30 * 60  # 30 minutes
 
 
-def _read_marketing_session_id(request: Request) -> str:
-    """Read the first-party marketing session cookie if present.
-    The tracker script keeps this in sync with localStorage so
-    both server-side (POST /signup conversion) and client-side
-    (track events) read the same id."""
-    return request.cookies.get(_MARKETING_COOKIE, "") or ""
+def _marketing_bucket_id(request: Request) -> str:
+    """Compute a stable-for-N-minutes pseudonymous session id for
+    anonymous marketing analytics — no cookie, no client identifier.
+
+    The id is ``sha256(ip | ua | STASH_KEK | floor(now / 1800))`` —
+    derived purely from the request envelope plus the server-side
+    encryption key (which never leaves the deployment) and a
+    30-minute time bucket.
+
+    Properties:
+
+    * **Same visitor within 30 min → same id.**  Lets us link a
+      pageview to a leave event, AND to subsequent pageviews on
+      other tracked paths within the window — that's the
+      cross-page funnel without a cookie.
+    * **Bucket boundary crossings → new id.**  A visitor who
+      stays >30 min between page loads looks like a new visitor.
+      Operator-visible undercount, accepted as the privacy cost
+      of zero persistent identifier.
+    * **Not reversible.**  The hash is one-way and depends on
+      ``STASH_KEK``; without that secret an external observer
+      can't go from a stored id back to an IP.
+    * **No IP storage.**  The raw IP is hashed into the id and
+      then dropped — the database never carries it.
+
+    Disclosed on /about/privacy.  GDPR posture: hashed-with-
+    rotating-secret IPs sit in the grey zone of "is this still
+    personal data?" — operator chose this trade-off knowing the
+    legal interpretation isn't fully settled."""
+    ip = (request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+    if not ip and request.client:
+        ip = request.client.host or ""
+    ua = request.headers.get("user-agent", "")
+    time_bucket = int(time.time() // _MARKETING_BUCKET_WINDOW_S)
+    # Use the deployment's KEK as the hash secret.  vault.get_kek()
+    # validates + decodes it at boot; we just reach in for the raw
+    # bytes here so the hash is stable across requests.  Fallback
+    # to an empty secret in test environments where KEK isn't set
+    # (the bucket is still derived, just less unique to this
+    # deployment).
+    try:
+        secret = vault.get_kek()
+    except Exception:
+        secret = b""
+    raw_input = (f"{ip}|{ua}|{time_bucket}|").encode("utf-8") + secret
+    return "anon-" + hashlib.sha256(raw_input).hexdigest()[:32]
+
+
+def _track_pageview(request: Request, path: str) -> None:
+    """Helper called from each tracked public route handler to
+    record a server-side pageview.  No JS required — pageviews
+    work even for visitors with JS disabled / bot traffic.
+    Errors are swallowed; analytics shouldn't fail a real
+    request."""
+    try:
+        bucket = _marketing_bucket_id(request)
+        dao_marketing.record_pageview(
+            bucket,
+            path=path,
+            referrer=(request.headers.get("referer", "") or "")[:512],
+            user_agent=(request.headers.get("user-agent", "") or "")[:512],
+        )
+    except Exception as exc:
+        _log_route_warn("marketing.pageview_failed", error=str(exc))
 
 
 @app.post("/marketing/track")
 async def marketing_track(request: Request):
-    """Ingest pageview / leave events from the inline tracker
-    script on public pages.  No auth; the auth-bypass list lets
-    anonymous visitors POST here.
+    """Ingest LEAVE events from the unload beacon on public pages.
+    Anonymous; the auth-bypass list lets visitors POST here.
 
-    Body is JSON.  Two event shapes:
+    Pageviews are recorded SERVER-SIDE in the route handlers (no
+    JS required) — see ``_track_pageview``.  This endpoint exists
+    only for the page-unload signal that the server has no other
+    way to know.
 
-    * ``{"event": "pageview", "session_id": ..., "path": ...,
-        "referrer": ..., "viewport_w": ..., "viewport_h": ...}``
-    * ``{"event": "leave", "session_id": ..., "path": ...,
-        "duration_ms": ...}``
+    Body: ``{"path": ..., "duration_ms": ...}`` — no client
+    identifier of any kind.  Server re-derives the same bucket id
+    the corresponding pageview used (sha256 of IP+UA+KEK+
+    30-min-window) so the leave links to its pageview without a
+    cookie.  See ``_marketing_bucket_id``.
 
     Returns 204 unconditionally — sendBeacon doesn't read the
-    response body and we don't want a flaky network to surface
-    as a console error on the marketing page.  Bad payloads
-    are silently dropped (operator's interest is real visitors,
-    not parser fuzzing)."""
+    response body."""
     try:
         payload = await request.json()
     except Exception:
         return Response(status_code=204)
     if not isinstance(payload, dict):
         return Response(status_code=204)
-    event = payload.get("event")
-    session_id = (payload.get("session_id") or "").strip()
     path = (payload.get("path") or "").strip()
-    if not session_id or not path:
+    if not path or not dao_marketing.is_tracked_path(path):
         return Response(status_code=204)
-    # Defense in depth — DAO also filters via is_tracked_path.
-    if not dao_marketing.is_tracked_path(path):
-        return Response(status_code=204)
+    duration_ms = _safe_int(payload.get("duration_ms")) or 0
     try:
-        if event == "pageview":
-            dao_marketing.record_pageview(
-                session_id,
-                path=path,
-                referrer=(payload.get("referrer") or "")[:512],
-                user_agent=(request.headers.get("user-agent") or "")[:512],
-                viewport_w=_safe_int(payload.get("viewport_w")),
-                viewport_h=_safe_int(payload.get("viewport_h")),
-            )
-        elif event == "leave":
-            dao_marketing.record_leave(
-                session_id,
-                path=path,
-                duration_ms=_safe_int(payload.get("duration_ms")) or 0,
-            )
+        dao_marketing.record_leave(
+            _marketing_bucket_id(request),
+            path=path,
+            duration_ms=duration_ms,
+        )
     except Exception as exc:
-        # Marketing analytics shouldn't 500 the request that's just
-        # trying to record a pageview — log and swallow.
         _log_route_warn("marketing.track_failed", error=str(exc))
     return Response(status_code=204)
 
@@ -3014,6 +3057,11 @@ def _log_route_warn(event: str, **kv) -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def public_landing(request: Request):
+    _track_pageview(request, "/")
+    return _render_public_landing(request)
+
+
+def _render_public_landing(request: Request):
     """Public marketing landing — what an unauthenticated visitor
     sees at the bare site.  No tenant data, no app chrome.  The
     "Sign in" button points at ``/home`` which is the authenticated
@@ -3061,22 +3109,11 @@ def signup_page(request: Request, name_error: str = ""):
         # through; bounce them home.
         return RedirectResponse("/home", status_code=303)
     capacity = dao_quotas.free_tier_capacity()
-    # Server-side signup-reached stamp (defense in depth — the
-    # tracker JS POSTs the same thing as a pageview, but a
-    # JS-disabled visitor still gets attributed to the funnel
-    # bucket on this render).
-    mkt_session = _read_marketing_session_id(request)
-    if mkt_session:
-        try:
-            dao_marketing.record_pageview(
-                mkt_session, path="/signup",
-                referrer=request.headers.get("referer", "")[:512],
-                user_agent=request.headers.get("user-agent", "")[:512],
-            )
-        except Exception as exc:
-            _log_route_warn(
-                "marketing.signup_stamp_failed", error=str(exc),
-            )
+    # Track this pageview under the anonymous bucket id.  This is
+    # the funnel watermark for "reached the tenant-name step" —
+    # the dao_marketing.record_pageview side-effect stamps
+    # reached_signup_at on the session when path is /signup.
+    _track_pageview(request, "/signup")
     return templates.TemplateResponse(
         request, "signup.html",
         {
@@ -3183,24 +3220,23 @@ def signup_submit(
             metadata={"tenant_name": name, "ip": client_ip},
         )
         conn.commit()
-    # Marketing conversion link.  The tracker cookie was set on
-    # first landing-page view (or first time the visitor hit any
-    # tracked public path) — if it's still present, stamp the
-    # marketing session with the just-created tenant id so the
-    # /admin funnel widget can show "landed → reached signup →
-    # converted" rates honestly.  Cookie absent = no conversion
-    # link (e.g. user disabled JS or arrived via deep link to
-    # /signup), which is fine — the tenant still gets created
-    # without analytics attribution.
-    mkt_session = _read_marketing_session_id(request)
-    if mkt_session:
-        try:
-            dao_marketing.record_conversion(mkt_session, tenant_id)
-        except Exception as exc:
-            _log_route_warn(
-                "marketing.conversion_failed", error=str(exc),
-                tenant_id=tenant_id,
-            )
+    # Marketing conversion link.  Re-derive the anonymous bucket
+    # id from this POST request — same IP+UA+time_bucket as the
+    # /signup GET that came before it (assuming <30 min has
+    # elapsed) means the same bucket id, which lets the funnel
+    # widget link "reached signup" to "converted" without any
+    # client-side state.  If the bucket has rotated mid-flow the
+    # link is missed, which is the documented privacy / accuracy
+    # trade-off of the rotating-window approach.
+    try:
+        dao_marketing.record_conversion(
+            _marketing_bucket_id(request), tenant_id,
+        )
+    except Exception as exc:
+        _log_route_warn(
+            "marketing.conversion_failed", error=str(exc),
+            tenant_id=tenant_id,
+        )
     return RedirectResponse("/home", status_code=303)
 
 
@@ -3217,6 +3253,7 @@ def encircle_alternative(request: Request):
     and can then explore Stash normally via the standard public
     chrome (brand link, /about nav, Sign in CTA).  No special
     onboarding flow — they sign in like any other prospect."""
+    _track_pageview(request, "/encircle-alternative")
     return templates.TemplateResponse(
         request, "encircle_alternative.html",
         {
@@ -6856,6 +6893,11 @@ def _render_about(request: Request, page: str, title: str) -> HTMLResponse:
     partners require it.  ``hide_feedback_widget`` keeps the in-app
     feedback bubble off these pages since the viewer may be a
     prospect or auditor, not a tenant member."""
+    # Server-side marketing pageview — works without JS, captures
+    # bot traffic + privacy-mode visitors.  The bucket id rotates
+    # every 30 min so cross-page navigation within that window
+    # links to the same anonymous session.
+    _track_pageview(request, request.url.path)
     pro_caps = dao_quotas._PLAN_DEFAULTS["pro"]
     free_caps = dao_quotas._PLAN_DEFAULTS["free"]
     return templates.TemplateResponse(
