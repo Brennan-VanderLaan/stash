@@ -16,7 +16,19 @@
 
   {% if src %}
   <div class="recrop-source" id="crop-wrap">
-    <img src="/uploads/{{ src }}" alt="" id="recrop-img">
+    {# draggable="false" prevents the browser's native image drag
+       from kicking in when the user mouses down to start drawing
+       a crop selection.  Without it, the drag is interpreted as
+       "user is exporting this image" — which (a) overrides
+       cropper.js's pointer-event flow so the crop selection never
+       starts, and (b) carries the image bytes in dataTransfer,
+       which the global drop overlay (base.html) then treats as a
+       file ingest, re-running the photo through the ingest
+       pipeline on release.  Real prod incident — feedback #70,
+       2026-05-17.  See location.html for the same pattern on the
+       floorplan image. #}
+    <img src="/uploads/{{ src }}" alt="" id="recrop-img"
+         draggable="false">
   </div>
   <div class="crop-toolbar">
     <button type="button" class="btn btn-secondary btn-sm" id="crop-toggle"
@@ -51,6 +63,18 @@
 </form>
 
 <script>
+// Belt-and-suspenders cancel of any native dragstart on the crop
+// source image, in case some future stylesheet or browser quirk
+// undoes the ``draggable="false"`` attribute set above.  Same
+// pattern as the floorplan image in location.html.  Without this,
+// dragging on the image during crop-adjust triggers the global
+// drop overlay (base.html) and re-ingests the photo on release
+// (feedback #70).
+(function () {
+  var img = document.getElementById('recrop-img');
+  if (img) img.addEventListener('dragstart', function (e) { e.preventDefault(); });
+})();
+
 // `cropper` outlives a single edit session: after the user clicks Done we
 // disable() rather than destroy(), so the crop box stays on screen as a
 // read-only marker.  Without that, hitting Done left the source image

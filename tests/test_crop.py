@@ -322,6 +322,30 @@ def test_recrop_page_accessible_and_shows_source(client):
     assert "Revert to full image" in page
 
 
+def test_recrop_image_is_not_natively_draggable(client):
+    """Regression for feedback #70: dragging on the recrop image to
+    draw a crop selection used to trip the browser's native image
+    drag, which then triggered the global drop overlay (base.html)
+    and re-ingested the photo on release.  The fix is
+    ``draggable="false"`` on the ``<img id="recrop-img">`` plus a
+    JS ``dragstart`` preventDefault for belt-and-suspenders.
+
+    Pin both so a future template tweak can't silently re-enable
+    the native drag and re-introduce the bug."""
+    client.post("/boxes", data={"name": "Box"})
+    _setup_pending(client, _make_quadrant_image(), [
+        DetectedItem(name="thing", description="d", bbox=[0, 0, 500, 500]),
+    ])
+    client.post("/queue/1/assign", data={"box_id": "1", "name": "thing"})
+    page = client.get("/items/1/recrop").text
+    # Attribute on the image element.
+    assert 'id="recrop-img"' in page
+    assert 'draggable="false"' in page
+    # Belt-and-suspenders JS cancel.
+    assert "dragstart" in page
+    assert "preventDefault" in page
+
+
 def test_add_item_preserves_source_photo(client):
     """Items created via /boxes/{id}/items get source_photo set so recrop/revert work."""
     client.post("/boxes", data={"name": "Box"})
