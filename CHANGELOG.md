@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.51.1](https://github.com/Brennan-VanderLaan/stash/compare/v1.51.0...v1.51.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **location:** mobile dialog close unreachable under URL bar ([f1e0870](https://github.com/Brennan-VanderLaan/stash/commit/f1e0870831b0250e2efae36b6f7ff565c08262a3))
+* **recrop:** native image drag was hijacked by global ingest overlay ([b841964](https://github.com/Brennan-VanderLaan/stash/commit/b841964c7679ff9ee787aef3610af34f0862f2a0))
+* **usage:** handle input rendering massive + real-time availability check ([4cd664a](https://github.com/Brennan-VanderLaan/stash/commit/4cd664a97e63e4e7f6608a01043d17048fa7d9fb))
+
 ## [1.51.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.50.2...v1.51.0) (2026-05-17)
 
 
