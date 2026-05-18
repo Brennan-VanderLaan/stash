@@ -3,9 +3,62 @@ from pathlib import Path
 
 
 def test_index_empty(client):
+    """A brand-new tenant lands on the Get started card, not the
+    bare turtle empty state.  The card walks them through the
+    photo-first magic flow rather than nudging them to create a
+    box manually."""
     r = client.get("/home")
     assert r.status_code == 200
-    assert "No boxes yet" in r.text
+    assert "Get started" in r.text
+    assert "Take a photo of something" in r.text
+    # The active CTA on step 1 points at /ingest.
+    assert 'href="/ingest"' in r.text
+    # Bare turtle empty state should NOT show here — the Get started
+    # card carries the message.  It returns once the user has at
+    # least uploaded a photo (intermediate state).
+    assert "No boxes yet" not in r.text
+
+
+def test_index_get_started_collapses_once_complete(client):
+    """When the tenant has at least one photo + box + item-in-box,
+    the Get started card disappears and the celebratory single-line
+    "You're set up" replaces it."""
+    # Seed: create a box and an item attached to it (photo + filed).
+    client.post("/boxes", data={"name": "First box"})
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO items (tenant_id, box_id, name, photo) "
+            "VALUES (?, 1, 'thing', 'fake.jpg')",
+            (client.test_tenant_id,),
+        )
+        conn.commit()
+    r = client.get("/home")
+    assert r.status_code == 200
+    # The interactive checklist is gone.
+    assert 'data-testid="getting-started"' not in r.text
+    # The "you're set up" line replaces it.
+    assert "You're set up" in r.text
+
+
+def test_index_get_started_shows_step_2_after_photo(client):
+    """Once a photo has been uploaded (queue has a pending row),
+    step 1 ticks and step 2 becomes the active CTA pointing at
+    the queue."""
+    with client.app_module.db() as conn:
+        conn.execute(
+            "INSERT INTO pending_items "
+            "(tenant_id, name, photo) "
+            "VALUES (?, 'thing', 'fake.jpg')",
+            (client.test_tenant_id,),
+        )
+        conn.commit()
+    r = client.get("/home")
+    assert r.status_code == 200
+    # Step 1 done (the active CTA on step 1 — the /ingest button —
+    # is gone since photo is taken).
+    assert "Sort it in the queue" in r.text
+    # Step 2 is now the active step → CTA points to /queue.
+    assert 'href="/queue"' in r.text
 
 
 def test_create_box_appears_on_index(client):

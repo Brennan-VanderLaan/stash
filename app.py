@@ -29,6 +29,7 @@ from dao import invites as dao_invites
 from dao import items as dao_items
 from dao import locations as dao_locations
 from dao import oauth as dao_oauth
+from dao import onboarding as dao_onboarding
 from dao import pending_items as dao_pending
 from dao import quotas as dao_quotas
 from dao import settings as dao_settings
@@ -3071,10 +3072,13 @@ def index(request: Request):
     thumbs = dao_items.list_recent_photos_per_box(actor, limit_per_box=5)
     rooms = dao_rooms.list_for_picker(actor)
     box_groups = _group_boxes_for_index(boxes)
+    # First-run onboarding state for the "Get started" card.
+    # Cheap (3 LIMIT-1 lookups); see dao/onboarding.py.
+    first_run = dao_onboarding.first_run_state(actor)
     return templates.TemplateResponse(
         request, "index.html",
         {"boxes": boxes, "thumbs": thumbs, "rooms": rooms,
-         "box_groups": box_groups},
+         "box_groups": box_groups, "first_run": first_run},
     )
 
 

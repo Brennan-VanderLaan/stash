@@ -507,6 +507,109 @@ header h1 a { color: var(--accent); text-decoration: none; }
   to { transform: rotate(360deg); }
 }
 
+/* === First-run "Get started" card ===========================
+   Three-step checklist on /home for new tenants — see
+   dao/onboarding.py for the state derivation.  Each step has a
+   number badge that flips to a ✓ when done; the *next* unfinished
+   step gets an active accent border + a primary CTA button.
+   Card disappears entirely once all three are done.
+*/
+.getting-started {
+  border-left: 4px solid var(--accent);
+  background: linear-gradient(
+    140deg,
+    var(--surface) 0%,
+    color-mix(in srgb, var(--accent) 8%, var(--surface)) 100%
+  );
+}
+.getting-started-head {
+  margin-bottom: 0.8rem;
+}
+.getting-started-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+  color: var(--accent);
+}
+.getting-started-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.getting-started-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  transition: border-color 0.15s, background 0.15s;
+}
+.getting-started-step-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.getting-started-step-done {
+  opacity: 0.7;
+}
+.getting-started-step-done .getting-started-step-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.getting-started-check {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+.getting-started-step-done .getting-started-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.getting-started-step-active .getting-started-check {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.getting-started-step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.getting-started-step-title {
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+.getting-started-step-hint {
+  margin-bottom: 0.4rem;
+}
+.getting-started-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
+.getting-started-done {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-left: 4px solid var(--accent);
+  font-size: 0.95rem;
+  padding: 0.7rem 0.95rem;
+}
+.getting-started-done a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* === Two-step room picker (feedback #71) ====================
    On /boxes/{id}'s edit form.  Click the current-room chip to
    open a dropdown panel; pick a location, then a room.  If

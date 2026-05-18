@@ -28,8 +28,21 @@
 </div>
 
 {% if pending and not boxes %}
-<div class="card">
-  <p class="text-muted">No boxes yet — <a href="/home" style="color:var(--accent);">create one</a> before sorting.</p>
+{# First-timer state: AI suggestions usually carry a "new box"
+   recommendation per item — the ``✨ Create`` button below
+   creates that box in one click and pre-selects it for the
+   current item.  So we no longer push the user back to /home;
+   they can stay here and use the inline create flow. #}
+<div class="card queue-firstrun-hint">
+  <p class="text-sm">
+    <span aria-hidden="true">✨</span>
+    <strong>First time sorting?</strong>
+    The AI suggests a box for each item.  When it suggests a new
+    one, hit
+    <strong>✨ Create</strong>
+    to make it in a single click — no need to set up boxes
+    manually first.
+  </p>
 </div>
 {% endif %}
 

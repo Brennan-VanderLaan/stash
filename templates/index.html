@@ -1,6 +1,96 @@
 {% extends "base.html" %}
 {% block content %}
-<details class="card" {% if not boxes %}open{% endif %}>
+
+{# ── First-run onboarding ────────────────────────────────────
+   Three-step checklist that pulls a new user through the magic
+   loop: take a photo → see the queue → file an item into a box.
+   Each step is derived from real data (see dao/onboarding.py),
+   so closing the tab and coming back later resumes from
+   wherever they left off.  Card disappears entirely once
+   complete so an established user doesn't see it. #}
+{% if first_run and not first_run.complete %}
+<section class="card getting-started" data-testid="getting-started">
+  <header class="getting-started-head">
+    <h2 class="getting-started-title">
+      <span aria-hidden="true">🌱</span>
+      Get started
+    </h2>
+    <p class="text-sm text-muted">
+      Three quick steps and you've seen the magic.  The AI handles
+      the boring parts — you take a photo, accept a suggestion,
+      done.
+    </p>
+  </header>
+  <ol class="getting-started-steps">
+    <li class="getting-started-step
+        {% if first_run.has_photo %}getting-started-step-done{% endif %}
+        {% if first_run.next_step == 'photo' %}getting-started-step-active{% endif %}">
+      <span class="getting-started-check" aria-hidden="true">
+        {% if first_run.has_photo %}✓{% else %}1{% endif %}
+      </span>
+      <div class="getting-started-step-body">
+        <div class="getting-started-step-title">Take a photo of something</div>
+        <div class="getting-started-step-hint text-sm text-muted">
+          A single object or a whole pile — the AI splits multi-thing
+          photos into individual items automatically.
+        </div>
+        {% if first_run.next_step == 'photo' %}
+        <a href="/ingest" class="btn btn-primary getting-started-cta">
+          📸 Open Ingest →
+        </a>
+        {% endif %}
+      </div>
+    </li>
+    <li class="getting-started-step
+        {% if first_run.has_item_in_box %}getting-started-step-done{% endif %}
+        {% if first_run.next_step == 'queue' %}getting-started-step-active{% endif %}">
+      <span class="getting-started-check" aria-hidden="true">
+        {% if first_run.has_item_in_box %}✓{% else %}2{% endif %}
+      </span>
+      <div class="getting-started-step-body">
+        <div class="getting-started-step-title">Sort it in the queue</div>
+        <div class="getting-started-step-hint text-sm text-muted">
+          The AI suggests a box for each item.  If you have no
+          boxes yet, hit <strong>✨ Create</strong> to make the
+          suggested one in a single click.
+        </div>
+        {% if first_run.next_step == 'queue' %}
+        <a href="/queue" class="btn btn-primary getting-started-cta">
+          🧺 View sort queue →
+        </a>
+        {% endif %}
+      </div>
+    </li>
+    <li class="getting-started-step
+        {% if first_run.has_item_in_box %}getting-started-step-done{% endif %}">
+      <span class="getting-started-check" aria-hidden="true">
+        {% if first_run.has_item_in_box %}✓{% else %}3{% endif %}
+      </span>
+      <div class="getting-started-step-body">
+        <div class="getting-started-step-title">First item in a box</div>
+        <div class="getting-started-step-hint text-sm text-muted">
+          That's the loop.  From here, every photo you ingest gets
+          sorted the same way — and you'll find anything again with
+          one search.
+        </div>
+      </div>
+    </li>
+  </ol>
+</section>
+{% elif first_run and first_run.complete %}
+{# Brief celebratory line that replaces the card once the user has
+   experienced the loop end-to-end.  No close button — this is
+   gone on the next page render once all signals stay True. #}
+<div class="card getting-started-done">
+  🎉 You're set up.  Photos in <a href="/ingest">Ingest</a>,
+  sorting in <a href="/queue">Queue</a>, browse boxes below.
+</div>
+{% endif %}
+
+{# Manual "+ New box" form — kept accessible but closed by
+   default (was auto-open for empty tenants pre-Get-started,
+   which competed with the photo-first onboarding flow). #}
+<details class="card">
   <summary class="card-title">+ New box</summary>
   <form method="post" action="/boxes">
     <label>Name<input type="text" name="name" required placeholder="e.g. Kitchen #1"></label>
@@ -82,9 +172,18 @@
   </ul>
 </section>
 {% endfor %}
-{% else %}
+{% elif not first_run or first_run.has_photo %}
+{# Turtle only renders when the user has at least taken a photo
+   — for the freshest first-run state, the "Get started" card
+   above already does the talking; doubling up reads as nag. #}
 <div class="empty empty-mascot" data-mascot="turtle">
-  <p>No boxes yet. Create one above — your turtle is ready to carry it.</p>
+  <p>No boxes yet.
+    {% if first_run and first_run.has_photo %}
+      You've got items in the queue — sort one and a box appears here.
+    {% else %}
+      Create one above, or take a photo to let the AI suggest one.
+    {% endif %}
+    Your turtle is ready to carry it.</p>
 </div>
 {% endif %}
 {% endblock %}
