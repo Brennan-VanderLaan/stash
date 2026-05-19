@@ -99,6 +99,50 @@ conventional commit lands on `dev`.  The actual release PR on
 `dev → main` will read identically, so there's no surprise at
 release time.
 
+### Caddyfile reload on staging/prod (out-of-band config)
+
+Most of the deployment surface ships baked into the `stash`
+container image — code changes ride the `:dev` → `:vX.Y.Z` tag
+flow that watchtower handles automatically.  Two artifacts in
+`deploy/` are NOT in that flow:
+
+- `deploy/Caddyfile` is bind-mounted into the `caddy` container
+  (`./Caddyfile:/etc/caddy/Caddyfile:ro`), not baked into a
+  custom image.
+- `deploy/docker-compose.yml` is what the operator runs on the
+  host — same story.
+
+So any change to those files needs to be pulled onto the
+deployment host explicitly:
+
+```bash
+# on the staging or prod host
+cd /path/to/stash
+git pull
+docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+# (or: docker compose up -d caddy   — recreates the container)
+```
+
+`caddy reload` is the gentler form — no dropped connections,
+TLS state preserved.  If a directive is structurally new (e.g.
+adding a whole `handle` block, not just tweaking a `max_size`),
+`docker compose up -d caddy` is the safer call because
+hot-reload is less forgiving than restart on those.
+
+Cases this has come up:
+
+- Bumping `/ingest`'s `request_body max_size` from 50 MB → 110 MB
+  to fit phone-camera photo batches (feedback #80, 2026-05-18).
+- Adding the `/robots.txt → /__stash_robots_txt` rewrite to
+  work around oauth2-proxy's hardcoded handler.
+
+If we ever start changing the Caddyfile or compose file
+multiple times per release cycle, the right move is to either
+(a) bake the Caddyfile into a stash-edge image so it rides the
+normal `:dev` flow, or (b) add a thin GHA that SSHs to staging
+and reloads on relevant path changes.  Neither is worth the
+complexity today — these edits are rare.
+
 ## Workflows
 
 | File | Trigger | What it does |

@@ -85,7 +85,6 @@ and the data on disk:
 - A general-purpose RBAC engine. Two roles is enough.
 - Object-level ACLs beyond box / item shares. Rooms and floors travel
   with their tenant; they're not individually shareable.
-- A full billing / Stripe surface. Quotas exist; payment doesn't yet.
 - Public sharing (anonymous URLs). All shares go to a known email.
 - Replacing the support-surface gap from the original plan — that
   intentionally deferred.
@@ -765,6 +764,9 @@ when called by a tenant-scoped token:
 | `admin_set_feedback_urgent` | `id`, `urgent: bool` | Updated row; flips the major-blocker flag that floats it to the top of the queue |
 | `admin_create_feedback` | `body`, `tenant_id?`, `source?='mcp'`, `urgent?`, … | Inserts a feedback row tagged with `source` (defaults to `'mcp'`).  Used by the visual-sweep rig to drop layout findings into the same queue as user-submitted bugs |
 | `admin_feedback_counts` | — | `{open, accepted, rejected, done, urgent}` for the dashboard tiles |
+| `admin_mark_feedback_needs_verification` | `feedback_id`, `fix_commit_sha`, `fix_summary` | Flips a row from `accepted` / `open` to `needs_verification` and stamps the commit SHA + one-line summary on the card.  Called by the AI right after `git commit` (with a `Fixes-feedback:` trailer) so the kanban surfaces "fix landed, waiting to verify on staging" |
+| `admin_list_feedback_awaiting_release` | `commit_shas: list[str]` | Returns rows in `needs_verification` with `verified_in_staging_at` stamped AND `fix_commit_sha` in the supplied list — i.e. ready to promote to `done` for a given tagged release.  AI feeds `git log <prev-tag>..<this-tag>` into this on release day |
+| `admin_mark_feedback_done_on_release` | `feedback_id`, `release_tag` | Final transition `needs_verification → done`; stamps `released_in` so /admin shows which tag carried the fix.  Refuses rows that lack `verified_in_staging_at` (the visual gate is non-negotiable) |
 
 Each write tool walks the same DAO methods the REST API uses,
 so the audit log and quota enforcement are uniform across UI /
@@ -946,7 +948,8 @@ sketched but explicitly not v1.
 | Invite tenant members | ✓ | ✗ | ✗ | ✗ |
 | Create object shares | ✓ | ✗ | ✗ | ✗ |
 | Trigger backup / restore | ✓ | ✗ | ✗ | ✗ |
-| View usage / billing | ✓ | partial (no $) | n/a | n/a |
+| View usage / billing | ✓ | view-only (no upgrade / portal access) | n/a | n/a |
+| Manage Stripe billing (upgrade / portal / invoices) | billing owner only | ✗ | n/a | n/a |
 
 Role enforcement lives on every DAO mutation method as a guard
 clause. Routes also pre-check, so the 403 lands without a DB round
@@ -1231,9 +1234,11 @@ the audit log. The `/about/privacy` page says so plainly.
 `tenant_id` selector cookie. Both are functional, not consent-
 required under PECR / ePrivacy. The page says so.
 
-**DPA.** A standard data processing addendum lives at `/about/dpa`
-for users who need one (B2B / EU compliance). The doc references
-the sub-processor list directly.
+**DPA.** Deferred — B2B / EU customers asking for a standard data
+processing addendum are routed to ``/about/sub-processors`` plus a
+direct contact via ``/about/contact`` today.  When the first
+contract genuinely demands a DPA we'll ship one at
+``/about/dpa`` (route reserved, not yet wired).
 
 ### Localization
 
@@ -1357,10 +1362,13 @@ Implementation:
 
 In order. Each step ends in a testable, deployable state.
 
-**Status (2026-05-16, end of day).** Phases 1–4 + 6 + 9 + 10 + 11 +
+**Status (2026-05-18, end of day).** Phases 1–4 + 6 + 9 + 10 + 11 +
 12 + 15 + 16 + 18 + 19 shipped; phase 5 now [shipped] end-to-end
 with self-serve free-tier signup landing on 2026-05-16 (the last
-piece — fresh-email path was the only outstanding shape).  Phase
+piece — fresh-email path was the only outstanding shape).
+Versions 1.50.x → 1.53.0 have cut since the Nondre dogfood
+round opened — see "Recent ships (2026-05-17 → 2026-05-18)"
+below for the post-feedback tranche.  Phase
 13 promotes to [partial] (cost-transparency block rebuilt on
 /about/transparency with the math actually closing across three
 tables — per-Pro variable, fixed AWS, pool-clearing arc).  Phase
@@ -1742,6 +1750,141 @@ ships fixes for all three.
   attribute (used by the in-page box-DnD flow) — they double as
   loose-tray drop targets without extra wiring.
 
+**Recent ships (2026-05-17 → 2026-05-18, dogfood tranche II).**
+The post-Nondre run.  v1.50 → v1.53 cut across the window;
+release-please now drops one Release PR per push to dev, so the
+cadence is "land a fix, merge the rolling Release PR, watch
+staging tick over via watchtower."  Themes:
+
+* **CI/CD race fixes + staging visibility.**
+  * Prod redeploy webhook moved from `main-sync.yml` to
+    `build.yml`'s tag job so the POST always follows the docker
+    push — without that ordering, watchtower re-checked an
+    unchanged digest and silently no-op'd (v1.50.1 shipped to a
+    prod that was still running the previous image).  The
+    `pr-checks` workflow is skipped on `release-please--*` heads
+    so the Release PR no longer double-runs the fast suite.
+  * `:dev` is now mirrored from the release-tag build too —
+    staging stops drifting "ahead of prod" for a few minutes
+    every cut.  Operators see exactly what just shipped on
+    staging's `/maintenance` page.
+  * `/maintenance` auto-refreshes when the running version
+    changes mid-session, so a watchtower-driven swap doesn't
+    leave the page stuck on the old version string.
+
+* **First-tenant dogfood follow-ups (feedback #69–#80).**
+  Coupled UX/UI work surfaced by a real user clicking through
+  their own data.  Tracked on the feedback kanban; landed in
+  small commits rather than one big PR so each one cycles
+  through staging cleanly.
+  * Billing PII gate (#69) — Stripe customer + invoice surfaces
+    are restricted to a single `tenants.billing_owner_email`
+    instead of every maintainer; `/admin` gains a viewer + a
+    reassign form so the operator can move the role between
+    members.
+  * Leaderboard stars (#70) — celebratory rain layer was
+    `position: absolute` inside `<main>`, so a few stars clipped
+    at the page edge.  Lifted to a fixed full-viewport container
+    above the layout grid.
+  * Tour spotlight (#71/#73) — replay buttons dead-linked to
+    `/boxes/` (no id); spotlight overlay carried a stuck `hidden`
+    attribute from the previous tour state and never rendered.
+    Both fixed at the route + the JS layer so the existing copy
+    paths keep working.
+  * Two-step room picker (#71 cont.) — the flat `<select>` with
+    optgroups read fine for a handful of rooms and clunky past
+    that.  Replaced with a location-chip → room-chip flow on
+    `/boxes/{id}/edit` + the create form.  Single-location
+    tenants auto-skip the location step.
+  * Mobile dialog reach (#72/#74) — `/locations/{id}` "Settings"
+    dialog's close button slid behind the URL bar on Android
+    Chrome.  Dialog content is now `max-height: 100dvh` with the
+    close pinned via `position: sticky` in a top bar so it
+    survives URL-bar autohide.
+  * Recrop drag (#75) — the global ingest drop overlay
+    intercepted the native image drag inside the recrop editor,
+    so the user couldn't reposition the crop window.  Recrop now
+    sets a `data-ingest-suppressed` flag while it owns the
+    pointer.
+  * Get-started checklist on `/home` (operator-driven, not a
+    feedback row) — replaces the bare-tortoise empty state for
+    brand-new tenants with a three-step photo-first walk: "take
+    a photo of something → sort it in the queue → boxes live
+    here."  Derives entirely from data state (`pending_items`
+    exists, `items.photo` exists) — no schema.  Steps tick off
+    in place; the card collapses to a single celebratory line
+    once all three pass.
+
+* **Public surface — Get started + auth-options transparency.**
+  Pricing + landing pages renamed "Sign in" to "Get started" so
+  the CTA reads as commitment-free, and ship an explicit
+  auth-options footnote ("Sign-in via Google today; GitHub,
+  Apple, and email next.") so a visitor doesn't think Google is
+  the permanent ceiling.  Initial visual was an inline-block
+  callout box that read as a separate ad — reverted to plain
+  muted small text under the CTA.
+
+* **Marketing analytics — no-cookie, hashed bucket.** First-party
+  page-view + funnel tracking landed in two steps.  Initial
+  cut shipped a consent banner with a localStorage opt-in
+  cookie; user feedback was "I want basic analytics even if
+  they don't opt in, but no cookie."  Replaced the cookie with
+  a per-request hashed bucket id — `sha256(IP + UA + KEK +
+  30min_bucket)` — so the same browser hitting a page twice in
+  a 30-minute window lands on one synthetic session without
+  any client-side state.  Funnel breakdown on `/admin` reads
+  the same shape it did before: `landed → visited pricing →
+  reached_signup → converted`.  `dao_marketing.is_tracked_path`
+  filters to the public-marketing surface so internal pages
+  don't pollute the funnel.  `sendBeacon` carries unload
+  events for dwell-time.
+
+* **Boxes/rooms model cleanup (#76, #78, #79).**  Three coupled
+  fixes that retire the legacy free-text `boxes.location` field
+  and rescue the orphan rooms it left behind.
+  * #76 (orphan rooms) — rooms with `location_id` set but
+    `floor_id` NULL had no UI path out: the operator had to
+    drop into SQL.  Now each shows under an "Unassigned rooms"
+    section on `/locations/{id}` with a per-row Move-to-floor
+    form.  Companion fix: the AI-suggested-box create flow
+    auto-creates a room on tenants with exactly one floor (so
+    the same AI suggestion stops minting new orphans), and
+    falls back to "no room link" on multi-floor tenants
+    instead of denormalising the suggestion onto
+    `boxes.location`.
+  * #78 (item rename) — the item-detail dialog rendered the
+    name as a static `<h2>`; mobile users tapping to edit
+    found no input.  Replaced with an inline name+notes form
+    POSTing to a new `/items/{id}/edit` route; 303s back to
+    the box page with the item anchor so the dialog re-opens
+    in flow.  `dao_items.update` already supported it — only
+    the surface was missing.
+  * #79 (free-text retirement) — `boxes.location` was a
+    parallel surface to the room picker.  Users would fill one
+    or the other, leaving boxes hard to find.  The free-text
+    field is gone from the box create/edit form, the
+    `/locations/{id}` boxes list reads room+location from the
+    join, AI-suggested-box creation never writes free-text.
+    The column stays in the schema for now — legacy data is
+    still readable, but new writes leave it empty.  A future
+    migration can null it once the UI has been gone for a
+    release or two.
+
+* **Edge body cap for photo batches (#80).** Caddy's catch-all
+  50 MB `request_body max_size` rule rejected legitimate phone-
+  camera photo batches at the edge with 413 before FastAPI
+  saw the request.  Carved `/ingest` out alongside
+  `/maintenance/import`: `/ingest` gets 110 MB (~20 photos at
+  the high end), `/maintenance/import` keeps 2 GB, everything
+  else stays at 50 MB.  The in-app per-file guard
+  (`MAX_UPLOAD_BYTES = 50 MB`) still rejects any single
+  oversized photo and the AI quota check bounds the batch's
+  detect calls, so only the *aggregate* edge ceiling moved.
+  See CICD.md → "Caddyfile reload on staging/prod" — the
+  Caddyfile is bind-mounted, so the change needs a manual
+  `docker compose exec caddy caddy reload` after the operator
+  pulls the new commit; watchtower won't propagate it.
+
 See per-phase `[shipped]` / `[partial]` markers below.
 
 1. **[shipped]** **Schema + actor middleware + i18n seams + SQLite
@@ -2067,20 +2210,33 @@ See per-phase `[shipped]` / `[partial]` markers below.
       API tokens / backups download / billing card.  Quota meters
       with 80%/100% banners.  Stripe upgrade card when billing is
       configured.
-    * **[shipped]** Public marketing pages: `/about/pricing`,
-      `/about/transparency` (rebuilt 2026-05-16 with three tables
-      that actually close the math — per-Pro variable, fixed AWS,
-      pool-clearing arc; see "Recent ships" above),
-      `/about/sub-processors`, `/about/privacy`, `/about/dpa`,
-      `/about/terms`.  Mobile-first header / hero / footer pass on
-      the public surface alongside.
+    * **[shipped]** Public marketing pages: `/about`,
+      `/about/pricing`, `/about/transparency` (rebuilt 2026-05-16
+      with three tables that actually close the math — per-Pro
+      variable, fixed AWS, pool-clearing arc; see "Recent ships"
+      above), `/about/sub-processors`, `/about/privacy`,
+      `/about/refunds`, `/about/contact`, `/about/terms`.
+      ``/about/dpa`` is reserved but not yet wired (see "GDPR +
+      privacy posture → DPA" — first B2B contract that needs one
+      drives that work).  Mobile-first header / hero / footer
+      pass on the public surface alongside.
+    * **[shipped]** "Download my data" GDPR Article 20 portability
+      bundle at ``GET /usage/gdpr-export`` (app.py:7226).  Streams
+      a per-tenant ZIP with the row-level JSON (boxes, items,
+      tags, locations, rooms, floors, shares, audit log) plus the
+      decrypted photo + thumb files under their original tenant
+      paths, with a top-level ``manifest.json`` describing the
+      export.  Audit-logged as ``gdpr.export``.
     * **[deferred]** The five-line per-tenant cost-transparency
       block on /usage (Direct vendor passthrough / Community
       backups / Community free-tier / Operator payout / Margin)
-      that reconciles to the aggregate `/about/pricing` view —
-      the aggregate cost panel exists on /admin (phase 12) but
-      the per-tenant breakdown UI hasn't shipped.  "Download my
-      data" GDPR-portability bundle also deferred.
+      that reconciles to the aggregate `/about/pricing` view.
+      Today's `/usage` "Cost transparency" card surfaces the raw
+      operator-side estimates (AI calls + cost, upload / download
+      bytes, on-disk footprint) — the structured 5-line
+      reconciliation that mirrors `/about/pricing` is still
+      future work.  The aggregate cost panel exists on /admin
+      (phase 12).
 
 14. **[partial]** **Tenant lifecycle.**
     * **[shipped]** Soft-delete / reactivate / hard-delete
@@ -2353,18 +2509,6 @@ here so we don't repeat it.
   Caps may shrink as the free base grows; the tier itself is
   permanent, and existing free accounts are grandfathered (cap
   changes apply to new signups only).
-- **Paid tier shape.** Single Pro tier with transparent cost
-  breakdown, vs. metered "pay for what you use" billing. Both fit
-  the ethos; metered is more legible but harder to operate. Decide
-  after the cost-transparency block exists and we know what real
-  per-tenant cost curves look like.
-- **Stripe integration.** Resolved — Stripe Checkout + webhook-driven
-  entitlement landed.  Pro tier = bigger quotas only (see
-  ``_PLAN_DEFAULTS``); future iteration may add feature gates.  See
-  ``dao/billing.py`` + ``/usage`` upgrade card + ``/webhooks/stripe``.
-  Configurable via ``STRIPE_SECRET_KEY`` + ``STRIPE_WEBHOOK_SECRET`` +
-  ``STRIPE_PRICE_ID_PRO`` env vars; stash hides the upgrade CTA when
-  any are unset.
 - **AI quota grace.** When a free tenant blows through their AI cap
   mid-ingest, do we (a) hard-fail the rest of the batch, (b) finish
   the current photo and 429 the next one, or (c) burn into a
@@ -2388,6 +2532,19 @@ here so we don't repeat it.
 
 ## Resolved decisions
 
+- **Paid tier shape**: single Pro tier with bigger quotas, not
+  metered pay-as-you-go.  Metered would be more legible but
+  considerably harder to operate at this scale; Pro at a flat
+  monthly price is what shipped.  Future iteration may add
+  feature gates on top of the quota bumps.
+- **Stripe integration**: Stripe Checkout + webhook-driven
+  entitlement.  See ``dao/billing.py`` + ``/usage`` upgrade card +
+  ``/usage/billing-portal`` + ``/webhooks/stripe``.  Configurable
+  via ``STRIPE_SECRET_KEY`` + ``STRIPE_WEBHOOK_SECRET`` +
+  ``STRIPE_PRICE_ID_PRO`` env vars; stash hides the upgrade CTA
+  when any are unset.  Per-tenant ``tenants.billing_owner_email``
+  gates portal + invoice access to one maintainer instead of
+  every member (feedback #69).
 - **Operator emergency access** (originally: "log to tenant audit
   log AND global?"): there is no operator emergency-access path
   through the admin surface. Operators read only metadata + usage;
@@ -2457,7 +2614,6 @@ here so we don't repeat it.
 
 - Mobile capture / PWA install (item #3 from the original plan — it
   ships parallel to but independent of multi-tenancy).
-- Stripe / billing wiring (quotas exist; payment doesn't).
 - Public anonymous shares.
 - Item versioning / edit history beyond the audit log.
 - Insurance-recovery branding pass.
