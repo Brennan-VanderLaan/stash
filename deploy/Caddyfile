@@ -34,17 +34,35 @@
 
 	# Body-size policy:
 	#   - /maintenance/import takes whole-database backups. Cap at 2 GB.
-	#   - Everything else stays at 50 MB so a hostile photo upload can't fill
-	#     disk before the in-app size guard rejects it.
-	# Both request_body directives wrap the body reader, so an unmatched 50 MB
-	# rule would clamp the import path back down to 50 MB even with the 2 GB
-	# rule above it. The `not` matcher makes the two mutually exclusive.
+	#   - /ingest is the photo-batch endpoint.  Phone cameras produce
+	#     ~3–10 MB JPEGs; a batch of 10–20 photos legitimately exceeds
+	#     the default 50 MB cap.  Bump to 110 MB (roughly two phone
+	#     cameras' worth of a sorting session, ~20 photos) so users
+	#     can upload a normal batch in one go without giving the edge
+	#     enough headroom for a runaway abuse case.  The in-app
+	#     per-file guard (``MAX_UPLOAD_BYTES = 50 MB`` in app.py) still
+	#     rejects any single oversized photo; the AI quota check
+	#     bounds the number of detect calls — so this only raises the
+	#     *aggregate* ceiling at the edge, not the per-photo one.
+	#   - Everything else stays at 50 MB so a hostile photo upload
+	#     can't fill disk before the in-app size guard rejects it.
+	# All three request_body directives wrap the body reader; an
+	# unmatched 50 MB rule would clamp the other paths back down even
+	# with the higher cap above it.  The matchers make them mutually
+	# exclusive.
 	@import path /maintenance/import
-	@notimport not path /maintenance/import
+	@ingest path /ingest
+	@other {
+		not path /maintenance/import
+		not path /ingest
+	}
 	request_body @import {
 		max_size 2GB
 	}
-	request_body @notimport {
+	request_body @ingest {
+		max_size 110MB
+	}
+	request_body @other {
 		max_size 50MB
 	}
 
