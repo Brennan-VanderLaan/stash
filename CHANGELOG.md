@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.54.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.53.0...v1.54.0) (2026-05-19)
+
+
+### Features
+
+* **items:** inline rename + notes edit in item-detail dialog ([bde5656](https://github.com/Brennan-VanderLaan/stash/commit/bde5656532d79b3c4246f691fc1a7aa36c9b08be))
+
+
+### Bug Fixes
+
+* **edge:** bump /ingest request-body cap to 110 MB for photo batches ([29121ed](https://github.com/Brennan-VanderLaan/stash/commit/29121ed3478a2be1b019d888d4f18a7f9143b7c8))
+
 ## [1.53.0](https://github.com/Brennan-VanderLaan/stash/compare/v1.52.0...v1.53.0) (2026-05-18)
 
 
