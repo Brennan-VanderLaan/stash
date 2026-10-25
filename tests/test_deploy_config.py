@@ -111,3 +111,52 @@ def test_api_v1_and_mcp_are_publicly_reachable(skip_auth_routes):
     assert "/mcp" in joined, (
         f"/mcp missing from SKIP_AUTH_ROUTES: {skip_auth_routes!r}"
     )
+
+
+def _app_bypass_paths() -> list[str]:
+    """Read ``_AUTH_BYPASS_EXACT`` + ``_AUTH_BYPASS_PREFIXES`` out of
+    app.py's source (no import — keeps this test free of the app's
+    heavy runtime deps)."""
+    import ast
+
+    tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
+    found: dict[str, list[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id in (
+                "_AUTH_BYPASS_EXACT", "_AUTH_BYPASS_PREFIXES",
+            ):
+                value = node.value
+                if isinstance(value, ast.Call):  # frozenset((...))
+                    value = value.args[0]
+                found[target.id] = list(ast.literal_eval(value))
+    assert set(found) == {"_AUTH_BYPASS_EXACT", "_AUTH_BYPASS_PREFIXES"}
+    return found["_AUTH_BYPASS_EXACT"] + found["_AUTH_BYPASS_PREFIXES"]
+
+
+# Paths oauth2-proxy never sees verbatim: Caddy rewrites
+# /robots.txt → /__stash_robots_txt before proxying.
+_PROXY_NEVER_SEES = {"/robots.txt"}
+
+
+def test_every_app_bypass_path_is_skipped_at_the_proxy(skip_auth_routes):
+    """Every path stash's actor middleware treats as public must also
+    be in oauth2-proxy's SKIP_AUTH_ROUTES — otherwise the proxy
+    intercepts it first.
+
+    Real production incident 2026-10-25: ``/marketing/track`` was
+    bypassed in app.py but not at the proxy.  The landing page's
+    leave-beacon fires on ``beforeunload`` — i.e. as the visitor
+    clicks "Sign in" — so oauth2-proxy treated it as an
+    unauthenticated hit, started a second OAuth flow, and
+    overwrote the ``_oauth2_proxy_csrf`` cookie of the real
+    sign-in.  The callback then 403'd for every fresh login."""
+    missing = [
+        path for path in _app_bypass_paths()
+        if path not in _PROXY_NEVER_SEES
+        and not any(re.search(p, path) for p in skip_auth_routes)
+    ]
+    assert not missing, (
+        f"bypassed in app.py but not in OAUTH2_PROXY_SKIP_AUTH_ROUTES: {missing}"
+    )
